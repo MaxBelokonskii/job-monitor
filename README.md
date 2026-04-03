@@ -9,7 +9,7 @@
 ## 📸 Demo
 
 ![DEMO_GUI](docs/images/demo_gui.png)
-
+<img src="docs/images/demo_gui.png" alt="DEMO_GUI" width="800">
 ---
 
 ## 🎯 Зачем этот проект
