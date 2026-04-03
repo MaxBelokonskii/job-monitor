@@ -8,7 +8,7 @@
 
 ## 📸 Demo
 
-![GUI](https://raw.demo_gui.png)
+![GUI](demo_gui.png)
 
 ---
 
