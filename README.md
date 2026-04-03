@@ -8,7 +8,7 @@
 
 ## 📸 Demo
 
-<img src="docs/images/demo_gui.png" alt="DEMO_GUI" width="800">
+![Demo](docs/images/demo_gui.png)
 
 ---
 
