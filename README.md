@@ -8,7 +8,7 @@
 
 ## 📸 Demo
 
-![demo](demo_gui.png)
+![GUI](https://raw.githubusercontent.com/Scr00ge90/QA-Vacancy-Monitor/master/demo_gui.png)
 
 ---
 
