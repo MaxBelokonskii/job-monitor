@@ -1,0 +1,38 @@
+# Секреты — НИКОГДА не коммитить
+.env
+*.session
+*.session-journal
+hh_cookies.json
+
+# Данные пользователя
+all_sent_users.txt
+hh_sent.json
+config.json
+monitor_pid.txt
+hh_pid.txt
+
+# Логи
+logs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Резюме (личные данные)
+*.pdf
+*.doc
+*.docx
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
+*.swp

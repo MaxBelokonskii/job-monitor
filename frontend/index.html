@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QA Monitor v2.0</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- ── SIDEBAR ─────────────────────────────────────────────────────── -->
+<div class="sidebar">
+  <div class="sidebar-logo">
+    <h1>QA Monitor</h1>
+    <span>v2.0</span>
+  </div>
+  <nav class="nav">
+    <div class="nav-item active" data-page="dashboard"><div class="nav-dot"></div>Дашборд</div>
+    <div class="nav-item" data-page="chats"><div class="nav-dot"></div>Отправленные</div>
+    <div class="nav-sep"></div>
+    <div class="nav-item" data-page="channels"><div class="nav-dot"></div>Каналы</div>
+    <div class="nav-item" data-page="keywords"><div class="nav-dot"></div>Ключевые слова</div>
+    <div class="nav-item" data-page="template"><div class="nav-dot"></div>Шаблоны</div>
+    <div class="nav-sep"></div>
+    <div class="nav-item" data-page="settings"><div class="nav-dot"></div>Настройки</div>
+    <div class="nav-item" data-page="logs"><div class="nav-dot"></div>Логи</div>
+  </nav>
+</div>
+
+<!-- ── MAIN ────────────────────────────────────────────────────────── -->
+<div class="main">
+
+  <!-- DASHBOARD -->
+  <div class="page active" id="page-dashboard">
+    <div class="page-title">Дашборд</div>
+
+    <!-- TG Section -->
+    <div class="section-split">
+      <div class="section-split-label tg">
+        <!-- Telegram logo -->
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.289c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.17 13.617l-2.96-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.978.942z" fill="#2AABEE"/>
+        </svg>
+        Telegram
+      </div>
+      <div class="section-split-line"></div>
+      <button class="btn-toggle btn-toggle-tg" id="btnToggleTG" onclick="toggleTG()">
+        <span class="status-dot stopped" id="dotTG"></span> Запустить TG
+      </button>
+    </div>
+
+    <div class="metrics-grid">
+      <div class="metric">
+        <div class="metric-label">Откликов сегодня</div>
+        <div class="metric-value" id="tgSentToday">0</div>
+        <div class="metric-bar"><div class="metric-bar-fill tg" id="tgMetricBar" style="width:0%"></div></div>
+        <div class="metric-sub" id="tgMetricSub">из 25 в день</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Вакансий найдено</div>
+        <div class="metric-value" id="tgFoundToday">0</div>
+        <div class="metric-sub">за сегодня</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Всего откликов</div>
+        <div class="metric-value" id="tgSentTotal">0</div>
+        <div class="metric-sub">за всё время</div>
+      </div>
+    </div>
+
+    <!-- HH Section -->
+    <div class="section-split">
+      <div class="section-split-label hh">
+        <!-- HH logo -->
+        <svg viewBox="0 0 40 20" xmlns="http://www.w3.org/2000/svg">
+          <text x="0" y="17" font-family="Arial Black,sans-serif" font-weight="900" font-size="18" fill="#D6001C">hh</text>
+        </svg>
+        HH.ru
+      </div>
+      <div class="section-split-line"></div>
+      <button class="btn-toggle btn-toggle-hh" id="btnToggleHH" onclick="toggleHH()">
+        <span class="status-dot stopped" id="dotHH"></span> Запустить HH
+      </button>
+    </div>
+
+    <div class="metrics-grid">
+      <div class="metric">
+        <div class="metric-label">Откликов сегодня</div>
+        <div class="metric-value" id="hhSentToday" style="color:var(--hh)">0</div>
+        <div class="metric-bar"><div class="metric-bar-fill hh" id="hhMetricBar" style="width:0%"></div></div>
+        <div class="metric-sub" id="hhMetricSub">из 20 в день</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Вакансий найдено</div>
+        <div class="metric-value" id="hhFoundToday">0</div>
+        <div class="metric-sub">за сегодня</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Всего откликов</div>
+        <div class="metric-value" id="hhTotalSent">0</div>
+        <div class="metric-sub">за всё время</div>
+      </div>
+    </div>
+
+    <!-- HH recent vacancies -->
+    <div id="hhRecentVacancies" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">
+      <div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--muted);font-size:13px">Запустите HH монитор</div>
+    </div>
+
+    <!-- Bottom row: channels + recent log -->
+    <div class="two-col">
+      <div class="card">
+        <div class="card-title">
+          TG Каналы
+          <span style="font-family:'JetBrains Mono',monospace;font-weight:700;color:var(--tg);margin-left:6px" id="dashChannelCount">0</span>
+        </div>
+        <div id="dashChannelList"></div>
+        <div style="margin-top:12px">
+          <div class="card-title">Ключевые слова</div>
+          <div class="tags" id="kwTags"></div>
+        </div>
+        <div style="margin-top:10px">
+          <div class="card-title">Исключения</div>
+          <div class="tags" id="exTags"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Последние действия</div>
+        <div id="recentLog">
+          <div class="log-row">
+            <span class="log-time">—</span>
+            <span class="log-source tg">TG</span>
+            <span class="log-badge badge-skip">WAIT</span>
+            <span style="color:var(--muted);font-size:12px">Ожидание данных...</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CHATS -->
+  <div class="page" id="page-chats" style="padding:0;flex-direction:row;height:100vh;gap:0">
+    <div style="width:270px;flex-shrink:0;border-right:1px solid var(--border);display:flex;flex-direction:column;background:var(--card-bg)">
+      <div style="padding:14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+        <div style="font-size:14px;font-weight:700">Отправленные</div>
+        <div style="font-size:12px;color:var(--muted)" id="chatCount">0</div>
+      </div>
+      <div id="chatList" style="flex:1;overflow-y:auto"></div>
+    </div>
+    <div style="flex:1;display:flex;flex-direction:column;background:var(--bg)">
+      <div id="chatEmpty" style="flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;color:var(--muted)">
+        <div style="font-size:36px">💬</div>
+        <div style="font-size:13px;font-weight:500">Выберите контакт слева</div>
+      </div>
+      <div id="chatView" style="display:none;flex-direction:column;height:100%">
+        <div style="padding:12px 18px;border-bottom:1px solid var(--border);background:var(--card-bg);display:flex;align-items:center;gap:10px">
+          <div id="chatViewAvatar" style="width:34px;height:34px;border-radius:50%;background:var(--tg-light);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--tg);flex-shrink:0;font-family:'JetBrains Mono',monospace"></div>
+          <div>
+            <div id="chatViewName" style="font-size:13px;font-weight:600;font-family:'JetBrains Mono',monospace"></div>
+            <div style="font-size:11px;color:var(--muted)">Telegram</div>
+          </div>
+          <button class="btn btn-secondary" style="margin-left:auto;font-size:11px" onclick="loadChatMessages(currentChat)">↻</button>
+        </div>
+        <div id="chatMessages" style="flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:8px"></div>
+        <div style="padding:10px 14px;border-top:1px solid var(--border);background:var(--card-bg);display:flex;gap:8px">
+          <input type="text" id="chatInput" placeholder="Написать сообщение..."
+            style="flex:1;padding:8px 13px;border:1px solid var(--border);border-radius:20px;font-size:12.5px;font-family:'Manrope',sans-serif;background:var(--bg);color:var(--text);outline:none"
+            onkeydown="if(event.key==='Enter')sendChatMessage()">
+          <button class="btn btn-primary" style="border-radius:20px;padding:8px 16px;font-size:12.5px" onclick="sendChatMessage()">Отправить</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CHANNELS -->
+  <div class="page" id="page-channels">
+    <div class="page-header">
+      <div class="page-title">Каналы</div>
+      <button class="btn btn-primary" onclick="saveChannels()">Сохранить</button>
+    </div>
+    <div class="card">
+      <div class="card-title">Telegram каналы для мониторинга</div>
+      <div id="channelEditList"></div>
+      <div class="add-row">
+        <input type="text" id="newChannel" placeholder="@username или username">
+        <button class="btn btn-secondary" onclick="addChannel()">+ Добавить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- KEYWORDS -->
+  <div class="page" id="page-keywords">
+    <div class="page-header">
+      <div class="page-title">Ключевые слова</div>
+      <button class="btn btn-primary" onclick="saveKeywords()">Сохранить</button>
+    </div>
+    <div class="two-col">
+      <div class="card">
+        <div class="card-title">Искать вакансии с</div>
+        <div id="kwList"></div>
+        <div class="add-row">
+          <input type="text" id="newKw" placeholder="Ключевое слово">
+          <button class="btn btn-secondary" onclick="addKw()">+</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Исключать вакансии с</div>
+        <div id="exList"></div>
+        <div class="add-row">
+          <input type="text" id="newEx" placeholder="Слово для исключения">
+          <button class="btn btn-secondary" onclick="addEx()">+</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TEMPLATES -->
+  <div class="page" id="page-template">
+    <div class="page-header"><div class="page-title">Шаблоны</div></div>
+
+    <div class="section-split">
+      <div class="section-split-label tg">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.289c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.17 13.617l-2.96-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.978.942z" fill="#2AABEE"/></svg>
+        Telegram
+      </div>
+      <div class="section-split-line"></div>
+      <button class="btn btn-primary" style="font-size:12px" onclick="saveTemplate()">Сохранить</button>
+    </div>
+    <div class="card">
+      <div class="card-title">Текст отклика в Telegram</div>
+      <textarea class="template-area" id="templateText" rows="10"></textarea>
+    </div>
+    <div class="card">
+      <div class="card-title">Прикреплённый файл (резюме)</div>
+      <div class="file-zone" id="fileZone" onclick="document.getElementById('fileInput').click()">
+        <input type="file" id="fileInput" accept=".pdf,.doc,.docx" style="display:none" onchange="onFileSelect(this)">
+        <div style="font-size:20px;margin-bottom:6px">📎</div>
+        <div id="fileZoneLabel" style="font-size:12.5px;color:var(--muted);font-weight:500">Нажмите чтобы выбрать файл</div>
+        <div id="fileName" style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--green);margin-top:3px"></div>
+      </div>
+      <div style="font-size:12px;color:var(--muted);margin-top:6px">
+        Текущий файл: <span style="font-family:'JetBrains Mono',monospace;color:var(--text)" id="currentFile">не выбран</span>
+      </div>
+    </div>
+
+    <div class="section-split">
+      <div class="section-split-label hh">
+        <svg viewBox="0 0 40 20"><text x="0" y="17" font-family="Arial Black,sans-serif" font-weight="900" font-size="18" fill="#D6001C">hh</text></svg>
+        HH.ru
+      </div>
+      <div class="section-split-line"></div>
+      <button class="btn btn-primary" style="font-size:12px;background:var(--hh)" onclick="saveHHCoverLetter()">Сохранить</button>
+    </div>
+    <div class="card">
+      <div class="card-title">Сопроводительное письмо</div>
+      <textarea class="template-area" id="hhCoverLetter" rows="10" placeholder="Здравствуйте! Откликаюсь на вашу вакансию..."></textarea>
+      <div style="font-size:12px;color:var(--muted);margin-top:6px">Первые 500 символов отправляются как сопроводительное письмо</div>
+    </div>
+  </div>
+
+  <!-- SETTINGS -->
+  <div class="page" id="page-settings">
+    <div class="page-header"><div class="page-title">Настройки</div></div>
+
+    <!-- TG Settings -->
+    <div class="section-split">
+      <div class="section-split-label tg">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.289c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.17 13.617l-2.96-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.978.942z" fill="#2AABEE"/></svg>
+        Telegram
+      </div>
+      <div class="section-split-line"></div>
+      <button class="btn btn-primary" style="font-size:12px" onclick="saveTGSettings()">Сохранить TG</button>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Telegram API</div>
+      <div class="api-hint">
+        <div class="api-hint-title">Как получить API ключи</div>
+        <ol>
+          <li>Перейдите на <a href="https://my.telegram.org/apps" target="_blank">my.telegram.org/apps</a></li>
+          <li>Войдите в аккаунт Telegram</li>
+          <li>Нажмите Create application</li>
+          <li>Скопируйте App api_id и App api_hash</li>
+        </ol>
+      </div>
+      <div class="api-input-row"><label>API ID</label><input class="api-input" type="text" id="apiId" placeholder="12345678"></div>
+      <div class="api-input-row"><label>API Hash</label><input class="api-input" type="password" id="apiHash" placeholder="abcdef1234567890"></div>
+      <div style="display:flex;gap:8px;margin-top:4px">
+        <button class="btn btn-secondary" onclick="toggleApiHash()">👁 Показать hash</button>
+        <button class="btn btn-primary" onclick="saveApiKeys()">Сохранить ключи</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Авторизация чатов (session_web)</div>
+      <div id="authStatus" style="font-size:13px;color:var(--muted);margin-bottom:10px">Проверка...</div>
+      <div id="authForm" style="display:none">
+        <div class="api-input-row"><label>Номер телефона</label><input class="api-input" type="text" id="authPhone" placeholder="+77001234567"></div>
+        <button class="btn btn-secondary" onclick="sendAuthCode()" style="margin-bottom:10px">Отправить код</button>
+        <div id="authCodeRow" style="display:none">
+          <div class="api-input-row"><label>Код из Telegram</label><input class="api-input" type="text" id="authCode" placeholder="12345"></div>
+          <div class="api-input-row" id="auth2faRow" style="display:none">
+            <label>Облачный пароль (2FA)</label>
+            <input class="api-input" type="password" id="auth2fa" placeholder="Ваш пароль">
+          </div>
+          <button class="btn btn-primary" onclick="verifyAuthCode()">Подтвердить</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Режим работы</div>
+      <div class="toggle-row">
+        <div>Safe Mode — Live Mode
+          <div class="toggle-desc">Safe = тестовый, не отправляет. Live = боевой режим</div>
+        </div>
+        <label class="toggle"><input type="checkbox" id="toggleSafe" checked><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
+      </div>
+      <div class="toggle-row">
+        <div>Parse History
+          <div class="toggle-desc">Читать историю каналов при запуске</div>
+        </div>
+        <label class="toggle"><input type="checkbox" id="toggleHistory"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
+      </div>
+      <div class="toggle-row">
+        <div>Автозапуск TG
+          <div class="toggle-desc">Запускать TG скрипт при старте приложения</div>
+        </div>
+        <label class="toggle"><input type="checkbox" id="toggleTGAutostart"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Лимиты Telegram</div>
+      <div class="toggle-row">
+        <div>Макс. откликов в день<div class="toggle-desc">Защита от блокировки аккаунта</div></div>
+        <input type="number" id="maxPerDay" value="25" min="1" max="100" class="num-input">
+      </div>
+      <div class="toggle-row">
+        <div>История: кол-во сообщений<div class="toggle-desc">Сколько сообщений читать из каждого канала</div></div>
+        <input type="number" id="historyLimit" value="50" min="10" max="500" class="num-input">
+      </div>
+    </div>
+
+    <!-- HH Settings -->
+    <div class="section-split" style="margin-top:8px">
+      <div class="section-split-label hh">
+        <svg viewBox="0 0 40 20"><text x="0" y="17" font-family="Arial Black,sans-serif" font-weight="900" font-size="18" fill="#D6001C">hh</text></svg>
+        HH.ru
+      </div>
+      <div class="section-split-line"></div>
+      <button class="btn btn-primary" style="font-size:12px;background:var(--hh)" onclick="saveHHSettings()">Сохранить HH</button>
+    </div>
+
+    <div class="two-col">
+      <div class="card">
+        <div class="card-title">Ключевые слова HH</div>
+        <div id="hhKwList"></div>
+        <div class="add-row">
+          <input type="text" id="newHHKw" placeholder="Junior QA...">
+          <button class="btn btn-secondary" onclick="addHHKw()">+</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Исключения HH</div>
+        <div id="hhExList"></div>
+        <div class="add-row">
+          <input type="text" id="newHHEx" placeholder="senior, lead...">
+          <button class="btn btn-secondary" onclick="addHHEx()">+</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="two-col">
+      <div class="card">
+        <div class="card-title">Регионы поиска</div>
+        <div style="display:flex;flex-direction:column;gap:7px">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" value="40" class="hh-region"> Казахстан</label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" value="113" class="hh-region" checked> Россия</label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" value="16" class="hh-region"> Беларусь</label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" value="275" class="hh-region"> Узбекистан</label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" value="5" class="hh-region"> Украина</label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" value="48" class="hh-region"> Азербайджан</label>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" value="1776" class="hh-region"> Грузия</label>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">Параметры HH</div>
+        <div class="toggle-row">
+          <div>Опыт</div>
+          <select id="hhExperience" style="padding:5px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;background:var(--bg);color:var(--text)">
+            <option value="noExperience">Без опыта</option>
+            <option value="between1And3">1–3 года</option>
+            <option value="between3And6">3–6 лет</option>
+          </select>
+        </div>
+        <div class="toggle-row">
+          <div>Зарплата от<div class="toggle-desc">0 = не фильтровать</div></div>
+          <input type="number" id="hhSalaryFrom" value="0" min="0" step="10000" class="num-input" style="width:80px">
+        </div>
+        <div class="toggle-row">
+          <div>Период поиска</div>
+          <select id="hhSearchPeriod" style="padding:5px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;background:var(--bg);color:var(--text)">
+            <option value="1">Сегодня</option>
+            <option value="3">3 дня</option>
+            <option value="7">Неделя</option>
+            <option value="30">Месяц</option>
+          </select>
+        </div>
+        <div class="toggle-row">
+          <div>Макс. откликов/день</div>
+          <input type="number" id="hhMaxPerDayInput" value="20" min="1" max="50" class="num-input">
+        </div>
+        <div class="toggle-row">
+          <div>Интервал проверки (мин)</div>
+          <input type="number" id="hhCheckInterval" value="30" min="10" max="240" class="num-input">
+        </div>
+        <div class="toggle-row">
+          <div>Автозапуск HH<div class="toggle-desc">Запускать HH при старте приложения</div></div>
+          <label class="toggle"><input type="checkbox" id="toggleHHAutostart"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">График работы HH</div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="remote" class="hh-schedule" checked> Удалённо</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="fullDay" class="hh-schedule" checked> Полный день</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="flexible" class="hh-schedule" checked> Гибкий</label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="shift" class="hh-schedule"> Сменный</label>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">ID резюме на HH</div>
+      <input class="api-input" type="text" id="hhResumeId" placeholder="Найти в URL: hh.ru/resume/XXXXXXXX">
+    </div>
+
+    <!-- Selenium Steps Editor -->
+    <div class="card">
+      <div class="card-title">Редактор сценария автокликания (Selenium)</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Шаги выполняются после нажатия кнопки отклика на каждой вакансии</div>
+      <div id="seleniumStepsList"></div>
+      <div style="display:grid;grid-template-columns:auto 1fr 1fr auto;gap:8px;margin-top:12px;align-items:center">
+        <select id="newStepType" style="padding:6px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;background:var(--bg);color:var(--text)">
+          <option value="">Тип шага</option>
+          <option value="click">Клик</option>
+          <option value="input">Ввод текста</option>
+          <option value="wait">Ожидание (сек)</option>
+          <option value="wait_element">Ждать элемент</option>
+          <option value="select">Выбрать значение</option>
+          <option value="scroll">Прокрутить</option>
+        </select>
+        <input type="text" id="newStepSelector" placeholder="CSS/XPath селектор" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;font-family:'JetBrains Mono',monospace;background:var(--bg);color:var(--text);outline:none">
+        <input type="text" id="newStepValue" placeholder="Значение / текст / сек" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;font-family:'JetBrains Mono',monospace;background:var(--bg);color:var(--text);outline:none">
+        <button class="btn btn-primary" style="font-size:12px;background:var(--hh)" onclick="addStep()">+ Добавить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- LOGS -->
+  <div class="page" id="page-logs">
+    <div class="page-header">
+      <div class="page-title">Логи</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <div class="log-tabs">
+          <button class="log-tab active-tg" id="logTabTG" onclick="showLog('tg')">Telegram</button>
+          <button class="log-tab" id="logTabHH" onclick="showLog('hh')">HH.ru</button>
+        </div>
+        <button class="btn btn-secondary" onclick="clearConsole()">Очистить</button>
+        <button class="btn btn-secondary" onclick="refreshLogs()">↻ Обновить</button>
+      </div>
+    </div>
+    <div class="card" style="padding:0;overflow:hidden">
+      <div class="log-console" id="logConsole">
+        <span class="info">// Загрузка...</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

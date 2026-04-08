@@ -1,0 +1,19 @@
+QaVacancyMonitor/
+├── api/
+│   ├── __init__.py
+│   ├── main.py           ← FastAPI + автозапуск
+│   ├── config_routes.py  ← /api/config
+│   ├── tg_routes.py      ← /api/tg/*
+│   ├── hh_routes.py      ← /api/hh/*
+│   └── auth_routes.py    ← /api/auth/*
+├── frontend/
+│   ├── index.html        ← только разметка
+│   ├── style.css         ← все стили
+│   └── app.js            ← вся логика
+├── monitor.py            ← TG скрипт
+├── hh_monitor.py         ← HH скрипт
+├── start_web.bat
+├── requirements.txt
+├── .env
+├── config.json
+└── session.session
