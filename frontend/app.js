@@ -584,15 +584,29 @@ function parseLogLine(line, source) {
   } else if (line.includes('[ERROR]')) {
     badge = 'ERR'; cls = 'badge-error'; text = line.split('[ERROR]').slice(1).join('').trim();
   } else if (line.includes('[SAFE MODE]')) {
-    badge = 'SAFE'; cls = 'badge-safe'; const m = line.match(/(@\S+)/); text = m ? 'Найден: ' + m[1] : '';
+    badge = 'SAFE'; cls = 'badge-safe'; const m = line.match(/(@\S+)/); text = m ? 'Найден: ' + m[1] : 'Найден контакт';
   } else if (line.includes('[SKIP]')) {
     badge = 'SKIP'; cls = 'badge-skip'; text = line.split('[SKIP]').slice(1).join('').trim();
-  } else if (line.includes('[ВАКАНСИЯ]') || line.includes('[HH][OK]')) {
-    badge = source === 'hh' ? 'HH' : 'VAC'; cls = 'badge-skip'; text = line.split(']').slice(1).join(']').trim().slice(0, 80);
+  } else if (line.includes('[ВАКАНСИЯ]')) {
+    badge = 'VAC'; cls = 'badge-skip';
+    const parts = line.split('[ВАКАНСИЯ]');
+    text = parts.length > 1 ? parts[1].trim().slice(0, 80) : 'Найдена вакансия';
+  } else if (line.includes('[HH][OK]')) {
+    badge = 'HH'; cls = 'badge-ok'; text = line.split('[HH][OK]').slice(1).join('').trim().slice(0, 80);
   } else if (line.includes('[START]')) {
-    badge = 'SYS'; cls = 'badge-skip'; text = 'Скрипт запущен';
-  } else return null;
-  return { time, badge, cls, text: text.slice(0, 90), source };
+    badge = 'SYS'; cls = 'badge-skip'; text = 'Скрипт запущен, мониторинг активен';
+  } else if (line.includes('[DAILY RESET]')) {
+    badge = 'SYS'; cls = 'badge-skip'; text = 'Новый день — счётчики сброшены';
+  } else if (line.includes('Got difference')) {
+    badge = 'UPD'; cls = 'badge-skip'; text = 'Получены обновления из каналов';
+  } else if (line.includes('Connecting to')) {
+    badge = 'NET'; cls = 'badge-skip'; text = 'Подключение к Telegram...';
+  } else if (line.includes('Connection to') && line.includes('complete')) {
+    badge = 'NET'; cls = 'badge-ok'; text = 'Подключение установлено';
+  } else {
+    return null;
+  }
+  return { time, badge, cls, text: text ? text.slice(0, 90) : '', source };
 }
 
 // ── Restart banner ────────────────────────────────────────────────────
@@ -723,5 +737,16 @@ async function init() {
   loadHHVacancies();
   pollStatus();
 }
+
+// ── About modal ───────────────────────────────────────────────────────
+function showAbout() {
+  const m = document.getElementById('aboutModal');
+  m.style.display = 'flex';
+  m.addEventListener('click', e => { if (e.target === m) hideAbout(); }, { once: true });
+}
+function hideAbout() {
+  document.getElementById('aboutModal').style.display = 'none';
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') hideAbout(); });
 
 document.addEventListener('DOMContentLoaded', init);

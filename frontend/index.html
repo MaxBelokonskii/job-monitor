@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>QA Monitor v2.0</title>
+<title>Job Monitor v2.0</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -11,9 +11,12 @@
 
 <!-- ── SIDEBAR ─────────────────────────────────────────────────────── -->
 <div class="sidebar">
-  <div class="sidebar-logo">
-    <h1>QA Monitor</h1>
-    <span>v2.0</span>
+  <div class="sidebar-logo" style="display:flex;align-items:center;justify-content:space-between">
+    <div>
+      <h1>Job Monitor</h1>
+      <span>v2.0</span>
+    </div>
+    <button onclick="showAbout()" title="О приложении" style="background:none;border:1px solid var(--border);border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:13px;color:var(--muted);display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .15s" onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">ⓘ</button>
   </div>
   <nav class="nav">
     <div class="nav-item active" data-page="dashboard"><div class="nav-dot"></div>Дашборд</div>
@@ -480,6 +483,54 @@
     </div>
   </div>
 
+</div>
+
+
+<!-- About modal -->
+<div id="aboutModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;align-items:center;justify-content:center">
+  <div style="background:var(--card-bg);border-radius:var(--radius);padding:28px;max-width:480px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.18);position:relative">
+    <button onclick="hideAbout()" style="position:absolute;top:14px;right:14px;background:none;border:none;cursor:pointer;font-size:18px;color:var(--muted);line-height:1">×</button>
+
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+      <div style="width:44px;height:44px;border-radius:var(--radius-sm);background:var(--accent-light);display:flex;align-items:center;justify-content:center;font-size:22px">🤖</div>
+      <div>
+        <div style="font-size:16px;font-weight:700">Job Monitor</div>
+        <div style="font-size:12px;color:var(--muted);font-family:'JetBrains Mono',monospace">v2.0 · build 2026.04</div>
+      </div>
+    </div>
+
+    <div style="font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:18px">
+      Универсальный инструмент мониторинга Telegram-каналов и HH.ru по ключевым словам с автоматической отправкой откликов.
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px">
+      <div style="background:var(--bg);border-radius:var(--radius-sm);padding:10px 12px">
+        <div style="font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.5px;margin-bottom:4px">СТЕК</div>
+        <div style="font-size:12px;font-family:'JetBrains Mono',monospace;color:var(--text);line-height:1.7">Python 3.10+<br>Telethon · asyncio<br>Selenium · FastAPI<br>HTML / CSS / JS</div>
+      </div>
+      <div style="background:var(--bg);border-radius:var(--radius-sm);padding:10px 12px">
+        <div style="font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.5px;margin-bottom:4px">ВОЗМОЖНОСТИ</div>
+        <div style="font-size:12px;color:var(--text);line-height:1.7">TG мониторинг 24/7<br>HH автоотклики<br>Фильтры по словам<br>Веб-интерфейс</div>
+      </div>
+    </div>
+
+    <div style="border-top:1px solid var(--border);padding-top:14px">
+      <div style="font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.5px;margin-bottom:10px">АВТОР</div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+        <div style="width:36px;height:36px;border-radius:50%;background:var(--accent-light);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--accent)">ВП</div>
+        <div>
+          <div style="font-size:13px;font-weight:600">Пак Виталий</div>
+          <div style="font-size:11px;color:var(--muted)">Junior QA Engineer</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <a href="https://www.linkedin.com/in/vitaliy-pak-634a163b9" target="_blank" style="font-size:11px;padding:4px 10px;border-radius:var(--radius-sm);background:var(--accent-light);color:var(--accent);text-decoration:none;font-weight:600">LinkedIn</a>
+        <a href="https://github.com/Scr00ge90" target="_blank" style="font-size:11px;padding:4px 10px;border-radius:var(--radius-sm);background:var(--bg);color:var(--text);text-decoration:none;font-weight:600;border:1px solid var(--border)">GitHub</a>
+        <a href="https://t.me/Scr00ge_3_16" target="_blank" style="font-size:11px;padding:4px 10px;border-radius:var(--radius-sm);background:var(--tg-light);color:var(--tg-text);text-decoration:none;font-weight:600">Telegram</a>
+        <a href="https://www.notion.so/97f6c027176c83aaa56a019ee570248e" target="_blank" style="font-size:11px;padding:4px 10px;border-radius:var(--radius-sm);background:var(--bg);color:var(--text);text-decoration:none;font-weight:600;border:1px solid var(--border)">Portfolio</a>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script src="/static/app.js"></script>

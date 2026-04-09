@@ -1,4 +1,4 @@
-# 🤖 QA Vacancy Monitor v2.0
+# 🤖 Job Monitor v2.0
 
 > Автоматизированная система поиска вакансий и отправки откликов для Junior QA / стажёров  
 > **Python · Telegram API · Selenium · FastAPI · Web UI**
@@ -60,7 +60,7 @@
 ## 📁 Структура проекта
 
 ```
-QaVacancyMonitor/
+JobMonitor/
 ├── api/                        # FastAPI бэкенд (модули)
 │   ├── main.py                 # Точка входа + автозапуск
 │   ├── config_routes.py        # /api/config — настройки

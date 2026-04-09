@@ -2,6 +2,7 @@
 .env
 *.session
 *.session-journal
+<<<<<<< HEAD
 hh_cookies.json
 
 # Данные пользователя
@@ -12,6 +13,11 @@ monitor_pid.txt
 hh_pid.txt
 
 # Логи
+=======
+
+# PID и логи
+monitor_pid.txt
+>>>>>>> 81be05310db6c3f03fa6c1d8bbad87bec2bacb6e
 logs/
 
 # Python
@@ -20,19 +26,28 @@ __pycache__/
 *.pyo
 .venv/
 venv/
+<<<<<<< HEAD
 *.egg-info/
 
 # Резюме (личные данные)
 *.pdf
 *.doc
 *.docx
+=======
+
+# Резюме (личные данные)
+*.pdf
+>>>>>>> 81be05310db6c3f03fa6c1d8bbad87bec2bacb6e
 
 # OS
 .DS_Store
 Thumbs.db
+<<<<<<< HEAD
 desktop.ini
 
 # IDE
 .vscode/
 .idea/
 *.swp
+=======
+>>>>>>> 81be05310db6c3f03fa6c1d8bbad87bec2bacb6e
