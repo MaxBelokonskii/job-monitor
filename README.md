@@ -1,5 +1,7 @@
 # 🤖 Job Monitor v2.0
 
+![GUI](docs/images/v2.0(Dashboard).png)
+
 > Автоматизированная система поиска вакансий и отправки откликов для Junior QA / стажёров  
 > **Python · Telegram API · Selenium · FastAPI · Web UI**
 
