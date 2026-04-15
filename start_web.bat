@@ -3,7 +3,7 @@ chcp 65001 > nul
 title QA Monitor v2.0
 
 set "BASE=%~dp0"
-set "PYTHON=C:\Users\vpak9\AppData\Local\Python\bin\python.exe"
+set "PYTHON=python"
 
 echo Installing dependencies...
 "%PYTHON%" -m pip install fastapi uvicorn python-dotenv telethon selenium webdriver-manager -q
