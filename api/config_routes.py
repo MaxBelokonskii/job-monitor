@@ -4,6 +4,7 @@ from pydantic import ValidationError
 from job_monitor import envfile
 from job_monitor.db.connection import get_connection
 from job_monitor.settings import AppSettings, load_secrets, load_settings, save_settings
+from job_monitor.telegram_client import reset_client
 
 router = APIRouter(prefix="/api/config", tags=["config"])
 
@@ -42,6 +43,7 @@ async def update_config(patch: dict) -> dict:
         secrets_to_write["PARSE_HISTORY"] = "true" if updated.parse_history else "false"
         secrets_to_write["HISTORY_LIMIT"] = str(updated.history_limit)
         envfile.write_env(secrets_to_write)
+        reset_client()  # L11: ключи сменились — следующий get_client() соберёт клиента заново
     return {"status": "saved"}
 
 

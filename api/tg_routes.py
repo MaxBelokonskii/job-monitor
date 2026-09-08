@@ -1,42 +1,18 @@
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import Optional
-import subprocess
-import sys
 import os
-import signal
 from datetime import date
+
+from fastapi import APIRouter, HTTPException
+
 from .config_routes import load_config
 from job_monitor import paths
 from job_monitor.settings import load_secrets
+from job_monitor.workers.manager import WorkerAlreadyRunning, WorkerNotRunning, manager
 
 router = APIRouter(prefix="/api/tg", tags=["telegram"])
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SCRIPT_PATH = os.path.join(BASE_DIR, "monitor.py")
 LOG_DIR = paths.logs_dir()
-PID_FILE = paths.path("monitor_pid.txt")
 SYSTEM_LOG = LOG_DIR / "tg_system.log"
 ALL_SENT_FILE = paths.path("all_sent_users.txt")
-
-monitor_process: Optional[subprocess.Popen] = None
-
-def is_running() -> bool:
-    global monitor_process
-    if monitor_process and monitor_process.poll() is None:
-        return True
-    if os.path.exists(PID_FILE):
-        try:
-            with open(PID_FILE) as f:
-                pid = int(f.read().strip())
-            os.kill(pid, 0)
-            return True
-        except (OSError, ValueError):
-            try:
-                os.remove(PID_FILE)
-            except Exception:
-                pass
-    return False
 
 def get_sent_today() -> int:
     log_file = os.path.join(LOG_DIR, f"sent_log_{date.today()}.txt")
@@ -95,7 +71,7 @@ async def tg_status():
     cfg = load_config()
     secrets = load_secrets()
     return {
-        "running": is_running(),
+        "running": manager.status("tg").as_dict()["running"],
         "safe_mode": cfg.get("safe_mode", True),
         "parse_history": cfg.get("parse_history", False),
         "sent_today": get_sent_today(),
@@ -110,49 +86,18 @@ async def tg_status():
 
 @router.post("/start")
 async def tg_start():
-    global monitor_process
-    if is_running():
-        raise HTTPException(status_code=400, detail="TG скрипт уже запущен")
-    cfg = load_config()
-    env = os.environ.copy()
-    env["SAFE_MODE"] = "true" if cfg.get("safe_mode") else "false"
-    env["PARSE_HISTORY"] = "true" if cfg.get("parse_history") else "false"
-    env["HISTORY_LIMIT"] = str(cfg.get("history_limit", 50))
-    monitor_process = subprocess.Popen(
-        [sys.executable, SCRIPT_PATH],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        cwd=BASE_DIR
-    )
-    return {"status": "started", "pid": monitor_process.pid}
+    try:
+        await manager.start("tg")
+    except WorkerAlreadyRunning:
+        raise HTTPException(status_code=400, detail="TG воркер уже запущен")
+    return {"status": "started"}
 
 @router.post("/stop")
 async def tg_stop():
-    global monitor_process
-    stopped = False
-    if monitor_process and monitor_process.poll() is None:
-        monitor_process.terminate()
-        try:
-            monitor_process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            monitor_process.kill()
-        monitor_process = None
-        stopped = True
-    if os.path.exists(PID_FILE):
-        try:
-            with open(PID_FILE) as f:
-                pid = int(f.read().strip())
-            os.kill(pid, signal.SIGTERM)
-            stopped = True
-        except Exception:
-            pass
-        try:
-            os.remove(PID_FILE)
-        except Exception:
-            pass
-    if not stopped:
-        raise HTTPException(status_code=400, detail="TG скрипт не запущен")
+    try:
+        await manager.stop("tg")
+    except WorkerNotRunning:
+        raise HTTPException(status_code=400, detail="TG воркер не запущен")
     return {"status": "stopped"}
 
 @router.get("/chats")

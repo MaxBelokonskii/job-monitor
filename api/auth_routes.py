@@ -1,22 +1,11 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from telethon import TelegramClient
-from job_monitor import paths
-from job_monitor.settings import load_secrets
+from job_monitor.telegram_client import get_client
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
-_tg_client: Optional[TelegramClient] = None
 _auth_state: dict = {}
-
-def get_web_client() -> TelegramClient:
-    global _tg_client
-    secrets = load_secrets()
-    session_path = str(paths.path("telegram_web"))
-    if _tg_client is None:
-        _tg_client = TelegramClient(session_path, secrets.api_id or 0, secrets.api_hash or "")
-    return _tg_client
 
 class AuthRequest(BaseModel):
     phone: str
@@ -32,7 +21,7 @@ class MessageRequest(BaseModel):
 
 @router.get("/status")
 async def auth_status():
-    client = get_web_client()
+    client = get_client()
     try:
         await client.connect()
         authorized = await client.is_user_authorized()
@@ -44,7 +33,7 @@ async def auth_status():
 
 @router.post("/send-code")
 async def send_code(body: AuthRequest):
-    client = get_web_client()
+    client = get_client()
     try:
         await client.connect()
         if await client.is_user_authorized():
@@ -59,7 +48,7 @@ async def send_code(body: AuthRequest):
 @router.post("/verify-code")
 async def verify_code(body: AuthCode):
     from telethon.errors import SessionPasswordNeededError
-    client = get_web_client()
+    client = get_client()
     try:
         await client.connect()
         try:
@@ -76,7 +65,7 @@ async def verify_code(body: AuthCode):
 
 @router.get("/messages/{username}")
 async def get_messages(username: str, limit: int = 30):
-    client = get_web_client()
+    client = get_client()
     try:
         await client.connect()
         if not await client.is_user_authorized():
@@ -99,7 +88,7 @@ async def get_messages(username: str, limit: int = 30):
 
 @router.post("/messages/{username}")
 async def send_message(username: str, body: MessageRequest):
-    client = get_web_client()
+    client = get_client()
     try:
         await client.connect()
         if not await client.is_user_authorized():

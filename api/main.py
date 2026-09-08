@@ -22,6 +22,7 @@ from job_monitor.security import (
 )
 from job_monitor.settings import load_settings
 from job_monitor.workers.manager import manager
+from job_monitor.workers.telegram import run_worker as run_tg_worker
 
 log = logging.getLogger(__name__)
 
@@ -32,11 +33,10 @@ FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 def register_workers() -> None:
     """Register worker factories with the module-level manager.
 
-    Intentionally empty here: the Telegram worker is registered by task 2
-    and the hh.ru worker by task 3. Without this call the lifespan below
-    would not run at all, since `app = FastAPI(..., lifespan=lifespan)`
-    needs the function to exist even before there is anything to register.
+    The Telegram worker is registered here (task 2); the hh.ru worker is
+    registered by task 3.
     """
+    manager.register("tg", run_tg_worker)
 
 
 @asynccontextmanager
