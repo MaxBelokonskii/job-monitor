@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -22,7 +23,7 @@ from job_monitor.security import (
 )
 from job_monitor.logging_setup import configure_logging, worker_logger
 from job_monitor.settings import load_settings
-from job_monitor.workers.hh import run_worker as run_hh_worker
+from job_monitor.workers.hh import login, run_worker as run_hh_worker
 from job_monitor.workers.manager import manager
 from job_monitor.workers.telegram import run_worker as run_tg_worker
 
@@ -63,7 +64,18 @@ async def lifespan(app: FastAPI):
         except Exception:
             worker_logger("hh").exception("автозапуск HH воркера не удался")
     yield
-    await manager.stop_all()
+    try:
+        await manager.stop_all()
+    finally:
+        # Окно входа в hh.ru не принадлежит менеджеру воркеров: его открывает
+        # POST /api/hh/login/start, а гасил до сих пор только успешный
+        # confirm(). Незавершённый вход поэтому переживал остановку
+        # приложения живым процессом Chrome — тот самый брошенный браузер,
+        # ради которого существует супервизор. `quit()` блокирующий, так что
+        # здесь он идёт через to_thread, как и `login.start` в
+        # api/hh_routes.py. В `finally`, чтобы падение stop_all() не съело
+        # закрытие окна.
+        await asyncio.to_thread(login.close)
 
 
 app = FastAPI(

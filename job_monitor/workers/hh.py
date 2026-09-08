@@ -130,13 +130,51 @@ class HhLogin:
     def confirm(self) -> HhLoginState:
         if self._driver is None:
             raise RuntimeError("сначала вызови start()")
-        if not self._is_logged_in(self._driver):
-            return self.state
-        save_cookies(self._driver, self._cookies_path)
-        self._driver.quit()
-        self._driver = None
+        try:
+            if not self._is_logged_in(self._driver):
+                # Окно намеренно остаётся открытым: пользователь ещё не вошёл
+                # и сейчас как раз этим и занят.
+                return self.state
+            save_cookies(self._driver, self._cookies_path)
+        except Exception:
+            # `_is_logged_in` — это Selenium-вызовы, а `save_cookies` пишет
+            # файл: оба могут бросить (упавший драйвер, недоступный каталог
+            # данных). Без этого окно Chrome оставалось висеть и на пути,
+            # который выглядит успешным.
+            self.close()
+            raise
+        self.close()
         self.state = HhLoginState.logged_in
         return self.state
+
+    def close(self) -> None:
+        """Закрыть окно входа, если оно открыто. Идемпотентно.
+
+        Драйвер раньше гасился только в `confirm()` и только при успешной
+        проверке входа. Пользователь, который нажал «Открыть вход в hh.ru» и
+        не подтвердил — вход не удался, передумал, закрыл вкладку UI, —
+        оставлял живой Chrome, переживающий остановку приложения: `lifespan`
+        в api/main.py знает только про `manager.stop_all()`. Это тот же класс
+        отказа «брошенный неподнадзорный браузер», ради которого существует
+        `WorkerManager`, только окно входа менеджеру не принадлежит, — значит
+        закрывать его должен кто-то ещё: выход из `lifespan` и роут
+        POST /api/hh/login/cancel.
+
+        Исключение из `driver.quit()` наружу не выпускается: это вызывается на
+        пути остановки приложения, где упавший quit не должен ломать выход, а
+        ссылка на драйвер всё равно уже сброшена.
+        """
+        driver, self._driver = self._driver, None
+        if driver is None:
+            # Состояние не трогаем: `logged_in` означает «cookies сохранены»,
+            # и сбрасывать его в `logged_out` из-за закрытия уже закрытого
+            # окна значило бы врать в GET /api/hh/login/status.
+            return
+        self.state = HhLoginState.logged_out
+        try:
+            driver.quit()
+        except Exception as error:  # noqa: BLE001 — quit на пути выхода не должен ронять приложение
+            log.warning("не удалось закрыть окно входа hh.ru: %s", error)
 
 
 # ── Selenium-функции, перенесённые из hh_monitor.py без изменения логики ──

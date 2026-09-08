@@ -78,6 +78,19 @@ async def hh_login_confirm() -> dict:
     return {"state": (await asyncio.to_thread(login.confirm)).value}
 
 
+@router.post("/login/cancel")
+async def hh_login_cancel() -> dict:
+    """Закрыть окно входа, не подтверждая его.
+
+    Без этого роута единственный способ погасить открытый Chrome — успешный
+    `confirm()`: пользователь, у которого вход не удался или который передумал,
+    оставался с живым окном без единого контрола в UI. `quit()` блокирующий,
+    поэтому — как и `login.start` выше — через `asyncio.to_thread`.
+    """
+    await asyncio.to_thread(login.close)
+    return {"state": login.state.value}
+
+
 @router.get("/login/status")
 async def hh_login_status() -> dict:
     return {"state": login.state.value}
