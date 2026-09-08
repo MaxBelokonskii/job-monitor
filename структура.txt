@@ -1,4 +1,4 @@
-QaVacancyMonitor/
+JobMonitor/
 ├── api/
 │   ├── __init__.py
 │   ├── main.py           ← FastAPI + автозапуск
@@ -10,10 +10,23 @@ QaVacancyMonitor/
 │   ├── index.html        ← только разметка
 │   ├── style.css         ← все стили
 │   └── app.js            ← вся логика
+├── job_monitor/
+│   ├── paths.py           ← единственное место, где вычисляются пути к $JOB_MONITOR_DATA_DIR
+│   ├── envfile.py         ← атомарная запись .env
+│   ├── security.py        ← APP_TOKEN, TrustedHost, CSP
+│   └── db/                ← SQLite: connection, migrations, repositories
 ├── monitor.py            ← TG скрипт
 ├── hh_monitor.py         ← HH скрипт
+├── scripts/
+│   └── check_no_secrets.py ← pre-commit хук
+├── tests/
 ├── start_web.bat
-├── requirements.txt
-├── .env
-├── config.json
-└── session.session
+├── pyproject.toml        ← зависимости (диапазоны версий) + [build-system]
+├── requirements.lock     ← зависимости (точные пины)
+├── .env.example          ← только справочный шаблон переменных
+├── SECURITY.md           ← модель угроз, секреты, действия при утечке
+└── README.md
+
+Секреты и состояние (.env, config.json, *.session, логи, hh_sent.json,
+all_sent_users.txt) в репозитории не хранятся — всё это живёт под
+$JOB_MONITOR_DATA_DIR (по умолчанию ~/.job-monitor), см. SECURITY.md.

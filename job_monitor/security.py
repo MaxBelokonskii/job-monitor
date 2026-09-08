@@ -28,7 +28,7 @@ async def app_token_middleware(
     return await call_next(request)
 
 
-CSP = "; ".join((
+CSP: str = "; ".join((
     "default-src 'self'",
     "script-src 'self' 'unsafe-inline'",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
@@ -39,7 +39,7 @@ CSP = "; ".join((
     "base-uri 'none'",
     "object-src 'none'",
 ))
-SECURITY_HEADERS = {
+SECURITY_HEADERS: dict[str, str] = {
     "Content-Security-Policy": CSP,
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",

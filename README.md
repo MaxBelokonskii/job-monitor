@@ -1,4 +1,4 @@
-# 🤖 Job Monitor v2.0
+# 🤖 Job Monitor v2.1.0
 
 ![GUI](docs/images/v2.0(Dashboard).png)
 
@@ -21,7 +21,8 @@
 - Мониторинг публичных каналов в реальном времени через **Telethon MTProto API**
 - Умная фильтрация по ключевым словам и исключениям (junior/intern/стажировка vs senior/lead)
 - Автоматическая отправка сообщения + PDF резюме найденным контактам
-- Защита от дублей через постоянный файл `all_sent_users.txt`
+- Постоянный файл `all_sent_users.txt` для дедупликации между запусками
+  (известный дефект в самой логике сохранения — см. `docs/superpowers/specs/2026-09-08-hardening-and-rework-spec.md`, L1 — исправление в отдельном плане)
 - Лимит откликов в день (защита от бана)
 - `SAFE_MODE` — тестовый режим без реальной отправки
 - Парсинг истории каналов при старте
@@ -90,8 +91,8 @@ JobMonitor/
 
 ### 1. Клонировать репозиторий
 ```bash
-git clone https://github.com/Scr00ge90/QA-Vacancy-Monitor.git
-cd QA-Vacancy-Monitor
+git clone https://github.com/MaxBelokonskii/job-monitor.git
+cd job-monitor
 ```
 
 Первому клону нужен доступ в сеть: `make install` скачивает зависимости
@@ -140,6 +141,32 @@ set "JOB_MONITOR_DATA_DIR=D:\job-monitor-data"
 Подробно о том, что где хранится, какими механизмами это защищено и что
 делать при утечке секрета — в [`SECURITY.md`](SECURITY.md).
 
+### 4. Обновление с предыдущей версии
+
+Версия до `2.1.0` хранила состояние прямо в каталоге репозитория. Эта
+версия читает и пишет всё под `$JOB_MONITOR_DATA_DIR` (по умолчанию
+`~/.job-monitor`) — если просто обновить код на месте, каталог данных
+окажется пустым: `all_sent_users.txt` и `hh_sent.json` не будут найдены,
+и монитор напишет заново всем, кому уже писал раньше (риск бана в
+Telegram), Telethon-сессия не найдётся и потребует повторного входа по
+коду, а `config.json` откатится на настройки по умолчанию. Перенесите
+файлы вручную один раз, из корня старого клона репозитория:
+
+```bash
+mkdir -p ~/.job-monitor
+mv .env                 ~/.job-monitor/.env
+mv config.json          ~/.job-monitor/config.json
+mv all_sent_users.txt   ~/.job-monitor/all_sent_users.txt
+mv hh_sent.json         ~/.job-monitor/hh_sent.json
+mv session.session      ~/.job-monitor/telegram.session
+mv session_web.session  ~/.job-monitor/telegram_web.session
+```
+
+Если вы переопределяете каталог данных через `JOB_MONITOR_DATA_DIR`,
+подставьте его значение вместо `~/.job-monitor`. Автоматическая команда
+миграции (`migrate-legacy`) появится в одном из следующих планов — пока
+перенос делается вручную и только один раз.
+
 ---
 
 ## 🧪 Тестирование и найденные баги
@@ -152,7 +179,7 @@ set "JOB_MONITOR_DATA_DIR=D:\job-monitor-data"
 |---|---|---|---|
 | 1 | Повторная отправка сообщений после перезапуска | Дневной лог сбрасывался, `sent_users` очищался | Добавлен постоянный `all_sent_users.txt` |
 | 2 | Превышение лимита (35 вместо 25) | Лимит проверялся до цикла, но не внутри при multiple usernames | Проверка добавлена внутрь цикла по username |
-| 3 | Конфликт Telegram сессий | `monitor.py` и `app.py` использовали одну `session` | Разделены на `session` и `session_web` |
+| 3 | Конфликт Telegram сессий | `monitor.py` и `app.py` использовали одну сессию | Разделены на `telegram.session` и `telegram_web.session` |
 | 4 | `Too many requests` без паузы | `FloodWaitError` игнорировался, скрипт продолжал слать | Добавлена обработка с `e.seconds` паузой |
 | 5 | `ModuleNotFoundError: api` | uvicorn запускался не из директории проекта | Добавлен `cd /d "%BASE%"` в батник |
 | 6 | JS `SyntaxError` из-за двойного экранирования | Regex в JS патчился через Python `str.replace` | Пересборка файла с нуля |
