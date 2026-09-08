@@ -1,4 +1,5 @@
 import ast
+import asyncio
 import os
 import stat
 import subprocess
@@ -627,4 +628,4 @@ def test_the_telethon_session_file_is_private(tmp_path, monkeypatch):
         assert stat.S_IMODE(target.stat().st_mode) == 0o600
     finally:
         client.session.close()
-        telegram_client.reset_client()
+        asyncio.run(telegram_client.reset_client())

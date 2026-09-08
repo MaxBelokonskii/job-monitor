@@ -50,7 +50,10 @@ async def update_config(patch: dict) -> dict:
         # перезапускал приложение и считал себя в безопасном режиме, пока
         # воркер читал `safe_mode` из базы и продолжал реально писать людям.
         envfile.write_env(secrets_to_write)
-        reset_client()  # L11: ключи сменились — следующий get_client() соберёт клиента заново
+        # L11: ключи сменились — следующий get_client() соберёт клиента заново.
+        # Ждём отключения: старый клиент должен отпустить telegram.session
+        # прежде, чем новый его откроет.
+        await reset_client()
     return {"status": "saved"}
 
 

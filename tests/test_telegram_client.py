@@ -8,6 +8,8 @@ tests of `job_monitor.telegram_client`'s own caching logic.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from job_monitor import paths, telegram_client
@@ -20,6 +22,10 @@ class FakeTelegramClient:
         self.session = session
         self.api_id = api_id
         self.api_hash = api_hash
+        self.disconnected = False
+
+    async def disconnect(self):
+        self.disconnected = True
 
 
 @pytest.fixture(autouse=True)
@@ -28,9 +34,9 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.delenv("TG_API_ID", raising=False)
     monkeypatch.delenv("TG_API_HASH", raising=False)
     monkeypatch.setattr(telegram_client, "TelegramClient", FakeTelegramClient)
-    telegram_client.reset_client()
+    asyncio.run(telegram_client.reset_client())
     yield
-    telegram_client.reset_client()
+    asyncio.run(telegram_client.reset_client())
 
 
 def _write_secrets(tmp_path, api_id="123", api_hash="deadbeef"):
@@ -77,6 +83,45 @@ def test_get_client_rebuilds_when_keys_change(tmp_path):
 def test_reset_client_forces_a_rebuild_even_with_unchanged_keys(tmp_path):
     _write_secrets(tmp_path)
     first = telegram_client.get_client()
-    telegram_client.reset_client()
+    asyncio.run(telegram_client.reset_client())
     second = telegram_client.get_client()
+    assert second is not first
+
+
+async def test_reset_client_disconnects_the_old_client(tmp_path):
+    """Отпустить клиента — это отключиться, а не только обнулить ссылку.
+
+    Раньше `reset_client()` просто ставила `_client = None`. Старый клиент
+    оставался подключённым: Telethon держал сокет и открытый
+    `telegram.session`, — а следующий `get_client()` строил нового поверх
+    того же файла сессии. Два подключения к одной сессии Telethon — сервер
+    видит две сессии одного ключа, апдейты уходят то в одно соединение, то в
+    другое, запись в файл идёт из двух мест.
+    """
+    _write_secrets(tmp_path)
+    first = telegram_client.get_client()
+
+    await telegram_client.reset_client()
+
+    assert first.disconnected, "старый клиент остался подключённым к той же сессии"
+    assert telegram_client.get_client() is not first
+
+
+async def test_reset_client_without_a_client_is_a_no_op():
+    await telegram_client.reset_client()      # не должно бросать
+
+
+def test_key_change_also_disconnects(tmp_path):
+    """L11 закрывался пересозданием клиента при смене ключей, но старый при
+    этом тоже никто не отключал: `get_client()` строит нового, а `PATCH
+    /api/config` перед этим зовёт `reset_client()` — именно он и обязан
+    закрыть предыдущего."""
+    _write_secrets(tmp_path, api_id="123", api_hash="deadbeef")
+    first = telegram_client.get_client()
+
+    asyncio.run(telegram_client.reset_client())
+    _write_secrets(tmp_path, api_id="456", api_hash="cafef00d")
+    second = telegram_client.get_client()
+
+    assert first.disconnected
     assert second is not first

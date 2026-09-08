@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 from telethon import TelegramClient
@@ -47,7 +48,29 @@ def get_client() -> TelegramClient:
     return _client
 
 
-def reset_client() -> None:
+async def reset_client() -> None:
+    """Отпустить текущего клиента: отключиться и забыть.
+
+    Раньше функция просто обнуляла ссылку. Старый клиент при этом оставался
+    ПОДКЛЮЧЁННЫМ — Telethon держит сокет и открытый `telegram.session`, — а
+    следующий `get_client()` строил нового поверх того же файла сессии. Два
+    подключения к одной сессии Telethon — источник трудноуловимых отказов:
+    сервер видит две сессии одного авторизационного ключа, апдейты уходят то
+    в одно соединение, то в другое, а запись в файл сессии идёт из двух мест.
+
+    Функция сделана асинхронной, а не «отключаемся отдельной задачей»:
+    единственный прикладной вызывающий (`api/config_routes.py::update_config`)
+    и так асинхронный, а фоновая задача означала бы, что новый клиент может
+    родиться раньше, чем старый отпустил сессию, — то есть ровно то состояние,
+    от которого мы избавляемся, только реже и невоспроизводимо. Исключение из
+    незамеченной задачи вдобавок никто бы не увидел.
+    """
     global _client, _credentials
-    _client = None
-    _credentials = None
+    client, _client, _credentials = _client, None, None
+    if client is None:
+        return
+    # Telethon возвращает корутину, когда цикл событий работает, и None,
+    # когда он всё сделал синхронно.
+    closing = client.disconnect()
+    if inspect.isawaitable(closing):
+        await closing

@@ -22,6 +22,7 @@ from job_monitor.settings import AppSettings
 log = logging.getLogger(__name__)
 USERNAME_RE = re.compile(r"@[A-Za-z0-9_]{4,32}")
 Sender = Callable[[str], Awaitable[None]]
+Clock = Callable[[], datetime]
 
 
 @dataclass(frozen=True)
@@ -65,10 +66,23 @@ async def process_post(
     settings: AppSettings,
     repo: TgRepo,
     sender: Sender,
-    now: datetime,
+    clock: Clock = datetime.now,
     own_username: str | None = None,
 ) -> list[str]:
-    """Обрабатывает один пост. Возвращает список username, которым отправили."""
+    """Обрабатывает один пост. Возвращает список username, которым отправили.
+
+    Время берётся `clock()` на каждой итерации, а не один раз на пост.
+    Раньше сюда приходил один `now`, снятый в момент прихода поста, и он же
+    уходил во все `record_send` цикла. Между отправками стоит пауза до
+    `delay_max` (до 3600 секунд), а хэндлов в одном посте бывает несколько,
+    поэтому отправка, случившаяся после полуночи, попадала в базу вчерашней
+    датой — и в тот же вчерашний дневной лимит. Недосчёт, не перерасход, но
+    дата отправки в `tg_sends` при этом просто неверна, а «отправлено
+    сегодня» на дашборде считается именно по ней.
+
+    `clock` параметром, а не прямым вызовом `datetime.now()`: без него
+    проверить смену суток можно было бы только подменой системного времени.
+    """
     if not post_matches(post, settings):
         return []
     if settings.safe_mode:
@@ -83,7 +97,7 @@ async def process_post(
     for username in extract_usernames(post.text):
         # Лимит перечитывается из БД на каждой итерации: смена суток
         # обрабатывается сама собой, отдельная задача сброса не нужна.
-        if repo.sent_on(now.date()) >= settings.max_per_day:
+        if repo.sent_on(clock().date()) >= settings.max_per_day:
             log.warning("дневной лимит %s достигнут", settings.max_per_day)
             break
         if not is_eligible(username, settings, own_username):
@@ -91,7 +105,7 @@ async def process_post(
         if repo.was_sent(username):
             continue
         await sender(username)
-        repo.record_send(username, post.channel, post.text[:80].strip(), now)
+        repo.record_send(username, post.channel, post.text[:80].strip(), clock())
         sent.append(username)
         await asyncio.sleep(random.randint(settings.delay_min, settings.delay_max))
     return sent
@@ -125,12 +139,18 @@ async def run_worker() -> None:
             return
         post = IncomingPost(channel=channel, text=event.message.message)
         settings = load_settings(conn)
-        now = datetime.now()
         if post_matches(post, settings):
             # Метрика «вакансий найдено» берётся отсюда, а не из текста логов (L2).
-            EventsRepo(conn).add("tg", "vacancy", post.text[:80].strip(), now)
-        for username in await process_post(post, settings, repo, sender, now, own_username):
-            EventsRepo(conn).add("tg", "sent", username, now)
+            EventsRepo(conn).add("tg", "vacancy", post.text[:80].strip(), datetime.now())
+        for username in await process_post(post, settings, repo, sender, datetime.now, own_username):
+            # Тоже `datetime.now()`, а не время прихода поста: обработка
+            # одного поста растягивается на паузы между отправками и может
+            # перейти за полночь. Остаточная неточность в пределах одного
+            # поста (все события получают время конца обработки, а не своей
+            # отправки) — цена того, что process_post возвращает только имена;
+            # точная дата отправки лежит в `tg_sends`, куда её кладёт
+            # `record_send`, и именно она отвечает за дневной лимит.
+            EventsRepo(conn).add("tg", "sent", username, datetime.now())
 
     log.info("TG-воркер запущен")
     await client.run_until_disconnected()

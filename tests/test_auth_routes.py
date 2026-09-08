@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from api import auth_routes
@@ -14,6 +16,13 @@ class FakeTelegramClient:
 
     def __init__(self, session, api_id, api_hash):
         FakeTelegramClient.last_args = (session, api_id, api_hash)
+        self.disconnected = False
+
+    async def disconnect(self):
+        # `reset_client()` обязан отпустить старого клиента, а не просто
+        # забыть про него: два подключения к одной сессии Telethon — источник
+        # трудноуловимых отказов.
+        self.disconnected = True
 
 
 @pytest.fixture(autouse=True)
@@ -22,9 +31,9 @@ def _isolate(tmp_path, monkeypatch):
     monkeypatch.delenv("TG_API_ID", raising=False)
     monkeypatch.delenv("TG_API_HASH", raising=False)
     connection.reset_connection()
-    telegram_client.reset_client()
+    asyncio.run(telegram_client.reset_client())
     yield
-    telegram_client.reset_client()
+    asyncio.run(telegram_client.reset_client())
     connection.reset_connection()
 
 
