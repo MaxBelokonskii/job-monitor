@@ -107,6 +107,52 @@ def test_unparseable_send_log_timestamp_is_reported(conn, legacy):
     assert TgRepo(conn).was_sent("@c") is False
 
 
+def test_all_sent_users_fallback_creates_contact_but_no_fabricated_send(conn, legacy):
+    """I3: `all_sent_users.txt`'s own timestamp is the file's mtime (~now
+    for an upgrading user), not a real send date. `@b` only appears in that
+    file (not in any sent_log_*.txt), so it must land in tg_contacts for
+    dedup, but must NOT get a tg_sends row stamped "today" — that would
+    inflate sent_on(today) once the next plan reads daily counts from the
+    database, tripping max_per_day on data that isn't a real send."""
+    import_legacy(conn, legacy)
+    repo = TgRepo(conn)
+    assert repo.was_sent("@b") is True
+    assert repo.sent_on(date.today()) == 0
+    total_sends = conn.execute(
+        "SELECT COUNT(*) AS n FROM tg_sends WHERE username = '@b'"
+    ).fetchone()["n"]
+    assert total_sends == 0
+
+
+def test_sent_log_path_still_creates_a_real_send_row(conn, legacy):
+    """The log-file path carries a real date and must keep creating both a
+    contact and a tg_sends row — only the mtime-based fallback changes."""
+    import_legacy(conn, legacy)
+    repo = TgRepo(conn)
+    assert repo.was_sent("@a") is True
+    assert repo.sent_on(date(2026, 4, 4)) == 1
+    total_sends = conn.execute(
+        "SELECT COUNT(*) AS n FROM tg_sends WHERE username = '@a'"
+    ).fetchone()["n"]
+    assert total_sends == 1
+
+
+def test_rerunning_migrate_legacy_does_not_overwrite_tuned_settings(conn, legacy):
+    """I6: `_import_settings` used to call `save_settings` unconditionally
+    on every run. A user who migrates, then tunes settings through the UI,
+    then re-runs the documented `make migrate-legacy` recovery step would
+    get their tuning silently replaced by the old config.json — with the
+    CLI still printing a settings count as if it succeeded."""
+    import_legacy(conn, legacy)
+    from job_monitor.settings import save_settings
+    save_settings(conn, {"max_per_day": 55})
+
+    second = import_legacy(conn, legacy)
+
+    assert load_settings(conn).max_per_day == 55
+    assert any("настрой" in note for note in second.skipped)
+
+
 def test_unparseable_found_at_is_reported_with_vacancy_id(conn, legacy):
     (legacy / "hh_sent.json").write_text(json.dumps({
         "222": {"id": "222", "title": "QA2", "company": "Acme", "url": "https://hh.ru/vacancy/222",

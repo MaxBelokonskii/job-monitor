@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from job_monitor.db.repositories import HhRepo, TgRepo
+from job_monitor.db.repositories import HhRepo, SettingsRepo, TgRepo
 from job_monitor.settings import AppSettings, save_settings
 
 SECRET_KEYS = ("api_id", "api_hash")
@@ -34,6 +34,19 @@ def _parse_stamp(raw: str) -> datetime | None:
 
 
 def _import_settings(conn: sqlite3.Connection, source: Path, report: ImportReport) -> None:
+    if SettingsRepo(conn).load():
+        # `_import_settings` calls `save_settings` unconditionally; without
+        # this guard a second `migrate-legacy` run (the documented recovery
+        # step, re-run by mistake or on purpose) silently overwrites
+        # settings the user has since tuned through the UI, while the CLI
+        # output claims success ("настроек: 7"). Contacts and vacancies are
+        # naturally idempotent (keyed by username/vacancy_id) — settings are
+        # not, so they need an explicit "already migrated" check.
+        report.skipped.append(
+            "настройки уже импортированы ранее — пропускаю, чтобы не затереть"
+            " изменения, сделанные через UI"
+        )
+        return
     config = source / "config.json"
     if not config.exists():
         report.skipped.append("config.json не найден")
@@ -79,12 +92,22 @@ def _import_contacts(conn: sqlite3.Connection, source: Path, report: ImportRepor
 
     all_sent = source / "all_sent_users.txt"
     if all_sent.exists():
+        # `all_sent_users.txt`'s own timestamp is the file's mtime — roughly
+        # "now" for an upgrading user, since it's the file the live old app
+        # keeps appending to — not the date any of these contacts were
+        # actually reached. Recording it as a real send (record_send) would
+        # stamp every contact from this file as sent "today", which
+        # `TgRepo.sent_on(date.today())` would then count: harmless while
+        # nothing reads it, but the next plan serves `sent_today` from the
+        # database, and the worker would refuse to send for the rest of the
+        # day on a fabricated spike. `ensure_contact` registers the contact
+        # (so dedup and `contacts_total()` still work) without fabricating
+        # a `tg_sends` row.
         fallback = datetime.fromtimestamp(all_sent.stat().st_mtime)
         for line in all_sent.read_text(encoding="utf-8").splitlines():
             username = line.strip()
             if username.startswith("@") and not repo.was_sent(username):
-                repo.record_send(username, None, None, fallback)
-                report.sends += 1
+                repo.ensure_contact(username, fallback)
     else:
         report.skipped.append("all_sent_users.txt не найден")
     report.contacts = repo.contacts_total()
