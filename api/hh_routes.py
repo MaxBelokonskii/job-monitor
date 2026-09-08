@@ -4,22 +4,25 @@ from datetime import date
 from fastapi import APIRouter, HTTPException
 
 from .config_routes import load_config
-from job_monitor import paths
 from job_monitor.db.connection import get_connection
 from job_monitor.db.repositories import HhRepo
+from job_monitor.logging_setup import log_file
 from job_monitor.workers.hh import login
 from job_monitor.workers.manager import WorkerAlreadyRunning, WorkerNotRunning, manager
 
 router = APIRouter(prefix="/api/hh", tags=["hh"])
 
-LOG_DIR = paths.logs_dir()
-HH_LOG_PATH = LOG_DIR / "hh.log"
-
 
 def get_hh_log(lines: int = 100) -> str:
-    if not HH_LOG_PATH.exists():
+    """Хвост файла, в который пишет HH-сторона приложения.
+
+    Путь вычисляется на каждый вызов, а не один раз на импорте — см.
+    комментарий-близнец в api/tg_routes.py::get_system_log.
+    """
+    target = log_file("hh")
+    if not target.exists():
         return ""
-    with open(HH_LOG_PATH, "r", encoding="utf-8") as f:
+    with open(target, "r", encoding="utf-8") as f:
         all_lines = f.readlines()
     return "".join(all_lines[-lines:])
 

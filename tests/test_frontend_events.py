@@ -296,3 +296,26 @@ def test_dead_log_text_parser_is_gone() -> None:
         "the dashboard feed now comes from worker_events via /api/state; the "
         "log-text scraper it replaced must not linger"
     )
+
+
+# ── Каждый вызов API идёт через общий помощник ────────────────────────
+
+
+def test_only_the_api_helpers_call_fetch_directly() -> None:
+    """`sendChatMessage` и `verifyAuthCode` ходили сырым `fetch`.
+
+    Два следствия, оба реальные: `.json()` на не-JSON теле ответа 500
+    бросало исключение в консоль, а 403 протухшего токена проходил мимо
+    баннера, который план 1 построил ровно для этого случая (см.
+    `showTokenExpiredBanner`). Единственные законные места вызова `fetch` —
+    сами помощники `apiGet` и `apiSend`.
+    """
+    source = _app_source()
+    assert source.count("fetch(") == 2, (
+        "fetch() вызывается вне apiGet/apiSend — 403 пройдёт мимо баннера "
+        "протухшего токена, а не-JSON тело ответа бросит исключение"
+    )
+    for helper in ("apiGet", "apiSend"):
+        assert "fetch(" in _extract_function_source(helper)
+    for caller in ("sendChatMessage", "verifyAuthCode"):
+        assert "fetch(" not in _extract_function_source(caller)

@@ -32,5 +32,4 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 
 [tool.setuptools]
-py-modules = ["monitor", "hh_monitor"]
-packages = ["api", "job_monitor"]
+packages = ["api", "job_monitor", "job_monitor.db", "job_monitor.workers"]

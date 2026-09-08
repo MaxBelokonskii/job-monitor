@@ -1,25 +1,28 @@
-import os
 from datetime import date
 
 from fastapi import APIRouter, HTTPException
 
 from .config_routes import load_config
-from job_monitor import paths
 from job_monitor.db.connection import get_connection
 from job_monitor.db.repositories import EventsRepo, TgRepo
+from job_monitor.logging_setup import log_file
 from job_monitor.settings import load_secrets
 from job_monitor.workers.manager import WorkerAlreadyRunning, WorkerNotRunning, manager
 
 router = APIRouter(prefix="/api/tg", tags=["telegram"])
 
-LOG_DIR = paths.logs_dir()
-SYSTEM_LOG = LOG_DIR / "tg_system.log"
-
 
 def get_system_log(lines: int = 100) -> str:
-    if not os.path.exists(SYSTEM_LOG):
+    """Хвост файла, в который пишет TG-сторона приложения.
+
+    Путь вычисляется на каждый вызов, а не один раз на импорте: импорт
+    модуля не должен создавать каталог данных, и путь обязан следовать за
+    $JOB_MONITOR_DATA_DIR. Файл наполняет job_monitor/logging_setup.py.
+    """
+    target = log_file("tg")
+    if not target.exists():
         return ""
-    with open(SYSTEM_LOG, "r", encoding="utf-8") as f:
+    with open(target, "r", encoding="utf-8") as f:
         all_lines = f.readlines()
     return "".join(all_lines[-lines:])
 
@@ -51,15 +54,26 @@ async def tg_start():
         await manager.start("tg")
     except WorkerAlreadyRunning:
         raise HTTPException(status_code=400, detail="TG воркер уже запущен")
+    # Безусловное "started" здесь честно и совпадает с hh_start: в отличие
+    # от stop, у start нет бюджета времени — manager.start() либо бросает
+    # WorkerAlreadyRunning, либо возвращает статус `starting`, третьего нет.
     return {"status": "started"}
 
 @router.post("/stop")
 async def tg_stop():
     try:
-        await manager.stop("tg")
+        status = await manager.stop("tg")
     except WorkerNotRunning:
         raise HTTPException(status_code=400, detail="TG воркер не запущен")
-    return {"status": "stopped"}
+    # Возвращаем НАСТОЯЩЕЕ состояние, а не безусловное "stopped" — тот же
+    # дефект, что был вылечен в hh_stop (см. подробный комментарий там).
+    # Остановка воркера имеет бюджет времени; если воркер его не уложился,
+    # manager.stop() ставит error и продолжает отслеживать таску. Раньше UI
+    # в этом случае показывал «остановлено», пользователь жал «Запустить»,
+    # получал 400 «уже запущен», жал «Остановить» ещё раз.
+    # Форма ответа сохранена: успешная остановка по-прежнему даёт
+    # {"status": "stopped"}, на который смотрит frontend/app.js.
+    return {"status": status.state.value, "detail": status.last_error}
 
 @router.get("/chats")
 async def tg_chats():

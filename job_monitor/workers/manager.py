@@ -15,7 +15,19 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
-log = logging.getLogger(__name__)
+
+def _worker_log(name: str) -> logging.Logger:
+    """Логгер, чей вывод попадает на вкладку логов этого воркера.
+
+    Сообщения супервизора о конкретном воркере (упал, не остановился в срок)
+    пишутся не в `job_monitor.workers.manager`, а в его дочерний логгер
+    `job_monitor.workers.manager.<имя>`. `job_monitor/logging_setup.py`
+    подключает этот дочерний логгер к тому же файлу, что и сам воркер, — так
+    причина, по которой воркер не работает, лежит там, куда пользователь
+    смотрит: на вкладке именно этого воркера.
+    """
+    return logging.getLogger(f"{__name__}.{name}")
+
 
 WorkerFactory = Callable[[], Awaitable[None]]
 
@@ -78,6 +90,7 @@ class WorkerManager:
         status = WorkerStatus(name=name, state=WorkerState.starting, started_at=datetime.now())
         self._statuses[name] = status
         self._tasks[name] = asyncio.create_task(self._supervise(name), name=f"worker:{name}")
+        _worker_log(name).info("воркер %s запускается", name)
         return status
 
     async def stop(self, name: str, timeout: float = 10.0) -> WorkerStatus:
@@ -113,9 +126,11 @@ class WorkerManager:
                 last_error=f"воркер не остановился за {timeout}s (проигнорировал cancel)",
             )
             self._statuses[name] = status
+            _worker_log(name).error("%s", status.last_error)
             return status
         self._tasks.pop(name, None)
         self._statuses[name] = WorkerStatus(name=name, state=WorkerState.stopped)
+        _worker_log(name).info("воркер %s остановлен", name)
         return self._statuses[name]
 
     async def stop_all(self) -> None:
@@ -134,7 +149,7 @@ class WorkerManager:
             status.state = WorkerState.stopped
             raise
         except Exception as error:  # noqa: BLE001 — воркер не должен ронять приложение
-            log.exception("воркер %s упал", name)
+            _worker_log(name).exception("воркер %s упал", name)
             status.state = WorkerState.error
             status.last_error = f"{type(error).__name__}: {error}"
         else:

@@ -1,4 +1,3 @@
-import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -21,12 +20,11 @@ from job_monitor.security import (
     app_token_middleware,
     security_headers_middleware,
 )
+from job_monitor.logging_setup import configure_logging, worker_logger
 from job_monitor.settings import load_settings
 from job_monitor.workers.hh import run_worker as run_hh_worker
 from job_monitor.workers.manager import manager
 from job_monitor.workers.telegram import run_worker as run_tg_worker
-
-log = logging.getLogger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
@@ -40,6 +38,9 @@ def register_workers() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Логирование настраивается здесь, а не на импорте: импорт модуля не
+    # должен создавать каталог данных и файлы (см. job_monitor/logging_setup.py).
+    configure_logging()
     register_workers()
     settings = load_settings(get_connection())
     # Each autostart is isolated in its own try/except, matching the
@@ -52,12 +53,15 @@ async def lifespan(app: FastAPI):
         try:
             await manager.start("tg")
         except Exception:
-            log.exception("автозапуск TG воркера не удался")
+            # В логгер именно этого воркера: несостоявшийся автозапуск —
+            # причина, по которой пользователь видит «остановлен», и она
+            # должна лежать на его вкладке логов, а не в общем потоке.
+            worker_logger("tg").exception("автозапуск TG воркера не удался")
     if settings.hh_autostart:
         try:
             await manager.start("hh")
         except Exception:
-            log.exception("автозапуск HH воркера не удался")
+            worker_logger("hh").exception("автозапуск HH воркера не удался")
     yield
     await manager.stop_all()
 

@@ -245,7 +245,14 @@ async function toggleTG() {
     if (r && r.status === 'stopped') {
       setWorkerState(tgState, 'stopped'); updateTGButton();
       showToast('TG монитор остановлен');
-    } else showToast(r?.detail || 'Ошибка');
+    } else {
+      // Как в toggleHH: POST /api/tg/stop отвечает НАСТОЯЩИМ состоянием.
+      // Остановка с истёкшим бюджетом оставляет воркер в `error`, таска
+      // остаётся под наблюдением, и следующий start() ответит 400 — покажем
+      // это, а не оставим на экране устаревшую кнопку «работает».
+      if (r && r.status) { setWorkerState(tgState, r.status, r.detail); updateTGButton(); }
+      showToast(r?.detail || 'Ошибка');
+    }
   } else {
     const r = await apiPost('/tg/start');
     if (r && r.status === 'started') {
@@ -466,9 +473,13 @@ async function verifyAuthCode() {
   if (!code) { showToast('Введите код'); return; }
   const body = { phone, code, phone_hash: _phoneHash };
   if (password) body.password = password;
-  const resp = await fetch(API + '/auth/verify-code', { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) });
-  const r = await resp.json();
-  if (resp.status === 428 && r.detail === '2FA_REQUIRED') {
+  // Через apiPost, а не сырым fetch: помощник ловит 403 протухшего токена
+  // (баннер вместо молчаливого «неверный код») и не бросает исключение на
+  // не-JSON теле ответа 500. HTTP-статус 428 при этом не теряется: ответ
+  // на «нужен 2FA» — это ровно {detail: '2FA_REQUIRED'}, различить его
+  // можно по телу (api/auth_routes.py::verify_code).
+  const r = await apiPost('/auth/verify-code', body);
+  if (r && r.detail === '2FA_REQUIRED') {
     document.getElementById('auth2faRow').style.display = 'block';
     document.getElementById('auth2fa').focus();
     showToast('Введите облачный пароль (2FA)');
@@ -701,12 +712,13 @@ async function sendChatMessage() {
   const inp = document.getElementById('chatInput');
   const text = inp.value.trim(); if (!text) return;
   inp.value = ''; inp.disabled = true;
-  const r = await fetch(API + '/auth/messages/' + encodeURIComponent(currentChat.replace('@', '')), {
-    method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify({ text })
-  });
+  // Через apiPost, а не сырым fetch: 403 протухшего токена поднимает баннер,
+  // а не-JSON тело ответа 500 возвращается как null вместо исключения в
+  // консоли. Успех — {status: 'sent'} (api/auth_routes.py::send_message).
+  const r = await apiPost('/auth/messages/' + encodeURIComponent(currentChat.replace('@', '')), { text });
   inp.disabled = false; inp.focus();
-  if (r.ok) await loadChatMessages(currentChat);
-  else { const e = await r.json(); showToast('Ошибка: ' + (e.detail || '')); }
+  if (r && r.status === 'sent') await loadChatMessages(currentChat);
+  else showToast('Ошибка: ' + ((r && r.detail) || 'не удалось отправить'));
 }
 
 // ── HH Vacancies ──────────────────────────────────────────────────────
