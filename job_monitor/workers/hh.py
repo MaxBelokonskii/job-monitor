@@ -14,6 +14,24 @@
 как asyncio-таску, поэтому кооперативная отмена — через `threading.Event`,
 проверяемый на каждом шаге, который может занять время (между вакансиями,
 внутри задержки после отклика, во время ожидания дневного лимита).
+
+Этот `Event` создаётся заново на каждый вызов `run_worker()` и передаётся в
+`_blocking_loop`/`_interruptible_sleep` явным параметром — не хранится в
+модуле. Общий на всё приложение `Event` (как было раньше) означал бы, что
+`clear()` при рестарте стирает сигнал остановки ещё не завершившегося
+старого потока: тот продолжал бы жить со своим Chrome и своим соединением,
+не отслеживаемый менеджером — тот самый класс "второй Chrome", ради
+устранения которого существует этот план.
+
+`run_worker()` также не может просто ждать `asyncio.to_thread(...)` и
+ловить `CancelledError` вокруг него: `to_thread` не ждёт поток при отмене —
+awaiting-корутина репортит `cancelled` за миллисекунды независимо от того,
+проверяет ли поток флаг, а сам поток продолжает работать. Поэтому фоновая
+задача оборачивается в `asyncio.shield()` (стандартный приём из документации
+asyncio) — отмена `run_worker()` не отменяет фоновую задачу, а после того
+как флаг остановки выставлен, код дожидается её напрямую, так что
+`WorkerManager.stop()`'s ограниченный по времени `asyncio.wait()` видит
+настоящее состояние потока, а не мгновенно принятую отмену.
 """
 
 from __future__ import annotations
@@ -354,7 +372,6 @@ def apply_to_vacancy(driver: Any, vacancy: dict, settings: AppSettings) -> bool:
 
 # ── Цикл воркера в отдельном потоке ─────────────────────────────────────
 
-_stop_event = threading.Event()
 login = HhLogin(
     driver_factory=lambda: setup_driver(headless=False),
     cookies_path=paths.hh_cookies(),
@@ -362,10 +379,15 @@ login = HhLogin(
 )
 
 
-def _interruptible_sleep(seconds: float) -> bool:
-    """Спит по секунде. Возвращает False, если попросили остановиться."""
+def _interruptible_sleep(stop_event: threading.Event, seconds: float) -> bool:
+    """Спит по секунде. Возвращает False, если попросили остановиться.
+
+    `stop_event` — параметр, а не модульный синглтон: у каждого запуска
+    воркера свой Event (см. `run_worker`), иначе рестарт во время ещё не
+    завершившегося старого цикла стирал бы его сигнал остановки.
+    """
     for _ in range(int(seconds)):
-        if _stop_event.is_set():
+        if stop_event.is_set():
             return False
         time.sleep(1)
     return True
@@ -397,7 +419,7 @@ def _process_one(
     return applied
 
 
-def _blocking_loop() -> None:
+def _blocking_loop(stop_event: threading.Event) -> None:
     # R4: open a connection dedicated to this thread rather than sharing the
     # request-handling event loop's get_connection() singleton. sqlite3
     # connections are not meant for concurrent use from two threads even
@@ -416,37 +438,63 @@ def _blocking_loop() -> None:
         if not is_logged_in(driver):
             events.add("hh", "login_required", "нужен вход через настройки", datetime.now())
             return
-        while not _stop_event.is_set():
+        while not stop_event.is_set():
             settings = load_settings(conn)
             if repo.applied_on(date.today()) >= settings.hh_max_per_day:
-                if not _interruptible_sleep(600):
+                if not _interruptible_sleep(stop_event, 600):
                     return
                 continue
-            for keyword in settings.hh_keywords:
-                for area_id in settings.hh_area_ids:
-                    if _stop_event.is_set():
-                        return
-                    driver.get(build_search_url(keyword, settings, area_id))
-                    for vacancy in get_vacancies_from_page(driver, settings):
-                        if _stop_event.is_set():
+            try:
+                for keyword in settings.hh_keywords:
+                    for area_id in settings.hh_area_ids:
+                        if stop_event.is_set():
                             return
-                        if repo.exists(vacancy["vacancy_id"]):
-                            continue
-                        _process_one(driver, vacancy, settings, repo, events)
-                        if not _interruptible_sleep(
-                            random.randint(settings.hh_delay_min, settings.hh_delay_max)
-                        ):
-                            return
-            if not _interruptible_sleep(settings.hh_check_interval):
+                        driver.get(build_search_url(keyword, settings, area_id))
+                        for vacancy in get_vacancies_from_page(driver, settings):
+                            if stop_event.is_set():
+                                return
+                            if repo.exists(vacancy["vacancy_id"]):
+                                continue
+                            _process_one(driver, vacancy, settings, repo, events)
+                            if not _interruptible_sleep(
+                                stop_event,
+                                random.randint(settings.hh_delay_min, settings.hh_delay_max),
+                            ):
+                                return
+            except WebDriverException as error:
+                # Перенос из hh_monitor.py: браузер/сеть иногда моргают
+                # (таймаут, потеря соединения, временно упавшая страница
+                # поиска) — старый цикл логировал и спал минуту вместо того,
+                # чтобы падать насовсем. Порт этого файла потерял эту
+                # устойчивость (осталось только driver.quit() в finally),
+                # из-за чего необработанный WebDriverException из
+                # driver.get()/get_vacancies_from_page() поднимался в
+                # run_worker() и помечал воркер как error() навсегда, требуя
+                # ручного перезапуска, и ничего не попадало в worker_events.
+                events.add("hh", "error", str(error), datetime.now())
+                if not _interruptible_sleep(stop_event, 60):
+                    return
+                continue
+            if not _interruptible_sleep(stop_event, settings.hh_check_interval):
                 return
     finally:
         driver.quit()
 
 
 async def run_worker() -> None:
-    _stop_event.clear()
+    stop_event = threading.Event()
+    # Стандартный приём из документации asyncio для «не дать отмене убить
+    # фоновую задачу, но дождаться её на самом деле»: shield() защищает
+    # `inner` от отмены снаружи; если она всё же случилась, мы выставляем
+    # флаг остановки и await'им `inner` напрямую (не через shield), пока
+    # поток реально не завершится, и только потом поднимаем CancelledError
+    # дальше. Тем самым `WorkerManager.stop()`'s asyncio.wait(timeout=...)
+    # видит настоящее завершение потока, а не факт, что кто-то попросил
+    # остановиться.
+    inner = asyncio.ensure_future(asyncio.to_thread(_blocking_loop, stop_event))
     try:
-        await asyncio.to_thread(_blocking_loop)
+        await asyncio.shield(inner)
     except asyncio.CancelledError:
-        _stop_event.set()      # поток увидит флаг и выйдет сам
+        stop_event.set()
+        await inner
         raise
