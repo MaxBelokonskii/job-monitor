@@ -64,12 +64,55 @@ def test_imports_hh_applications(conn, legacy):
 
 def test_is_idempotent(conn, legacy):
     import_legacy(conn, legacy)
-    import_legacy(conn, legacy)
+    second = import_legacy(conn, legacy)
     assert TgRepo(conn).contacts_total() == 2
     assert HhRepo(conn).applied_total() == 1
+    # The guard in _import_contacts must actually skip already-imported rows,
+    # not just rely on the repositories' own unique-key upserts.
+    assert TgRepo(conn).sent_on(date(2026, 4, 4)) == 1
+    assert second.sends == 0
 
 
 def test_missing_source_reports_but_does_not_crash(conn, tmp_path):
     report = import_legacy(conn, tmp_path / "nope")
     assert report.contacts == 0
     assert report.skipped
+
+
+def test_malformed_config_json_is_skipped_not_fatal(conn, legacy):
+    (legacy / "config.json").write_text("{not valid json", encoding="utf-8")
+    report = import_legacy(conn, legacy)
+    assert any("config.json" in note for note in report.skipped)
+    # the rest of the migration must still run despite the broken config.json
+    assert TgRepo(conn).contacts_total() == 2
+    assert HhRepo(conn).exists("111") is True
+
+
+def test_malformed_hh_sent_json_is_skipped_not_fatal(conn, legacy):
+    (legacy / "hh_sent.json").write_text("{not valid json", encoding="utf-8")
+    report = import_legacy(conn, legacy)
+    assert any("hh_sent.json" in note for note in report.skipped)
+    assert HhRepo(conn).applied_total() == 0
+    # settings and contacts must still have been imported
+    current = load_settings(conn)
+    assert current.max_per_day == 7
+    assert TgRepo(conn).contacts_total() == 2
+
+
+def test_unparseable_send_log_timestamp_is_reported(conn, legacy):
+    (legacy / "logs" / "sent_log_2026-04-04.txt").write_text(
+        "@c | not-a-date | QA junior...\n", encoding="utf-8")
+    report = import_legacy(conn, legacy)
+    assert any("не удалось разобрать дату" in note and "@c" in note for note in report.skipped)
+    assert TgRepo(conn).was_sent("@c") is False
+
+
+def test_unparseable_found_at_is_reported_with_vacancy_id(conn, legacy):
+    (legacy / "hh_sent.json").write_text(json.dumps({
+        "222": {"id": "222", "title": "QA2", "company": "Acme", "url": "https://hh.ru/vacancy/222",
+                "found_at": "not-a-date", "applied_at": "2026-04-04 10:05",
+                "status": "отклик отправлен"},
+    }), encoding="utf-8")
+    report = import_legacy(conn, legacy)
+    assert any("222" in note and "found_at" in note for note in report.skipped)
+    assert HhRepo(conn).exists("222") is True

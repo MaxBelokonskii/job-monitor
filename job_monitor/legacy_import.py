@@ -38,7 +38,11 @@ def _import_settings(conn: sqlite3.Connection, source: Path, report: ImportRepor
     if not config.exists():
         report.skipped.append("config.json не найден")
         return
-    raw = json.loads(config.read_text(encoding="utf-8"))
+    try:
+        raw = json.loads(config.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+        report.skipped.append(f"config.json: не удалось прочитать ({exc})")
+        return
     for key in SECRET_KEYS:
         if key in raw:
             raw.pop(key)
@@ -61,7 +65,12 @@ def _import_contacts(conn: sqlite3.Connection, source: Path, report: ImportRepor
                 continue
             username, stamp = parts[0], _parse_stamp(parts[1])
             preview = parts[2] if len(parts) > 2 else None
-            if not username.startswith("@") or stamp is None:
+            if not username.startswith("@"):
+                continue
+            if stamp is None:
+                report.skipped.append(
+                    f"{log_file.name}: не удалось разобрать дату у {username} ({parts[1]!r})"
+                )
                 continue
             if repo.was_sent(username) and repo.sent_on(stamp.date()) > 0:
                 continue
@@ -86,9 +95,20 @@ def _import_vacancies(conn: sqlite3.Connection, source: Path, report: ImportRepo
     if not hh_sent.exists():
         report.skipped.append("hh_sent.json не найден")
         return
+    try:
+        data = json.loads(hh_sent.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+        report.skipped.append(f"hh_sent.json: не удалось прочитать ({exc})")
+        return
     repo = HhRepo(conn)
-    for vacancy_id, raw in json.loads(hh_sent.read_text(encoding="utf-8")).items():
-        found = _parse_stamp(raw.get("found_at", "")) or datetime.now()
+    for vacancy_id, raw in data.items():
+        found = _parse_stamp(raw.get("found_at", ""))
+        if found is None:
+            found = datetime.now()
+            report.skipped.append(
+                f"hh_sent.json: вакансия {vacancy_id} — found_at не распознан,"
+                " подставлено текущее время"
+            )
         applied = _parse_stamp(raw.get("applied_at", ""))
         repo.upsert({
             "vacancy_id": str(vacancy_id),
