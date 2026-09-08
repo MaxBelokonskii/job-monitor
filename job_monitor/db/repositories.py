@@ -94,10 +94,21 @@ class TgRepo:
     ) -> None:
         """Record a send: upsert the contact, insert a history row, atomically.
 
-        `source_channel` is deliberately never updated on conflict — only
-        the first channel a contact was ever reached through is kept. This
-        is the intended "first-touch channel" semantic, not an oversight:
-        do not change the ON CONFLICT clause to update it on later sends.
+        **`first_sent_at`, `last_sent_at`, `send_count` and `source_channel`
+        are written and not read.** No SELECT in this module touches them:
+        `was_sent()` asks only whether the row exists, `contacts_total()`
+        counts rows, and everything date-shaped is answered from `tg_sends`,
+        which is the table with the index for it. Nothing in the API or the
+        UI exposes them either.
+
+        They are kept rather than dropped because dropping a column in
+        SQLite means rebuilding the table, and the table holds the user's
+        real contact history — see the note in `job_monitor/db/migrations.py`.
+        If a reader ever appears, this is the shape it will find:
+        `send_count` counts calls to this method (so contacts registered by
+        `ensure_contact()` from the legacy importer sit at 0), and
+        `source_channel` is never updated on conflict, i.e. it is the FIRST
+        channel a contact was reached through, not the latest.
         """
         stamp = now.isoformat(timespec="seconds")
         with transaction(self._conn):

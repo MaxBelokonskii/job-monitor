@@ -271,6 +271,9 @@ body { font-family: 'Manrope', sans-serif; background: var(--bg); color: var(--t
 /* HH_STATUS_SCENARIO_ERROR ("ошибка сценария", job_monitor/workers/hh.py):
    a terminal failure, not a vacancy still waiting its turn. */
 .status-error { background: var(--red-light); color: var(--red-text); }
+/* Текст hh_applications.error под карточкой: причина, по которой отклик не
+   ушёл. Бейджа мало — он говорит «ошибка сценария», но не какой шаг. */
+.vac-error { margin-top: 8px; padding: 6px 8px; background: var(--red-light); border-radius: var(--radius-sm); font-size: 11px; color: var(--red-text); word-break: break-word; }
 
 /* ── Selenium steps editor ─────────────────────────────────────────── */
 .step-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 6px; }

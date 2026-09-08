@@ -816,16 +816,26 @@ async function loadHHVacancies() {
   fill(vacEl, vacs.slice(0, 4).map(v => {
     const st = v.status || '';
     const cls = vacancyStatusClass(st);
+    // Всё, что бэкенд знает о вакансии и что помещается в карточку. `city`
+    // писался в hh_applications с самого начала и не показывался нигде —
+    // одна из «мёртвых колонок» финального ревью.
+    const meta = [v.company, v.city, v.salary || 'з/п не указана'].filter(Boolean).join(' · ');
     // No isHttpUrl() check here on purpose: el() validates href/src itself,
     // by construction, so a bad scheme in v.url just never gets attached.
     return el('div', { class: 'vac-card' }, [
       el('div', { style: 'display:flex;align-items:flex-start;justify-content:space-between;gap:8px' }, [
         el('div', {}, [
           el('div', { style: 'font-size:13px;font-weight:600', text: v.title || '' }),
-          el('div', { style: 'font-size:11px;color:var(--muted);margin-top:2px', text: `${v.company || ''} · ${v.salary || 'з/п не указана'}` }),
+          el('div', { style: 'font-size:11px;color:var(--muted);margin-top:2px', text: meta }),
         ]),
         el('span', { class: `status-badge ${cls}`, style: 'flex-shrink:0', text: st || 'ожидание' }),
       ]),
+      // Текст причины, а не только красный бейдж: для HH_STATUS_SCENARIO_ERROR
+      // («ошибка сценария») бейдж говорит, ЧТО случилось, а починить сценарий
+      // можно, только зная, КАКОЙ шаг не разобрался. Значение недоверенное
+      // (в него попадает содержимое hh_selenium_steps), поэтому — `text:`,
+      // то есть textContent, как и всё остальное в этом файле.
+      v.error ? el('div', { class: 'vac-error', text: v.error }) : null,
       v.url ? el('div', { style: 'margin-top:8px' }, [
         el('a', { href: v.url, target: '_blank', rel: 'noopener noreferrer', style: 'font-size:11px;color:var(--hh);text-decoration:none', text: 'Открыть на HH →' }),
       ]) : null,
