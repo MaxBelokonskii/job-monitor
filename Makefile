@@ -1,6 +1,6 @@
 PY := .venv/bin/python
 
-.PHONY: install test run lint
+.PHONY: install test run lint migrate-legacy
 install:
 	test -d .venv || python3 -m venv .venv
 	$(PY) -m pip install -e ".[dev]"
@@ -11,3 +11,6 @@ test:
 
 run:
 	$(PY) -m uvicorn api.main:app --host 127.0.0.1 --port 8000
+
+migrate-legacy:
+	$(PY) -m job_monitor.cli migrate-legacy --from .

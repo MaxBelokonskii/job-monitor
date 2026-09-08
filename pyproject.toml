@@ -15,6 +15,9 @@ dependencies = [
     "pydantic>=2.7,<3.0",
 ]
 
+[project.scripts]
+job-monitor = "job_monitor.cli:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8,<9",
