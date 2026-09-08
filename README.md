@@ -94,9 +94,10 @@ git clone https://github.com/Scr00ge90/QA-Vacancy-Monitor.git
 cd QA-Vacancy-Monitor
 ```
 
-Сборка pre-commit хука (`detect-secrets`) при первом коммите скачивает свою
-среду, так что первому клону нужен доступ в сеть один раз — даже если
-`make install` уже отработал офлайн из `requirements.lock`.
+Первому клону нужен доступ в сеть: `make install` скачивает зависимости
+(версии зафиксированы в `requirements.lock`, но сами пакеты всё равно
+приходят из PyPI), а сборка pre-commit хука (`detect-secrets`) при первом
+коммите отдельно скачивает свою среду.
 
 ### 2. Установить и запустить
 

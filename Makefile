@@ -2,6 +2,7 @@ PY := .venv/bin/python
 
 .PHONY: install test run lint
 install:
+	test -d .venv || python3 -m venv .venv
 	$(PY) -m pip install -e ".[dev]"
 	$(PY) -m pip install -r requirements.lock
 
