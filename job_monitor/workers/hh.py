@@ -44,6 +44,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from job_monitor import paths
 from job_monitor.db.repositories import EventsRepo, HH_STATUS_APPLIED, HhRepo
 from job_monitor.settings import AppSettings, load_settings
+from job_monitor.workers.hh_steps import parse_steps, run_steps
 
 log = logging.getLogger(__name__)
 
@@ -285,6 +286,14 @@ def apply_to_vacancy(driver: Any, vacancy: dict, settings: AppSettings) -> bool:
         apply_btn.click()
         time.sleep(random.uniform(1.5, 3))
 
+        # L5: пользовательский сценарий из настроек (hh_selenium_steps).
+        # `parse_steps` может бросить ValueError на неизвестном типе шага —
+        # это не ловим здесь: пусть поднимется к вызывающему циклу воркера,
+        # который запишет событие и не даст опечатке в сценарии уронить монитор.
+        steps = parse_steps(settings.hh_selenium_steps)
+        if steps:
+            run_steps(driver, steps, WebDriverWait)
+
         if resume_id:
             try:
                 resume_items = driver.find_elements(
@@ -370,7 +379,15 @@ def _process_one(
     events: EventsRepo,
 ) -> bool:
     """Откликается на одну вакансию и записывает результат. True — отклик отправлен."""
-    applied = apply_to_vacancy(driver, vacancy, settings)
+    try:
+        applied = apply_to_vacancy(driver, vacancy, settings)
+    except ValueError as error:
+        # L5: опечатка в сохранённом сценарии Selenium (hh_selenium_steps) не
+        # должна ронять монитор — фиксируем событие и просто пропускаем эту
+        # вакансию, цикл воркера продолжает работать.
+        log.warning("[HH] Некорректный сценарий Selenium: %s", error)
+        events.add("hh", "steps_invalid", str(error), datetime.now())
+        return False
     repo.upsert({
         **vacancy,
         "status": HH_STATUS_APPLIED if applied else "пропущено",
