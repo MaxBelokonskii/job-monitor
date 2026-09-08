@@ -77,10 +77,21 @@ def test_hh_vacancy_url_scheme_guard_rejects_script_schemes() -> None:
 
     hh.ru-scraped vacancy data feeds an <a href> built with el(); a value
     like "javascript:alert(1)" would execute on click with the app token in
-    scope, and the CSP's 'unsafe-inline' script-src does not block it. This
-    runs the real isHttpUrl() predicate — extracted verbatim from app.js —
-    under Node, so the assertion exercises the actual guard rather than a
-    Python re-implementation of it.
+    scope.
+
+    The CSP is the second line here, not a reason to drop the first: since
+    the inline handlers went away (tests/test_frontend_events.py) script-src
+    is `'self'`, and a browser honouring it does block javascript: URL
+    navigation — the wording this docstring used to carry, "the CSP's
+    'unsafe-inline' script-src does not block it", is now wrong on both
+    counts. What the guard still buys is everything the CSP does not
+    promise: no dependence on the browser honouring the header at all, and
+    no `data:`/`vbscript:`/whitespace-prefixed variants rendered as a link
+    the user is invited to click.
+
+    This runs the real isHttpUrl() predicate — extracted verbatim from
+    app.js — under Node, so the assertion exercises the actual guard rather
+    than a Python re-implementation of it.
     """
     fn_source = _extract_function_source("isHttpUrl")
     cases = [

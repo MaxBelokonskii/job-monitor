@@ -743,7 +743,7 @@ async function renderChats() {
           el('div', { class: 'chat-name', text: name }),
           el('div', { class: 'chat-preview', text: c.preview || '' }),
         ]),
-        el('div', { class: 'chat-time', text: c.time || '' }),
+        el('div', { class: 'chat-time', text: stampText(c.time) }),
       ]);
     }));
   }
@@ -919,6 +919,18 @@ function eventBadge(kind) {
 function eventTime(at) {
   const m = /T(\d{2}:\d{2})/.exec(at || '');
   return m ? m[1] : '—';
+}
+
+// The API stores and returns timestamps as ISO ("2026-09-08T14:33:12") —
+// machine-readable, and that is right for a payload. Rendering it raw is not:
+// the chat list showed the full ISO string in a narrow column, seconds and
+// all, while the recent-events list next to it showed HH:MM through
+// eventTime(). Same database, same field shape, two different looks. Before
+// this branch the backend formatted it as "%Y-%m-%d %H:%M"; formatting now
+// lives here, on the one side that decides how things look.
+function stampText(at) {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(at || '');
+  return m ? `${m[1]} ${m[2]}` : (at || '');
 }
 
 function renderRecent(events) {

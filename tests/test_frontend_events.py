@@ -996,3 +996,45 @@ def test_login_cancel_control_exists_and_is_delegated() -> None:
     assert 'data-action="hhLoginCancel"' in _index_source()
     assert "hhLoginCancel" in _action_map_keys()
     assert "/hh/login/cancel" in _app_source()
+
+
+# ── Один формат времени на весь экран ─────────────────────────────────
+
+
+@skip_without_node
+def test_the_chat_list_and_the_recent_list_format_a_timestamp_the_same_way() -> None:
+    """`GET /api/tg/chats` отдаёт `sent_at` как ISO — `2026-09-08T14:33:12`, —
+    и это правильная форма для полезной нагрузки. Рисовать её как есть —
+    нет: список чатов показывал полную ISO-строку, с секундами и `T`, в
+    узкой колонке, а соседний список последних событий той же базы рисовал
+    `HH:MM` через `eventTime()`. Один формат хранения, два разных вида. До
+    этой ветки бэкенд отдавал `%Y-%m-%d %H:%M`; форматирование переехало на
+    фронтенд — на ту сторону, которая и решает, как это выглядит.
+    """
+    sources = "\n".join(_maybe_extract(name) for name in ("stampText", "eventTime"))
+    checks = """
+    same('ISO с секундами', stampText('2026-09-08T14:33:12'), '2026-09-08 14:33');
+    same('ISO без секунд',  stampText('2026-09-08T14:33'),    '2026-09-08 14:33');
+    check('нет T в выводе', !stampText('2026-09-08T14:33:12').includes('T'));
+    check('нет секунд',     !stampText('2026-09-08T14:33:12').endsWith(':12'));
+    same('пусто',   stampText(''),        '');
+    same('null',    stampText(null),      '');
+    same('мусор не теряется', stampText('когда-то'), 'когда-то');
+    // Часы и минуты в обоих списках — одни и те же символы.
+    check('часы совпадают с eventTime',
+          stampText('2026-09-08T14:33:12').endsWith(eventTime('2026-09-08T14:33:12')));
+    """
+    result = _run_node(f"{sources}\n{NODE_CHECK_HELPER}\n{checks}")
+    assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
+
+
+def test_the_chat_list_does_not_render_the_raw_timestamp() -> None:
+    """Грепом, чтобы проверка работала и без Node: колонка времени в списке
+    чатов должна идти через форматирование, а не подставлять `c.time`."""
+    source = _app_source()
+    match = re.search(r"class: 'chat-time'[^)]*\)", source)
+    assert match, "колонка времени в списке чатов не найдена — renderChats переехал?"
+    assert "stampText(" in match.group(0), (
+        f"время рисуется как есть: {match.group(0)} — в узкой колонке это ISO с "
+        "секундами и латинской T"
+    )
