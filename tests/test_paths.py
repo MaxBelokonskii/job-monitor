@@ -1,5 +1,5 @@
+import ast
 import os
-import re
 import stat
 import subprocess
 import sys
@@ -85,12 +85,6 @@ def test_importing_the_app_creates_nothing_on_disk(tmp_path):
     )
 
 
-STATE_LITERALS = re.compile(
-    r"os\.path\.join\(\s*BASE_DIR\s*,\s*[\"'](?:\.env|config\.json|session|"
-    r"session_web|hh_cookies\.json|hh_sent\.json|all_sent_users\.txt|logs|"
-    r"resume\.pdf)"
-)
-
 # Задача 7 плана 3 удалила standalone-скрипты `monitor.py` и `hh_monitor.py`
 # (их код переехал в job_monitor/workers/). Два теста ниже раньше читали эти
 # файлы поимённо и после удаления падали бы на FileNotFoundError, а сам
@@ -131,12 +125,258 @@ def test_standalone_monitor_scripts_are_gone() -> None:
         )
 
 
-def test_no_state_paths_relative_to_repo():
-    for source_file in _live_sources({".py"}):
-        source = source_file.read_text(encoding="utf-8")
-        assert not STATE_LITERALS.search(source), (
-            f"{source_file.relative_to(REPO_ROOT)} всё ещё пишет состояние в репозиторий"
+# ── Ни одно состояние не резолвится мимо job_monitor/paths.py ─────────
+#
+# Инвариант, охраняющий первопричину S1/S8: в исходном репозитории был
+# закоммичен архив с `.env`, двумя файлами сессии Telethon, логами и резюме
+# автора — всё это писалось рядом с кодом, потому что пути к состоянию
+# считались от каталога репозитория.
+#
+# Прежняя проверка была регулярным выражением по одной синтаксической форме:
+#     os\.path\.join\(\s*BASE_DIR\s*,\s*["'](?:\.env|config\.json|session|…)
+# Проверено подстановкой: `os.path.join(BASE_DIR, "telegram.session")` — не
+# матчится (список имён остался до-переименования), `Path(__file__).parent /
+# ".env"` — не матчится, `open("hh_cookies.json", "w")` — не матчится. К тому
+# же `BASE_DIR` во всём дереве определён ровно один раз (api/main.py) и
+# используется только для FRONTEND_DIR, так что искомый шаблон в 26
+# сканируемых файлах появиться не мог в принципе: проверка была вакуумной.
+#
+# Ниже проверяется СВОЙСТВО: любое выражение, строящее путь к файлу
+# состояния, должно начинаться либо от `job_monitor.paths`, либо от значения,
+# пришедшего снаружи (параметр функции — так работает `migrate-legacy`,
+# которому каталог называет пользователь). Корень, привязанный к репозиторию
+# (`__file__`, `BASE_DIR` и всё, что из них выведено, `os.getcwd()`,
+# `Path.cwd()`) или к текущему каталогу процесса (голый относительный
+# литерал), — нарушение. Плюс любая ЗАПИСЬ по такому корню, даже под именем,
+# которого ещё нет в списке: новый файл состояния не должен уметь появиться
+# в обход инварианта. То, что проверка ловит все эти формы, само по себе
+# закреплено тестом ниже (`test_the_state_path_check_is_not_vacuous`).
+
+STATE_MARKERS = (
+    ".env", "config.json", ".db", ".session", "session", "cookies",
+    "hh_sent.json", "all_sent_users.txt", "sent_log_", ".pdf", ".log", "logs",
+    "telegram", "resume",
+)
+CWD_CALLS = {"getcwd", "cwd"}
+PATH_BUILDERS = {"join", "abspath", "dirname", "expanduser", "realpath"}
+PATH_OPENERS = {"open", "connect", "TelegramClient"}
+WRITE_METHODS = {"write_text", "write_bytes", "mkdir", "touch", "chmod", "unlink", "replace"}
+PATHS_MODULE_EXEMPT = "paths.py"
+
+
+class _StatePathScan:
+    """Ищет пути к состоянию, чей корень не идёт через job_monitor.paths."""
+
+    def __init__(self, source: str, label: str) -> None:
+        self.source = source
+        self.label = label
+        self.tree = ast.parse(source)
+        self.repo_anchored_names: set[str] = set()
+        self._collect_repo_anchored_names()
+
+    def _is_repo_anchored(self, node: ast.AST) -> bool:
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Name) and (sub.id == "__file__" or sub.id in self.repo_anchored_names):
+                return True
+            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute) and sub.func.attr in CWD_CALLS:
+                return True
+        return False
+
+    def _collect_repo_anchored_names(self) -> None:
+        """`BASE_DIR = os.path.dirname(__file__)` заражает и BASE_DIR, и всё,
+        что из него собрано (FRONTEND_DIR = os.path.join(BASE_DIR, …))."""
+        changed = True
+        while changed:
+            changed = False
+            for statement in self.tree.body:
+                if not isinstance(statement, (ast.Assign, ast.AnnAssign)):
+                    continue
+                targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+                if statement.value is None or not self._is_repo_anchored(statement.value):
+                    continue
+                for target in targets:
+                    if isinstance(target, ast.Name) and target.id not in self.repo_anchored_names:
+                        self.repo_anchored_names.add(target.id)
+                        changed = True
+
+    @staticmethod
+    def _root(node: ast.AST) -> ast.AST:
+        """Крайний левый элемент выражения-пути: `Path(x).parent / "y"` → x."""
+        while True:
+            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+                node = node.left
+            elif isinstance(node, ast.Call):
+                function = node.func
+                builder = (
+                    (isinstance(function, ast.Name) and function.id in ("Path", "PurePath", "str"))
+                    or (isinstance(function, ast.Attribute) and function.attr in PATH_BUILDERS)
+                )
+                if not builder or not node.args:
+                    return node
+                node = node.args[0]
+            elif isinstance(node, ast.Attribute) and node.attr in ("parent", "parents"):
+                node = node.value
+            elif isinstance(node, ast.Subscript):
+                node = node.value
+            else:
+                return node
+
+    @staticmethod
+    def _goes_through_paths_module(node: ast.AST) -> bool:
+        return any(
+            isinstance(sub, ast.Name) and sub.id == "paths" for sub in ast.walk(node)
         )
+
+    @staticmethod
+    def _mode(call: ast.Call) -> str:
+        for argument in call.args[1:]:
+            if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+                return argument.value
+        for keyword in call.keywords:
+            if keyword.arg == "mode" and isinstance(keyword.value, ast.Constant):
+                return str(keyword.value.value)
+        return "r"
+
+    def _candidates(self, node: ast.AST):
+        """(всё выражение, выражение-путь, режим доступа)."""
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+            return [(node, node, "r")]
+        if not isinstance(node, ast.Call):
+            return []
+        function = node.func
+        called = function.id if isinstance(function, ast.Name) else getattr(function, "attr", "")
+        if called in PATH_OPENERS and node.args:
+            return [(node, node.args[0], self._mode(node))]
+        if isinstance(function, ast.Attribute) and function.attr == "join":
+            return [(node, node, "r")]
+        if isinstance(function, ast.Name) and function.id == "Path":
+            return [(node, node, "r")]
+        if isinstance(function, ast.Attribute) and function.attr in WRITE_METHODS:
+            return [(node, function.value, "w")]
+        return []
+
+    def violations(self) -> list[str]:
+        found: list[str] = []
+        for node in ast.walk(self.tree):
+            for whole, target, mode in self._candidates(node):
+                if self._goes_through_paths_module(target):
+                    continue
+                root = self._root(target)
+                relative_literal = (
+                    isinstance(root, ast.Constant)
+                    and isinstance(root.value, str)
+                    and not root.value.startswith(("/", "~"))
+                    and ":" not in root.value[:3]
+                )
+                if not (self._is_repo_anchored(root) or relative_literal):
+                    continue
+                segment = ast.get_source_segment(self.source, whole) or ""
+                if any(marker in segment.lower() for marker in STATE_MARKERS) or "w" in mode:
+                    found.append(f"{self.label}:{whole.lineno}: {segment}")
+        return found
+
+
+def _state_path_violations() -> list[str]:
+    found: list[str] = []
+    for source_file in _live_sources({".py"}):
+        if source_file.name == PATHS_MODULE_EXEMPT:
+            continue          # единственное место, где путям и положено рождаться
+        found.extend(
+            _StatePathScan(
+                source_file.read_text(encoding="utf-8"),
+                str(source_file.relative_to(REPO_ROOT)),
+            ).violations()
+        )
+    return found
+
+
+def test_no_state_paths_relative_to_repo():
+    violations = _state_path_violations()
+    assert not violations, (
+        "путь к состоянию строится мимо job_monitor/paths.py — именно так в "
+        "репозиторий попали .env, сессии Telethon, логи и резюме (S1/S8):\n"
+        + "\n".join(violations)
+    )
+
+
+MUTATIONS = {
+    "os.path.join(BASE_DIR, …) с актуальным именем файла": """
+import os
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SESSION = os.path.join(BASE_DIR, "telegram.session")
+""",
+    "Path(__file__).parent / '.env'": """
+from pathlib import Path
+ENV = Path(__file__).parent / ".env"
+""",
+    "относительный open(..., 'w')": """
+def dump(data):
+    with open("hh_cookies.json", "w", encoding="utf-8") as handle:
+        handle.write(data)
+""",
+    "os.path.dirname(__file__) внутри join": """
+import os
+DB = os.path.join(os.path.dirname(__file__), "job_monitor.db")
+""",
+    "запись по относительному пути под новым именем": """
+from pathlib import Path
+def save(text):
+    Path("report.txt").write_text(text, encoding="utf-8")
+""",
+    "sqlite3.connect по относительному имени": """
+import sqlite3
+conn = sqlite3.connect("job_monitor.db")
+""",
+    "os.getcwd() как корень": """
+import os
+COOKIES = os.path.join(os.getcwd(), "hh_cookies.json")
+""",
+}
+
+ALLOWED = {
+    "через paths": """
+from job_monitor import paths
+target = paths.env_file()
+target.write_text("TG_API_ID=1", encoding="utf-8")
+""",
+    "каталог, названный пользователем (migrate-legacy)": """
+def import_legacy(source):
+    config = source / "config.json"
+    return config.read_text(encoding="utf-8")
+""",
+    "статика репозитория, не состояние": """
+import os
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
+with open(os.path.join(FRONTEND_DIR, "index.html"), "r", encoding="utf-8") as f:
+    html = f.read()
+""",
+}
+
+
+def test_the_state_path_check_is_not_vacuous():
+    """Доказательство мутациями, вшитое в набор тестов.
+
+    Прежний инвариант был регуляркой по одной форме записи и пропускал
+    буквально всё, включая актуальные имена файлов, — и обнаружить это можно
+    было только руками. Здесь и «ловит нарушения», и «не ругается на
+    законное» проверяются явно, так что следующая переформулировка
+    инварианта не может тихо снова стать вакуумной.
+    """
+    for name, snippet in MUTATIONS.items():
+        assert _StatePathScan(snippet, "mutation").violations(), (
+            f"проверка не заметила нарушение «{name}» — инвариант вакуумный"
+        )
+    for name, snippet in ALLOWED.items():
+        assert not _StatePathScan(snippet, "allowed").violations(), (
+            f"ложное срабатывание на «{name}»"
+        )
+
+
+def test_the_check_runs_on_a_meaningful_number_of_files():
+    """Проверка обходит живое дерево, а не пустой список."""
+    scanned = [f for f in _live_sources({".py"}) if f.name != PATHS_MODULE_EXEMPT]
+    assert len(scanned) >= 15, f"просканировано всего {len(scanned)} файлов — дерево переехало?"
 
 
 # Собирается из частей, чтобы сам файл теста не содержал имя целиком и не
