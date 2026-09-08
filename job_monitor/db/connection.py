@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 
 from job_monitor import paths
 from job_monitor.db.migrations import migrate
@@ -13,8 +14,9 @@ _connection: sqlite3.Connection | None = None
 
 
 def connect(database: str | None = None) -> sqlite3.Connection:
+    target = database or str(paths.db_file())
     conn = sqlite3.connect(
-        database or str(paths.db_file()),
+        target,
         isolation_level=None,      # управляем транзакциями сами
         check_same_thread=False,   # HH-воркер живёт в отдельном потоке
     )
@@ -23,7 +25,25 @@ def connect(database: str | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=5000")
     migrate(conn)
+    _secure(target)
     return conn
+
+
+# В WAL-режиме рядом с базой живут ещё два файла, и в `-wal` лежат те же
+# данные, что и в самой базе, — до тех пор пока их не перенесли в неё. Права
+# ставятся всем трём, иначе `job_monitor.db` под `0600` соседствовал бы с
+# `job_monitor.db-wal` под `0644`.
+DB_SIDECARS = ("", "-wal", "-shm")
+
+
+def _secure(target: str) -> None:
+    """`0600` базе и её спутникам: SQLite создаёт файлы по umask, то есть
+    обычно `0644`, — в отличие от `.env`, cookies и логов, которым права
+    ставятся явно. В базе лежат переписка и контакты."""
+    if target == ":memory:" or target.startswith("file::memory:"):
+        return
+    for suffix in DB_SIDECARS:
+        paths.secure_file(Path(target + suffix))
 
 
 def get_connection() -> sqlite3.Connection:

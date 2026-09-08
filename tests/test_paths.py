@@ -527,3 +527,104 @@ def test_leaked_cv_filename_is_nowhere_in_the_sources() -> None:
         assert LEAKED_CV not in source, (
             f"{source_file.relative_to(REPO_ROOT)} захардкодил имя утёкшего CV прошлого автора"
         )
+
+
+# ── Права файлов состояния ────────────────────────────────────────────
+#
+# `.env` (0600), cookies hh.ru (0600) и логи (0600) права получали явно, а
+# `job_monitor.db` и `telegram.session` создавались по umask, то есть обычно
+# 0644, и были защищены только режимом каталога. Асимметрия ничем не
+# оправдана: в файле сессии Telethon лежит `auth_key`, которого достаточно
+# для входа в аккаунт в обход 2FA, а в базе — переписка и контакты.
+
+
+def test_tighten_never_grants_access(tmp_path):
+    """Права только снимаются. Пользователь, у которого каталог строже
+    нашего, должен остаться при своём."""
+    strict = tmp_path / "strict"
+    strict.mkdir(mode=0o500)
+    paths.tighten(strict, 0o700)
+    assert stat.S_IMODE(strict.stat().st_mode) == 0o500
+
+    loose = tmp_path / "loose"
+    loose.mkdir(mode=0o777)
+    paths.tighten(loose, 0o700)
+    assert stat.S_IMODE(loose.stat().st_mode) == 0o700
+
+
+def test_tighten_is_silent_about_what_is_not_there(tmp_path):
+    paths.tighten(tmp_path / "нет-такого", 0o600)      # не должно бросать
+
+
+def test_data_dir_fixes_an_existing_loose_directory(tmp_path, monkeypatch):
+    """Раньше режим ставился только в момент создания (`mkdir(mode=0o700)`),
+    поэтому каталог, доставшийся от версии до 2.1.0 или распакованный из
+    архива (tar сохраняет режим), оставался как есть: `chmod 777 <dir>` и
+    следующий запуск — всё ещё 0o777."""
+    target = tmp_path / "state"
+    target.mkdir(mode=0o777)
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(target))
+
+    assert stat.S_IMODE(paths.data_dir().stat().st_mode) == 0o700
+
+
+def test_logs_dir_fixes_an_existing_loose_directory(tmp_path, monkeypatch):
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path / "state"))
+    logs = paths.data_dir() / "logs"
+    logs.mkdir(mode=0o777)
+
+    assert stat.S_IMODE(paths.logs_dir().stat().st_mode) == 0o700
+
+
+def test_secure_file_makes_a_state_file_private(tmp_path):
+    target = tmp_path / "telegram.session"
+    target.write_text("", encoding="utf-8")
+    target.chmod(0o644)
+
+    paths.secure_file(target)
+
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+def test_the_database_and_its_wal_sidecars_are_private(tmp_path, monkeypatch):
+    """В WAL-режиме рядом с базой живут `-wal` и `-shm`, и в `-wal` лежат те
+    же данные, пока их не перенесли в базу."""
+    from job_monitor.db.connection import connect
+
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path / "state"))
+    conn = connect()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("INSERT INTO settings (key, value) VALUES ('probe', '{}')")
+        conn.execute("COMMIT")
+        database = paths.db_file()
+        present = [database] + [
+            database.with_name(database.name + suffix) for suffix in ("-wal", "-shm")
+        ]
+        existing = [item for item in present if item.exists()]
+        assert len(existing) == 3, f"WAL-спутники не созданы: {existing}"
+        for item in existing:
+            assert stat.S_IMODE(item.stat().st_mode) == 0o600, item.name
+    finally:
+        conn.close()
+
+
+def test_the_telethon_session_file_is_private(tmp_path, monkeypatch):
+    """`auth_key` из этого файла достаточно, чтобы войти в аккаунт в обход
+    2FA. Telethon создаёт файл прямо в конструкторе клиента и по umask."""
+    from job_monitor import telegram_client
+
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("TG_API_ID", "1234567")
+    monkeypatch.setenv("TG_API_HASH", "deadbeefdeadbeefdeadbeefdeadbeef")
+    monkeypatch.setattr(telegram_client, "_client", None)
+    monkeypatch.setattr(telegram_client, "_credentials", None)
+
+    client = telegram_client.get_client()
+    try:
+        target = telegram_client.session_file()
+        assert target.exists(), "Telethon больше не создаёт файл сессии в конструкторе"
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    finally:
+        client.session.close()
+        telegram_client.reset_client()
