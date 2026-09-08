@@ -885,18 +885,77 @@ def test_worker_alert_text_meets_wcag_aa() -> None:
     assert ratio >= 4.5, f"контраст текста предупреждения {ratio:.2f}:1 — ниже WCAG AA 4.5:1"
 
 
-def test_yellow_status_badges_meet_wcag_aa() -> None:
-    """`.badge-safe` («безопасный режим» в ленте событий) и `.status-wait`
-    (вакансия, ожидающая отклика) — те же `--yellow` на `--yellow-light`,
-    2.84:1. Теперь, когда `--yellow-text` существует, у них нет причин
-    оставаться нечитаемыми."""
-    for name in ("badge-safe", "status-wait"):
-        ratio = _text_contrast({name})
-        assert ratio >= 4.5, f".{name}: {ratio:.2f}:1 — ниже WCAG AA 4.5:1"
+# Классы плашек берутся из app.js, а не перечисляются здесь: `eventBadge()` и
+# `vacancyStatusClass()` — единственные места, которые их назначают, поэтому
+# новую плашку нельзя завести в обход этой проверки. Базовый класс
+# (`.log-badge` / `.status-badge`) добавляется потому, что размер шрифта живёт
+# в нём, а сами `.badge-*`/`.status-*` задают только цвета.
+BADGE_LITERAL = re.compile(r"'((?:badge|status)-[a-z-]+)'")
+BADGE_CONTAINERS = {"badge": "log-badge", "status": "status-badge"}
 
 
-def test_the_old_low_contrast_yellow_is_not_used_for_warning_text() -> None:
-    assert _contrast("#ca8a04", "#fefce8") < 4.5, "исходное значение перестало быть проблемой?"
+def _badge_classes() -> list[str]:
+    found = sorted(
+        name
+        for name in set(BADGE_LITERAL.findall(_app_source()))
+        if name not in BADGE_CONTAINERS.values()
+    )
+    assert len(found) >= 8, f"найдено всего {len(found)} плашек: {found} — app.js переехал?"
+    return found
+
+
+@pytest.mark.parametrize("badge", _badge_classes())
+def test_every_status_badge_meets_wcag_aa(badge: str) -> None:
+    """Все статусные плашки читаемы, а не только жёлтые.
+
+    Резолвер каскада нашёл ещё три пары ниже нормы, каждая — решение о
+    палитре, а не опечатка: `.badge-ok`/`.status-sent` (`--green` на
+    `--green-light`) 3.15:1, `.badge-error`/`.status-error` (`--red` на
+    `--red-light`) 4.41:1, `.badge-skip`/`.status-skip` (`--muted` на `--bg`)
+    3.23:1. Норма AA — 4.5:1; шрифт плашки 10px, то есть послабление для
+    крупного текста (3:1) к ним не относится.
+    """
+    classes = {badge, BADGE_CONTAINERS[badge.split("-", 1)[0]]}
+    ratio = _text_contrast(classes)
+    assert ratio >= 4.5, f".{badge}: {ratio:.2f}:1 — ниже WCAG AA 4.5:1"
+
+
+# Тон бренда → его светлый фон. Пара существует ровно потому, что «сырой» тон
+# на своём светлом фоне нечитаем, и рядом заведён более тёмный `<тон>-text`.
+BRAND_ON_LIGHT = (
+    ("--yellow", "--yellow-light"),
+    ("--green", "--green-light"),
+    ("--red", "--red-light"),
+    ("--tg", "--tg-light"),
+)
+
+
+@pytest.mark.parametrize("raw, light", BRAND_ON_LIGHT)
+def test_the_darker_text_tokens_earn_their_existence(raw: str, light: str) -> None:
+    """Почему в палитре есть `--yellow-text`, `--green-text`, `--red-text`,
+    `--tg-text`, а не просто `--yellow`, `--green`, `--red`, `--tg`.
+
+    Прежняя версия этой проверки сравнивала два литерала (`#ca8a04` и
+    `#fefce8`), записанных в самом тесте: она не читала `style.css` вовсе и
+    осталась бы зелёной, даже если бы палитра поменялась целиком, — то есть
+    проверяла формулу, а не файл. Здесь оба цвета берутся из настоящего
+    `:root`, поэтому «упростить» подпись обратно к сырому тону нельзя молча.
+    """
+    assert _contrast(_css_var(raw), _css_var(light)) < 4.5, (
+        f"{raw} на {light} перестал быть проблемой — тогда {raw}-text больше не нужен"
+    )
+    ratio = _contrast(_css_var(f"{raw}-text"), _css_var(light))
+    assert ratio >= 4.5, f"{raw}-text на {light}: {ratio:.2f}:1 — ниже WCAG AA 4.5:1"
+
+
+@pytest.mark.parametrize("background", ["--bg", "--card-bg"])
+def test_secondary_text_meets_wcag_aa(background: str) -> None:
+    """`--muted` — вторичный текст всего интерфейса: подписи, время, счётчики,
+    подсказки под переключателями, `.badge-skip`. Все они 10–12.5px, так что
+    послабление AA для крупного текста (3:1) неприменимо, а прежние 3.23:1 на
+    `--bg` не проходили и его."""
+    ratio = _contrast(_css_var("--muted"), _css_var(background))
+    assert ratio >= 4.5, f"--muted на {background}: {ratio:.2f}:1 — ниже WCAG AA 4.5:1"
 
 
 # ── Отмена входа в hh.ru доступна из UI ───────────────────────────────
