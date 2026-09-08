@@ -248,3 +248,18 @@ class EventsRepo:
             (worker, limit),
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def count_on(self, worker: str, kind: str, day: date) -> int:
+        # Half-open range on `at`, matching `_day_bounds()` above (used by
+        # TgRepo/HhRepo's own day counters) rather than a `LIKE 'YYYY-MM-DD%'`
+        # prefix match: both give the same result against the
+        # isoformat(timespec="seconds") strings the workers write, but the
+        # range form is what actually uses idx_worker_events(worker, at) —
+        # EXPLAIN QUERY PLAN shows LIKE forcing a full SCAN here too.
+        start, end = _day_bounds(day)
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS n FROM worker_events"
+            " WHERE worker = ? AND kind = ? AND at >= ? AND at < ?",
+            (worker, kind, start, end),
+        ).fetchone()
+        return int(row["n"])
