@@ -3,49 +3,20 @@ import logging
 import re
 import random
 import os
-import json
 from datetime import datetime, date
 from telethon import TelegramClient, events
 from dotenv import load_dotenv
 import atexit
 
 from job_monitor import paths
+from job_monitor.db.connection import get_connection
+from job_monitor.settings import load_settings
 
 load_dotenv(paths.env_file())
 
-CONFIG_PATH = paths.config_file()
-
-# --- Загрузка конфига с кешированием (TTL 30 сек) ---
-import time as _time
-_config_cache = {}
-_config_cache_time = 0
-_CONFIG_TTL = 30
 
 def load_config() -> dict:
-    global _config_cache, _config_cache_time
-    now = _time.time()
-    if _config_cache and (now - _config_cache_time) < _CONFIG_TTL:
-        return _config_cache.copy()
-    defaults = {
-        "channels": ["itvacancykz","it_interns","jobfortester","workitkz","qajoboffer","jobforqa"],
-        "keywords": ["qa","тестировщик","manual qa","junior","стажер","стажировка","intern","trainee","без опыта"],
-        "exclude": ["senior","lead","middle","middle 3+","middle+","5+ лет","6+ лет","3+ года","4+ года"],
-        "template": "",
-        "delay_min": 60,
-        "delay_max": 120,
-        "max_per_day": 25,
-        "history_limit": 50,
-        "file_path": "",
-    }
-    if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            try:
-                defaults.update(json.load(f))
-            except Exception:
-                pass
-    _config_cache = defaults
-    _config_cache_time = now
-    return defaults.copy()
+    return load_settings(get_connection()).model_dump()
 
 # --- API credentials ---
 API_ID = os.getenv("TG_API_ID")

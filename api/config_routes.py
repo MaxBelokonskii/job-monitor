@@ -1,134 +1,51 @@
-from fastapi import APIRouter
-from pydantic import BaseModel
-from typing import Optional, List
-import json
+from fastapi import APIRouter, HTTPException
+from pydantic import ValidationError
 
-from job_monitor import paths, envfile
+from job_monitor import envfile
+from job_monitor.db.connection import get_connection
+from job_monitor.settings import AppSettings, load_secrets, load_settings, save_settings
 
 router = APIRouter(prefix="/api/config", tags=["config"])
 
-CONFIG_PATH = paths.config_file()
-
-DEFAULT_CONFIG = {
-    # TG
-    "channels": ["itvacancykz", "it_interns", "jobfortester", "workitkz", "qajoboffer", "jobforqa"],
-    "keywords": ["qa", "тестировщик", "manual qa", "junior", "стажер", "стажировка", "intern", "trainee", "без опыта"],
-    "exclude": ["senior", "lead", "middle", "middle 3+", "middle+", "5+ лет", "6+ лет"],
-    "template": "",
-    "delay_min": 60,
-    "delay_max": 120,
-    "max_per_day": 25,
-    "history_limit": 50,
-    "safe_mode": True,
-    "parse_history": False,
-    "file_path": "",
-    "api_id": "",
-    "api_hash": "",
-    "tg_autostart": False,
-    # HH
-    "hh_keywords": ["QA", "тестировщик", "Junior QA", "стажировка QA"],
-    "hh_exclude": ["senior", "lead", "middle", "5+ лет"],
-    "hh_area_ids": [113],
-    "hh_salary_from": 0,
-    "hh_cover_letter": "",
-    "hh_max_per_day": 20,
-    "hh_delay_min": 30,
-    "hh_delay_max": 90,
-    "hh_experience": "noExperience",
-    "hh_employment": ["full", "part", "probation"],
-    "hh_schedule": ["remote", "fullDay", "flexible"],
-    "hh_search_period": 1,
-    "hh_resume_id": "",
-    "hh_check_interval": 1800,
-    "hh_autostart": False,
-    # Selenium steps
-    "hh_selenium_steps": [],
-}
-
-def load_config() -> dict:
-    cfg = DEFAULT_CONFIG.copy()
-    if CONFIG_PATH.exists():
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            try:
-                cfg.update(json.load(f))
-            except Exception:
-                pass
-    # Подтягиваем API ключи из .env
-    env_vars = envfile.read_env()
-    if env_vars.get("TG_API_ID") and not cfg.get("api_id"):
-        cfg["api_id"] = env_vars["TG_API_ID"]
-    if env_vars.get("TG_API_HASH") and not cfg.get("api_hash"):
-        cfg["api_hash"] = env_vars["TG_API_HASH"]
-    return cfg
-
-def save_config(cfg: dict) -> None:
-    safe_cfg = {k: v for k, v in cfg.items() if k not in ("api_id", "api_hash")}
-    paths.config_file().write_text(
-        json.dumps(safe_cfg, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    secrets_to_write = {}
-    if cfg.get("api_id"):
-        secrets_to_write["TG_API_ID"] = str(cfg["api_id"])
-    if cfg.get("api_hash"):
-        secrets_to_write["TG_API_HASH"] = str(cfg["api_hash"])
-    secrets_to_write["SAFE_MODE"] = "true" if cfg.get("safe_mode") else "false"
-    secrets_to_write["PARSE_HISTORY"] = "true" if cfg.get("parse_history") else "false"
-    secrets_to_write["HISTORY_LIMIT"] = str(cfg.get("history_limit", 50))
-    envfile.write_env(secrets_to_write)
-
-# ── Models ────────────────────────────────────────────────────────────
-
-class ConfigUpdate(BaseModel):
-    channels: Optional[List[str]] = None
-    keywords: Optional[List[str]] = None
-    exclude: Optional[List[str]] = None
-    template: Optional[str] = None
-    delay_min: Optional[int] = None
-    delay_max: Optional[int] = None
-    max_per_day: Optional[int] = None
-    history_limit: Optional[int] = None
-    safe_mode: Optional[bool] = None
-    parse_history: Optional[bool] = None
-    file_path: Optional[str] = None
-    api_id: Optional[str] = None
-    api_hash: Optional[str] = None
-    tg_autostart: Optional[bool] = None
-    hh_keywords: Optional[List[str]] = None
-    hh_exclude: Optional[List[str]] = None
-    hh_area_ids: Optional[List[int]] = None
-    hh_salary_from: Optional[int] = None
-    hh_cover_letter: Optional[str] = None
-    hh_max_per_day: Optional[int] = None
-    hh_delay_min: Optional[int] = None
-    hh_delay_max: Optional[int] = None
-    hh_experience: Optional[str] = None
-    hh_employment: Optional[List[str]] = None
-    hh_schedule: Optional[List[str]] = None
-    hh_search_period: Optional[int] = None
-    hh_resume_id: Optional[str] = None
-    hh_check_interval: Optional[int] = None
-    hh_autostart: Optional[bool] = None
-    hh_selenium_steps: Optional[list] = None
-
-# ── Routes ────────────────────────────────────────────────────────────
 
 @router.get("")
-async def get_config():
-    cfg = load_config()
-    cfg.pop("api_hash", None)
-    cfg["api_hash_set"] = bool(envfile.read_env().get("TG_API_HASH"))
-    return cfg
+async def get_config() -> dict:
+    current = load_settings(get_connection()).model_dump()
+    secrets = load_secrets()
+    current["api_id"] = str(secrets.api_id) if secrets.api_id else ""
+    current["api_hash_set"] = bool(secrets.api_hash)
+    return current
+
 
 @router.patch("")
-async def update_config(update: ConfigUpdate):
-    cfg = load_config()
-    data = update.dict(exclude_none=True)
-    api_id = data.pop("api_id", None)
-    api_hash = data.pop("api_hash", None)
-    cfg.update(data)
+async def update_config(patch: dict) -> dict:
+    patch = dict(patch)
+    api_id = patch.pop("api_id", None)
+    api_hash = patch.pop("api_hash", None)
+    patch.pop("api_hash_set", None)
+
+    secrets_to_write: dict[str, str] = {}
     if api_id:
-        cfg["api_id"] = api_id
-    if api_hash:
-        cfg["api_hash"] = api_hash
-    save_config(cfg)
+        if not str(api_id).strip().isdigit():
+            raise HTTPException(status_code=422, detail="api_id должен быть числом")
+        secrets_to_write["TG_API_ID"] = str(api_id).strip()
+    if api_hash and not str(api_hash).startswith("•"):
+        secrets_to_write["TG_API_HASH"] = str(api_hash).strip()
+
+    try:
+        updated = save_settings(get_connection(), patch)
+    except ValidationError as error:
+        raise HTTPException(status_code=422, detail=error.errors(include_url=False)) from error
+
+    if secrets_to_write:
+        secrets_to_write["SAFE_MODE"] = "true" if updated.safe_mode else "false"
+        secrets_to_write["PARSE_HISTORY"] = "true" if updated.parse_history else "false"
+        secrets_to_write["HISTORY_LIMIT"] = str(updated.history_limit)
+        envfile.write_env(secrets_to_write)
     return {"status": "saved"}
+
+
+def load_config() -> dict:
+    """Совместимость: tg_routes и hh_routes ждут словарь."""
+    return {**load_settings(get_connection()).model_dump(),
+            "api_id": load_secrets().api_id or ""}

@@ -8,6 +8,7 @@ import signal
 from datetime import date
 from .config_routes import load_config
 from job_monitor import paths
+from job_monitor.settings import load_secrets
 
 router = APIRouter(prefix="/api/tg", tags=["telegram"])
 
@@ -92,6 +93,7 @@ def get_system_log(lines: int = 100) -> str:
 @router.get("/status")
 async def tg_status():
     cfg = load_config()
+    secrets = load_secrets()
     return {
         "running": is_running(),
         "safe_mode": cfg.get("safe_mode", True),
@@ -102,7 +104,7 @@ async def tg_status():
         "max_per_day": cfg.get("max_per_day", 25),
         "channels_count": len(cfg.get("channels", [])),
         "api_id": cfg.get("api_id", ""),
-        "api_hash_set": bool(cfg.get("api_hash")),
+        "api_hash_set": bool(secrets.api_hash),
         "tg_autostart": cfg.get("tg_autostart", False),
     }
 

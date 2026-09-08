@@ -14,8 +14,9 @@ from selenium.common.exceptions import (
 )
 
 from job_monitor import paths
+from job_monitor.db.connection import get_connection
+from job_monitor.settings import load_settings
 
-CONFIG_PATH = paths.config_file()
 HH_SENT_PATH = paths.path("hh_sent.json")
 HH_LOG_PATH = paths.logs_dir() / "hh.log"
 HH_COOKIES_PATH = paths.hh_cookies()
@@ -32,34 +33,8 @@ logging.basicConfig(
 )
 log = logging.getLogger("hh_monitor")
 
-# --- Дефолтные HH настройки ---
-HH_DEFAULTS = {
-    "hh_enabled": False,
-    "hh_keywords": ["QA", "тестировщик", "Junior QA", "стажировка QA"],
-    "hh_exclude": ["senior", "lead", "middle", "5+ лет"],
-    "hh_regions": ["Казахстан", "Россия", "Беларусь", "Украина", "Узбекистан"],
-    "hh_area_ids": [40, 113, 16, 5, 275],  # HH area IDs
-    "hh_salary_from": 0,
-    "hh_cover_letter": "",
-    "hh_max_per_day": 20,
-    "hh_delay_min": 30,
-    "hh_delay_max": 90,
-    "hh_experience": "noExperience",  # noExperience, between1And3, between3And6, moreThan6
-    "hh_employment": ["full", "part", "probation"],
-    "hh_schedule": ["remote", "fullDay", "flexible"],
-    "hh_search_period": 1,  # дней (1, 3, 7, 14, 30)
-    "hh_resume_id": "",  # ID резюме на HH
-}
-
 def load_config() -> dict:
-    cfg = HH_DEFAULTS.copy()
-    if os.path.exists(CONFIG_PATH):
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-            try:
-                cfg.update(json.load(f))
-            except Exception:
-                pass
-    return cfg
+    return load_settings(get_connection()).model_dump()
 
 def load_sent() -> dict:
     """Загружаем историю откликов"""
