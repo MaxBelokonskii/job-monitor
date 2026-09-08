@@ -8,12 +8,10 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.service import Service
 from selenium.common.exceptions import (
     TimeoutException, NoSuchElementException,
     ElementClickInterceptedException, WebDriverException
 )
-from webdriver_manager.chrome import ChromeDriverManager
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
@@ -142,8 +140,7 @@ def setup_driver(headless: bool = False) -> webdriver.Chrome:
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/122.0.0.0 Safari/537.36"
     )
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=options)
+    driver = webdriver.Chrome(options=options)
     driver.execute_script(
         "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
     )
