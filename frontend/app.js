@@ -558,6 +558,13 @@ async function sendChatMessage() {
 }
 
 // ── HH Vacancies ──────────────────────────────────────────────────────
+// hh.ru-scraped data must never drive an <a href>: an unvalidated scheme
+// (javascript:, data:, ...) would execute on click with the app token in
+// scope. Only allow the schemes a "view on hh.ru" link ever legitimately needs.
+function isHttpUrl(url) {
+  return /^https?:\/\//i.test(url || '');
+}
+
 async function loadHHVacancies() {
   const vacs = await apiGet('/hh/vacancies');
   const vacEl = document.getElementById('hhRecentVacancies');
@@ -573,6 +580,7 @@ async function loadHHVacancies() {
     let cls = 'status-wait'; const st = v.status || '';
     if (st.includes('отправлен')) cls = 'status-sent';
     else if (st.includes('пропущено')) cls = 'status-skip';
+    const href = isHttpUrl(v.url) ? v.url : null;
     return el('div', { class: 'vac-card' }, [
       el('div', { style: 'display:flex;align-items:flex-start;justify-content:space-between;gap:8px' }, [
         el('div', {}, [
@@ -581,8 +589,8 @@ async function loadHHVacancies() {
         ]),
         el('span', { class: `status-badge ${cls}`, style: 'flex-shrink:0', text: st || 'ожидание' }),
       ]),
-      v.url ? el('div', { style: 'margin-top:8px' }, [
-        el('a', { href: v.url, target: '_blank', style: 'font-size:11px;color:var(--hh);text-decoration:none', text: 'Открыть на HH →' }),
+      href ? el('div', { style: 'margin-top:8px' }, [
+        el('a', { href, target: '_blank', style: 'font-size:11px;color:var(--hh);text-decoration:none', text: 'Открыть на HH →' }),
       ]) : null,
     ]);
   }));
