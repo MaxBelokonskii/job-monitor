@@ -69,6 +69,11 @@ log = logging.getLogger(__name__)
 LOGIN_URL = "https://hh.ru/account/login"
 HOME_URL = "https://hh.ru"
 SELENIUM_COOKIE_FIELDS = ("name", "value", "domain", "path", "secure", "httpOnly")
+# L5: статус для вакансии, на которой сценарий Selenium сломался опечаткой
+# уже после клика по кнопке отклика. Не HH_STATUS_APPLIED — не в счётчик
+# отправленных; отдельно от "пропущено" — видно в дашборде, что причина
+# именно в сценарии, а не в том, что кнопка отклика не нашлась.
+HH_STATUS_SCENARIO_ERROR = "ошибка сценария"
 
 
 # ── Вход без блокировки (L4) ────────────────────────────────────────────
@@ -405,9 +410,21 @@ def _process_one(
         applied = apply_to_vacancy(driver, vacancy, settings)
     except ValueError as error:
         # L5: опечатка в сохранённом сценарии Selenium (hh_selenium_steps) не
-        # должна ронять монитор — фиксируем событие и просто пропускаем эту
-        # вакансию, цикл воркера продолжает работать.
+        # должна ронять монитор. Кнопка «Откликнуться» к этому моменту уже
+        # нажата на живом hh.ru (parse_steps/run_steps вызываются в
+        # apply_to_vacancy после клика) — повторный клик на следующем цикле
+        # воркера, пока пользователь не поправит настройки, хуже, чем одна
+        # непереотправленная вакансия. Поэтому НЕ пропускаем upsert (как
+        # было раньше): помечаем вакансию отдельным статусом, не
+        # HH_STATUS_APPLIED, — repo.exists() станет True, дедуп в
+        # _blocking_loop больше её не тронет, а причина видна и в
+        # worker_events, и в статусе вакансии на дашборде.
         log.warning("[HH] Некорректный сценарий Selenium: %s", error)
+        repo.upsert({
+            **vacancy,
+            "status": HH_STATUS_SCENARIO_ERROR,
+            "error": str(error),
+        })
         events.add("hh", "steps_invalid", str(error), datetime.now())
         return False
     repo.upsert({

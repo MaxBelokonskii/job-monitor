@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ from typing import Any
 CSS = "css selector"
 XPATH = "xpath"
 ALLOWED_TYPES = ("click", "input", "wait", "wait_element", "select", "scroll")
+DEFAULT_WAIT_SECONDS = 2.0
 
 
 @dataclass(frozen=True)
@@ -33,8 +35,43 @@ def _infer_by(selector: str) -> str:
     return XPATH if selector.startswith(("/", "(", "./")) else CSS
 
 
+def _parse_finite_seconds(raw: Any) -> float:
+    """Секунды ожидания. Отсутствующее/нечисловое значение — не опечатка, а
+    просто "не задано": молча превращается в 0.0 (вызывающая сторона сама
+    решает дефолт для типа `wait`). Но `inf`/`-inf`/`nan` — валидные
+    значения для `float()`, которые проходят эту конвертацию без ошибки, а
+    затем валят `time.sleep()` уже во время выполнения сценария:
+    `OverflowError`, не `ValueError`, — и не ловится существующим
+    обработчиком опечаток на уровне цикла воркера. Ловим здесь и превращаем
+    в громкий `ValueError` на этапе разбора, до первого шага сценария."""
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(seconds):
+        raise ValueError(f"нечисловое время ожидания в сценарии: {raw!r}")
+    return seconds
+
+
+def _validate_scroll_amount(value: str) -> None:
+    """Дистанция прокрутки хранится строкой в `Step.value` (общее поле для
+    всех типов шагов), но обязана быть конечным числом — иначе
+    `int(float(...))` в `run_steps` падает `OverflowError`/`ValueError` уже
+    после клика по кнопке отклика на живом hh.ru. Проверяем на этапе
+    разбора, пустое значение (используется дефолт 300) не трогаем."""
+    if not value:
+        return
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"нечисловое значение прокрутки в сценарии: {value!r}") from None
+    if not math.isfinite(amount):
+        raise ValueError(f"нечисловое значение прокрутки в сценарии: {value!r}")
+
+
 def parse_steps(raw: list[dict]) -> list[Step]:
-    """Парсит сохранённый сценарий. Бросает `ValueError` на неизвестном типе шага —
+    """Парсит сохранённый сценарий. Бросает `ValueError` на неизвестном типе шага
+    или на нечисловом (в т.ч. бесконечном) значении времени/прокрутки —
     опечатка в настройках должна упасть здесь, а не выполниться наполовину."""
     steps: list[Step] = []
     for item in raw:
@@ -42,18 +79,18 @@ def parse_steps(raw: list[dict]) -> list[Step]:
         if kind not in ALLOWED_TYPES:
             raise ValueError(f"неизвестный тип шага: {kind!r}")
         selector = str(item.get("selector") or "")
-        seconds = item.get("seconds", item.get("value") if kind == "wait" else 0)
-        try:
-            seconds = float(seconds)
-        except (TypeError, ValueError):
-            seconds = 0.0
+        value = str(item.get("value") or "")
+        raw_seconds = item.get("seconds", item.get("value") if kind == "wait" else 0)
+        seconds = _parse_finite_seconds(raw_seconds)
         if kind == "wait" and seconds <= 0:
-            seconds = 2.0
+            seconds = DEFAULT_WAIT_SECONDS
+        if kind == "scroll":
+            _validate_scroll_amount(value)
         steps.append(Step(
             type=kind,
             by=str(item.get("by") or _infer_by(selector)),
             selector=selector,
-            value=str(item.get("value") or ""),
+            value=value,
             seconds=seconds,
         ))
     return steps

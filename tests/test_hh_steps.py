@@ -64,6 +64,49 @@ def test_parse_defaults_wait_seconds():
     assert parse_steps([{"type": "wait"}])[0].seconds == 2.0
 
 
+# ── Finding 1 (review): `float("inf")` passes `float()` without raising, but
+# `int(float("inf"))` and `time.sleep(float("inf"))` both raise
+# `OverflowError` — which is not a `ValueError`, so it used to slip past
+# every existing guard and kill the worker thread. `parse_steps` must now
+# reject non-finite numeric fields loudly, at parse time, before any step
+# in the scenario executes (and, for a merely non-numeric string, keep
+# defaulting gracefully as before — that path never crashed).
+
+
+def test_parse_rejects_infinite_wait_seconds():
+    with pytest.raises(ValueError, match="время ожидания"):
+        parse_steps([{"type": "wait", "seconds": "inf"}])
+
+
+def test_parse_rejects_negative_infinite_wait_seconds():
+    with pytest.raises(ValueError, match="время ожидания"):
+        parse_steps([{"type": "wait", "seconds": "-inf"}])
+
+
+def test_parse_survives_non_numeric_wait_seconds():
+    # Non-numeric already defaulted gracefully before this fix; proving it
+    # still does, and did not silently start raising instead.
+    assert parse_steps([{"type": "wait", "seconds": "not-a-number"}])[0].seconds == 2.0
+
+
+def test_parse_rejects_infinite_scroll_value():
+    with pytest.raises(ValueError, match="прокрутки"):
+        parse_steps([{"type": "scroll", "value": "inf"}])
+
+
+def test_parse_rejects_negative_infinite_scroll_value():
+    with pytest.raises(ValueError, match="прокрутки"):
+        parse_steps([{"type": "scroll", "value": "-inf"}])
+
+
+def test_parse_rejects_non_numeric_scroll_value():
+    # Previously this only failed inside run_steps at execution time (after
+    # the response button was already clicked); it must still fail with a
+    # catchable ValueError, not crash — now it fails earlier, at parse time.
+    with pytest.raises(ValueError, match="прокрутки"):
+        parse_steps([{"type": "scroll", "value": "not-a-number"}])
+
+
 def test_click_step(monkeypatch):
     monkeypatch.setattr("time.sleep", lambda _s: None)
     driver = FakeDriver()
