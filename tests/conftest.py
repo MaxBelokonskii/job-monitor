@@ -10,5 +10,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 @pytest.fixture
 def client() -> TestClient:
     from api.main import app
+    from job_monitor.security import APP_TOKEN, TOKEN_HEADER
+
+    return TestClient(
+        app,
+        base_url="http://127.0.0.1:8000",
+        headers={TOKEN_HEADER: APP_TOKEN},
+    )
+
+
+@pytest.fixture
+def raw_client() -> TestClient:
+    from api.main import app
 
     return TestClient(app, base_url="http://127.0.0.1:8000")

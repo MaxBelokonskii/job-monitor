@@ -2,12 +2,19 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 import os
 
 from .config_routes import router as config_router
 from .tg_routes import router as tg_router, is_running as tg_is_running
 from .hh_routes import router as hh_router, hh_is_running
 from .auth_routes import router as auth_router
+from job_monitor.security import (
+    ALLOWED_HOSTS,
+    APP_TOKEN,
+    TOKEN_PLACEHOLDER,
+    app_token_middleware,
+)
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
@@ -20,6 +27,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.middleware("http")(app_token_middleware)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
 
 # Подключаем роутеры
 app.include_router(config_router)
@@ -34,10 +44,10 @@ if os.path.exists(FRONTEND_DIR):
 @app.get("/", response_class=HTMLResponse)
 async def serve_ui():
     html_path = os.path.join(FRONTEND_DIR, "index.html")
-    if os.path.exists(html_path):
-        with open(html_path, "r", encoding="utf-8") as f:
-            return f.read()
-    return "<h1>index.html not found in frontend/</h1>"
+    if not os.path.exists(html_path):
+        return "<h1>index.html not found in frontend/</h1>"
+    with open(html_path, "r", encoding="utf-8") as f:
+        return f.read().replace(TOKEN_PLACEHOLDER, APP_TOKEN)
 
 @app.on_event("startup")
 async def on_startup():

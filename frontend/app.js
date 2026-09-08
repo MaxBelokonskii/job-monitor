@@ -1,25 +1,26 @@
 // ── API helpers ───────────────────────────────────────────────────────
-const API = 'http://127.0.0.1:8000/api';
+const API = '/api';
+const APP_TOKEN = document.querySelector('meta[name="app-token"]').content;
+
+function headers(extra = {}) {
+  return { 'X-App-Token': APP_TOKEN, ...extra };
+}
 
 async function apiGet(path) {
-  try { return await (await fetch(API + path)).json(); } catch { return null; }
+  try { return await (await fetch(API + path, { headers: headers() })).json(); }
+  catch { return null; }
 }
-async function apiPost(path, body = {}) {
+async function apiSend(method, path, body = {}) {
   try {
     return await (await fetch(API + path, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+      method,
+      headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(body),
     })).json();
   } catch { return null; }
 }
-async function apiPatch(path, body = {}) {
-  try {
-    return await (await fetch(API + path, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    })).json();
-  } catch { return null; }
-}
+const apiPost = (path, body) => apiSend('POST', path, body);
+const apiPatch = (path, body) => apiSend('PATCH', path, body);
 
 // ── State ─────────────────────────────────────────────────────────────
 const tgState = {
@@ -330,7 +331,7 @@ async function verifyAuthCode() {
   if (!code) { showToast('Введите код'); return; }
   const body = { phone, code, phone_hash: _phoneHash };
   if (password) body.password = password;
-  const resp = await fetch(API + '/auth/verify-code', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const resp = await fetch(API + '/auth/verify-code', { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) });
   const r = await resp.json();
   if (resp.status === 428 && r.detail === '2FA_REQUIRED') {
     document.getElementById('auth2faRow').style.display = 'block';
@@ -496,7 +497,7 @@ async function sendChatMessage() {
   const text = inp.value.trim(); if (!text) return;
   inp.value = ''; inp.disabled = true;
   const r = await fetch(API + '/auth/messages/' + encodeURIComponent(currentChat.replace('@', '')), {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text })
+    method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify({ text })
   });
   inp.disabled = false; inp.focus();
   if (r.ok) await loadChatMessages(currentChat);
