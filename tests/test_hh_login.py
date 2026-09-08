@@ -181,6 +181,50 @@ def test_login_cancel_route_closes_the_window(client):
         app_login.state = HhLoginState.logged_out
 
 
+# ── Путь к cookies вычисляется лениво ──────────────────────────────────
+
+
+def test_cookies_path_is_resolved_at_use_not_at_construction(tmp_path, monkeypatch):
+    """`HhLogin` должен уважать `JOB_MONITOR_DATA_DIR`, выставленный после
+    того, как модуль уже импортирован.
+
+    Синглтон `job_monitor.workers.hh.login` собирается на импорте, и раньше
+    получал готовый `paths.hh_cookies()`. Значит путь был заморожен на
+    момент импорта: любой, кто переставил каталог данных позже (autouse-
+    фикстура тестов; пользователь, запускающий приложение с переменной в
+    окружении обёртки), получал cookies hh.ru в старом каталоге —
+    молча."""
+    from job_monitor import paths
+    from job_monitor.workers.hh import login as app_login
+
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path / "early"))
+    frozen = app_login.cookies_path
+    assert frozen == tmp_path / "early" / "hh_cookies.json"
+
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path / "late"))
+    assert app_login.cookies_path == tmp_path / "late" / "hh_cookies.json"
+    assert app_login.cookies_path == paths.hh_cookies()
+
+
+def test_confirm_writes_cookies_to_the_current_data_dir(tmp_path, monkeypatch):
+    """То же свойство, но проверенное записью, а не сравнением путей."""
+    from job_monitor.workers.hh import login as app_login
+
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path / "current"))
+    driver = CountingDriver(logged_in=True)
+    saved_factory, saved_check = app_login._driver_factory, app_login._is_logged_in
+    app_login._driver_factory = lambda: driver
+    app_login._is_logged_in = lambda d: d.logged_in
+    try:
+        app_login.start()
+        assert app_login.confirm() is HhLoginState.logged_in
+    finally:
+        app_login._driver_factory, app_login._is_logged_in = saved_factory, saved_check
+        app_login._driver = None
+        app_login.state = HhLoginState.logged_out
+    assert (tmp_path / "current" / "hh_cookies.json").exists()
+
+
 def test_lifespan_shutdown_closes_an_abandoned_login_window():
     """`lifespan` знал только про manager.stop_all(); окно входа переживало
     остановку приложения живым процессом Chrome."""

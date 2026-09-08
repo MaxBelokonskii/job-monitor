@@ -1,5 +1,8 @@
+import os
 import re
 import stat
+import subprocess
+import sys
 from pathlib import Path
 
 from job_monitor import paths
@@ -28,6 +31,58 @@ def test_nested_path_creates_parent(tmp_path, monkeypatch):
     monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path / "state"))
     target = paths.path("logs", "hh.log")
     assert target.parent.is_dir()
+
+
+# ── Импорт не создаёт состояние ───────────────────────────────────────
+
+
+IMPORT_PROBE = """
+import os, sys
+from pathlib import Path
+
+home = Path(os.environ["HOME"])
+before = {p for p in home.rglob("*")}
+import api.main            # noqa: F401 — важен сам факт импорта
+after = {p for p in home.rglob("*")}
+created = sorted(str(p.relative_to(home)) for p in after - before)
+print(repr(created))
+"""
+
+
+def test_importing_the_app_creates_nothing_on_disk(tmp_path):
+    """Импорт модулей не должен создавать каталог данных.
+
+    `job_monitor/workers/hh.py` собирал синглтон `login` с
+    `cookies_path=paths.hh_cookies()` — вызовом НА ИМПОРТЕ, а
+    `paths.path()` делает `mkdir`. Проверено:
+    `HOME=/tmp/hometest pytest -q` создавал `/tmp/hometest/.job-monitor`.
+    Autouse-фикстура tests/conftest.py ставит `JOB_MONITOR_DATA_DIR` в
+    setup первого теста, то есть уже после импортов на коллекции, — её
+    докстринг обещал герметичность, которой не было.
+
+    Каталог оставался пустым и 0700, так что утечки не было; настоящая цена
+    — замороженный на момент импорта путь (см. тест-близнец в
+    tests/test_hh_login.py).
+    """
+    home = tmp_path / "home"
+    home.mkdir()
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in ("HOME", "JOB_MONITOR_DATA_DIR")
+    }
+    environment["HOME"] = str(home)
+    environment["PYTHONPATH"] = str(REPO_ROOT)
+    result = subprocess.run(
+        [sys.executable, "-c", IMPORT_PROBE],
+        capture_output=True, text=True, env=environment, cwd=str(tmp_path),
+    )
+    assert result.returncode == 0, result.stderr
+    created = result.stdout.strip().splitlines()[-1]
+    assert created == "[]", (
+        f"импорт api.main создал в HOME: {created} — состояние должно появляться"
+        " только когда его действительно просят записать"
+    )
 
 
 STATE_LITERALS = re.compile(

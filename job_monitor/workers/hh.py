@@ -111,14 +111,32 @@ class HhLogin:
     def __init__(
         self,
         driver_factory: Callable[[], Any],
-        cookies_path: Path,
+        cookies_path: Path | Callable[[], Path],
         is_logged_in: Callable[[Any], bool],
     ) -> None:
         self._driver_factory = driver_factory
-        self._cookies_path = cookies_path
+        self._cookies_source = cookies_path
         self._is_logged_in = is_logged_in
         self._driver: Any | None = None
         self.state = HhLoginState.logged_out
+
+    @property
+    def cookies_path(self) -> Path:
+        """Путь к cookies, вычисляемый на момент обращения.
+
+        Модульный синглтон `login` ниже собирается на импорте, а
+        `paths.hh_cookies()` не только вычисляет путь, но и создаёт каталог
+        данных (`paths.path()` делает `mkdir`). Передавать сюда готовый
+        `Path` означало: (1) `import api.main` создаёт `~/.job-monitor` до
+        того, как хоть кто-то попросил что-нибудь сохранить, и (2) путь
+        заморожен на момент импорта — `JOB_MONITOR_DATA_DIR`, выставленный
+        позже (например, autouse-фикстурой tests/conftest.py, которая
+        отрабатывает уже ПОСЛЕ импорта модулей на коллекции), молча
+        игнорируется, и cookies уходят не туда. Поэтому источником может
+        быть и функция; тестам по-прежнему можно передать обычный `Path`.
+        """
+        source = self._cookies_source
+        return source() if callable(source) else source
 
     def start(self) -> HhLoginState:
         if self._driver is None:
@@ -135,7 +153,7 @@ class HhLogin:
                 # Окно намеренно остаётся открытым: пользователь ещё не вошёл
                 # и сейчас как раз этим и занят.
                 return self.state
-            save_cookies(self._driver, self._cookies_path)
+            save_cookies(self._driver, self.cookies_path)
         except Exception:
             # `_is_logged_in` — это Selenium-вызовы, а `save_cookies` пишет
             # файл: оба могут бросить (упавший драйвер, недоступный каталог
@@ -415,9 +433,12 @@ def apply_to_vacancy(driver: Any, vacancy: dict, settings: AppSettings) -> bool:
 
 # ── Цикл воркера в отдельном потоке ─────────────────────────────────────
 
+# `cookies_path` — функция, а не значение: вызов `paths.hh_cookies()` прямо
+# здесь выполнялся бы на импорте модуля и создавал каталог данных (см.
+# HhLogin.cookies_path).
 login = HhLogin(
     driver_factory=lambda: setup_driver(headless=False),
-    cookies_path=paths.hh_cookies(),
+    cookies_path=paths.hh_cookies,
     is_logged_in=is_logged_in,
 )
 
