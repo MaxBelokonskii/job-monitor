@@ -30,7 +30,15 @@ async def app_token_middleware(
 
 CSP: str = "; ".join((
     "default-src 'self'",
-    "script-src 'self' 'unsafe-inline'",
+    # No 'unsafe-inline': frontend/index.html carries no inline <script> and no
+    # on*= handler attributes any more (every control goes through the
+    # data-action delegation map in frontend/app.js), so an injected
+    # `<img onerror=...>` or `javascript:` URL from Telegram/hh.ru content has
+    # nothing left to execute with. tests/test_frontend_events.py pins both
+    # halves of that: drop one and the other stops being safe.
+    "script-src 'self'",
+    # 'unsafe-inline' stays here on purpose: the markup uses inline `style`
+    # attributes throughout and a style attribute is not a script vector.
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src https://fonts.gstatic.com",
     "img-src 'self' data:",

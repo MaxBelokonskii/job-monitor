@@ -17,7 +17,7 @@
       <h1>Job Monitor</h1>
       <span>v2.0</span>
     </div>
-    <button onclick="showAbout()" title="О приложении" style="background:none;border:1px solid var(--border);border-radius:50%;width:24px;height:24px;cursor:pointer;font-size:13px;color:var(--muted);display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .15s" onmouseover="this.style.borderColor='var(--accent)';this.style.color='var(--accent)'" onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--muted)'">ⓘ</button>
+    <button class="btn-about" data-action="showAbout" title="О приложении">ⓘ</button>
   </div>
   <nav class="nav">
     <div class="nav-item active" data-page="dashboard"><div class="nav-dot"></div>Дашборд</div>
@@ -49,10 +49,12 @@
         Telegram
       </div>
       <div class="section-split-line"></div>
-      <button class="btn-toggle btn-toggle-tg" id="btnToggleTG" onclick="toggleTG()">
+      <button class="btn-toggle btn-toggle-tg" id="btnToggleTG" data-action="toggleTG">
         <span class="status-dot stopped" id="dotTG"></span> Запустить TG
       </button>
     </div>
+
+    <div class="worker-alert" id="tgWorkerAlert" style="display:none"></div>
 
     <div class="metrics-grid">
       <div class="metric">
@@ -83,10 +85,12 @@
         HH.ru
       </div>
       <div class="section-split-line"></div>
-      <button class="btn-toggle btn-toggle-hh" id="btnToggleHH" onclick="toggleHH()">
+      <button class="btn-toggle btn-toggle-hh" id="btnToggleHH" data-action="toggleHH">
         <span class="status-dot stopped" id="dotHH"></span> Запустить HH
       </button>
     </div>
+
+    <div class="worker-alert" id="hhWorkerAlert" style="display:none"></div>
 
     <div class="metrics-grid">
       <div class="metric">
@@ -164,14 +168,14 @@
             <div id="chatViewName" style="font-size:13px;font-weight:600;font-family:'JetBrains Mono',monospace"></div>
             <div style="font-size:11px;color:var(--muted)">Telegram</div>
           </div>
-          <button class="btn btn-secondary" style="margin-left:auto;font-size:11px" onclick="loadChatMessages(currentChat)">↻</button>
+          <button class="btn btn-secondary" style="margin-left:auto;font-size:11px" data-action="reloadChat">↻</button>
         </div>
         <div id="chatMessages" style="flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:8px"></div>
         <div style="padding:10px 14px;border-top:1px solid var(--border);background:var(--card-bg);display:flex;gap:8px">
           <input type="text" id="chatInput" placeholder="Написать сообщение..."
             style="flex:1;padding:8px 13px;border:1px solid var(--border);border-radius:20px;font-size:12.5px;font-family:'Manrope',sans-serif;background:var(--bg);color:var(--text);outline:none"
-            onkeydown="if(event.key==='Enter')sendChatMessage()">
-          <button class="btn btn-primary" style="border-radius:20px;padding:8px 16px;font-size:12.5px" onclick="sendChatMessage()">Отправить</button>
+            data-enter-action="sendChatMessage">
+          <button class="btn btn-primary" style="border-radius:20px;padding:8px 16px;font-size:12.5px" data-action="sendChatMessage">Отправить</button>
         </div>
       </div>
     </div>
@@ -181,14 +185,14 @@
   <div class="page" id="page-channels">
     <div class="page-header">
       <div class="page-title">Каналы</div>
-      <button class="btn btn-primary" onclick="saveChannels()">Сохранить</button>
+      <button class="btn btn-primary" data-action="saveChannels">Сохранить</button>
     </div>
     <div class="card">
       <div class="card-title">Telegram каналы для мониторинга</div>
       <div id="channelEditList"></div>
       <div class="add-row">
         <input type="text" id="newChannel" placeholder="@username или username">
-        <button class="btn btn-secondary" onclick="addChannel()">+ Добавить</button>
+        <button class="btn btn-secondary" data-action="addChannel">+ Добавить</button>
       </div>
     </div>
   </div>
@@ -197,7 +201,7 @@
   <div class="page" id="page-keywords">
     <div class="page-header">
       <div class="page-title">Ключевые слова</div>
-      <button class="btn btn-primary" onclick="saveKeywords()">Сохранить</button>
+      <button class="btn btn-primary" data-action="saveKeywords">Сохранить</button>
     </div>
     <div class="two-col">
       <div class="card">
@@ -205,7 +209,7 @@
         <div id="kwList"></div>
         <div class="add-row">
           <input type="text" id="newKw" placeholder="Ключевое слово">
-          <button class="btn btn-secondary" onclick="addKw()">+</button>
+          <button class="btn btn-secondary" data-action="addKw">+</button>
         </div>
       </div>
       <div class="card">
@@ -213,7 +217,7 @@
         <div id="exList"></div>
         <div class="add-row">
           <input type="text" id="newEx" placeholder="Слово для исключения">
-          <button class="btn btn-secondary" onclick="addEx()">+</button>
+          <button class="btn btn-secondary" data-action="addEx">+</button>
         </div>
       </div>
     </div>
@@ -229,7 +233,7 @@
         Telegram
       </div>
       <div class="section-split-line"></div>
-      <button class="btn btn-primary" style="font-size:12px" onclick="saveTemplate()">Сохранить</button>
+      <button class="btn btn-primary" style="font-size:12px" data-action="saveTemplate">Сохранить</button>
     </div>
     <div class="card">
       <div class="card-title">Текст отклика в Telegram</div>
@@ -237,8 +241,8 @@
     </div>
     <div class="card">
       <div class="card-title">Прикреплённый файл (резюме)</div>
-      <div class="file-zone" id="fileZone" onclick="document.getElementById('fileInput').click()">
-        <input type="file" id="fileInput" accept=".pdf,.doc,.docx" style="display:none" onchange="onFileSelect(this)">
+      <div class="file-zone" id="fileZone" data-action="pickFile">
+        <input type="file" id="fileInput" accept=".pdf,.doc,.docx" style="display:none" data-change-action="onFileSelect">
         <div style="font-size:20px;margin-bottom:6px">📎</div>
         <div id="fileZoneLabel" style="font-size:12.5px;color:var(--muted);font-weight:500">Нажмите чтобы выбрать файл</div>
         <div id="fileName" style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--green);margin-top:3px"></div>
@@ -254,7 +258,7 @@
         HH.ru
       </div>
       <div class="section-split-line"></div>
-      <button class="btn btn-primary" style="font-size:12px;background:var(--hh)" onclick="saveHHCoverLetter()">Сохранить</button>
+      <button class="btn btn-primary" style="font-size:12px;background:var(--hh)" data-action="saveHHCoverLetter">Сохранить</button>
     </div>
     <div class="card">
       <div class="card-title">Сопроводительное письмо</div>
@@ -274,7 +278,7 @@
         Telegram
       </div>
       <div class="section-split-line"></div>
-      <button class="btn btn-primary" style="font-size:12px" onclick="saveTGSettings()">Сохранить TG</button>
+      <button class="btn btn-primary" style="font-size:12px" data-action="saveTGSettings">Сохранить TG</button>
     </div>
 
     <div class="card">
@@ -291,7 +295,7 @@
       <div class="api-input-row"><label>API ID</label><input class="api-input" type="text" id="apiId" placeholder="12345678"></div>
       <div class="api-input-row"><label>API Hash</label><input class="api-input" type="password" id="apiHash" placeholder="abcdef1234567890"></div>
       <div style="display:flex;gap:8px;margin-top:4px">
-        <button class="btn btn-primary" onclick="saveApiKeys()">Сохранить ключи</button>
+        <button class="btn btn-primary" data-action="saveApiKeys">Сохранить ключи</button>
       </div>
     </div>
 
@@ -300,14 +304,14 @@
       <div id="authStatus" style="font-size:13px;color:var(--muted);margin-bottom:10px">Проверка...</div>
       <div id="authForm" style="display:none">
         <div class="api-input-row"><label>Номер телефона</label><input class="api-input" type="text" id="authPhone" placeholder="+77001234567"></div>
-        <button class="btn btn-secondary" onclick="sendAuthCode()" style="margin-bottom:10px">Отправить код</button>
+        <button class="btn btn-secondary" data-action="sendAuthCode" style="margin-bottom:10px">Отправить код</button>
         <div id="authCodeRow" style="display:none">
           <div class="api-input-row"><label>Код из Telegram</label><input class="api-input" type="text" id="authCode" placeholder="12345"></div>
           <div class="api-input-row" id="auth2faRow" style="display:none">
             <label>Облачный пароль (2FA)</label>
             <input class="api-input" type="password" id="auth2fa" placeholder="Ваш пароль">
           </div>
-          <button class="btn btn-primary" onclick="verifyAuthCode()">Подтвердить</button>
+          <button class="btn btn-primary" data-action="verifyAuthCode">Подтвердить</button>
         </div>
       </div>
     </div>
@@ -353,7 +357,7 @@
         HH.ru
       </div>
       <div class="section-split-line"></div>
-      <button class="btn btn-primary" style="font-size:12px;background:var(--hh)" onclick="saveHHSettings()">Сохранить HH</button>
+      <button class="btn btn-primary" style="font-size:12px;background:var(--hh)" data-action="saveHHSettings">Сохранить HH</button>
     </div>
 
     <div class="two-col">
@@ -362,7 +366,7 @@
         <div id="hhKwList"></div>
         <div class="add-row">
           <input type="text" id="newHHKw" placeholder="Junior QA...">
-          <button class="btn btn-secondary" onclick="addHHKw()">+</button>
+          <button class="btn btn-secondary" data-action="addHHKw">+</button>
         </div>
       </div>
       <div class="card">
@@ -370,7 +374,7 @@
         <div id="hhExList"></div>
         <div class="add-row">
           <input type="text" id="newHHEx" placeholder="senior, lead...">
-          <button class="btn btn-secondary" onclick="addHHEx()">+</button>
+          <button class="btn btn-secondary" data-action="addHHEx">+</button>
         </div>
       </div>
     </div>
@@ -465,7 +469,7 @@
         </select>
         <input type="text" id="newStepSelector" placeholder="CSS/XPath селектор" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;font-family:'JetBrains Mono',monospace;background:var(--bg);color:var(--text);outline:none">
         <input type="text" id="newStepValue" placeholder="Значение / текст / сек" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;font-family:'JetBrains Mono',monospace;background:var(--bg);color:var(--text);outline:none">
-        <button class="btn btn-primary" style="font-size:12px;background:var(--hh)" onclick="addStep()">+ Добавить</button>
+        <button class="btn btn-primary" style="font-size:12px;background:var(--hh)" data-action="addStep">+ Добавить</button>
       </div>
     </div>
   </div>
@@ -476,11 +480,11 @@
       <div class="page-title">Логи</div>
       <div style="display:flex;gap:8px;align-items:center">
         <div class="log-tabs">
-          <button class="log-tab active-tg" id="logTabTG" onclick="showLog('tg')">Telegram</button>
-          <button class="log-tab" id="logTabHH" onclick="showLog('hh')">HH.ru</button>
+          <button class="log-tab active-tg" id="logTabTG" data-action="showLog" data-arg="tg">Telegram</button>
+          <button class="log-tab" id="logTabHH" data-action="showLog" data-arg="hh">HH.ru</button>
         </div>
-        <button class="btn btn-secondary" onclick="clearConsole()">Очистить</button>
-        <button class="btn btn-secondary" onclick="refreshLogs()">↻ Обновить</button>
+        <button class="btn btn-secondary" data-action="clearConsole">Очистить</button>
+        <button class="btn btn-secondary" data-action="refreshLogs">↻ Обновить</button>
       </div>
     </div>
     <div class="card" style="padding:0;overflow:hidden">
@@ -496,7 +500,7 @@
 <!-- About modal -->
 <div id="aboutModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;align-items:center;justify-content:center">
   <div style="background:var(--card-bg);border-radius:var(--radius);padding:28px;max-width:480px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.18);position:relative">
-    <button onclick="hideAbout()" style="position:absolute;top:14px;right:14px;background:none;border:none;cursor:pointer;font-size:18px;color:var(--muted);line-height:1">×</button>
+    <button data-action="hideAbout" style="position:absolute;top:14px;right:14px;background:none;border:none;cursor:pointer;font-size:18px;color:var(--muted);line-height:1">×</button>
 
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
       <div style="width:44px;height:44px;border-radius:var(--radius-sm);background:var(--accent-light);display:flex;align-items:center;justify-content:center;font-size:22px">🤖</div>

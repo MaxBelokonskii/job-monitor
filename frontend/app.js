@@ -95,8 +95,12 @@ function configErrorDetail(r) {
 }
 
 // ── State ─────────────────────────────────────────────────────────────
+// `state` mirrors WorkerStatus.state from the backend (stopped / starting /
+// running / stopping / error) and is what the toggle buttons render;
+// `running` stays as the plain boolean the start/stop handlers branch on.
 const tgState = {
-  running: false, safeMode: true, parseHistory: false,
+  running: false, state: 'stopped', lastError: null, viewSig: null,
+  safeMode: true, parseHistory: false,
   channels: [], keywords: [], exclude: [],
   template: '', maxPerDay: 25, historyLimit: 50,
   sentToday: 0, foundToday: 0, sentTotal: 0,
@@ -104,7 +108,8 @@ const tgState = {
 };
 
 const hhState = {
-  running: false, keywords: [], exclude: [],
+  running: false, state: 'stopped', lastError: null, viewSig: null,
+  keywords: [], exclude: [],
   areaIds: [113], schedule: ['remote', 'fullDay', 'flexible'],
   maxPerDay: 20, sentToday: 0, foundToday: 0, totalSent: 0,
   autostart: false, seleniumSteps: [],
@@ -129,30 +134,58 @@ document.querySelectorAll('.nav-item[data-page]').forEach(item => {
   });
 });
 
-// ── TG Status UI ──────────────────────────────────────────────────────
-function updateTGButton() {
-  const btn = document.getElementById('btnToggleTG');
-  const dot = document.getElementById('dotTG');
-  if (!btn || !dot) return;
-  if (tgState.running) {
-    btn.className = 'btn-toggle btn-toggle-tg active';
-    fill(btn, [el('span', { class: 'status-dot running', id: 'dotTG' }), ' Остановить TG']);
-  } else {
-    btn.className = 'btn-toggle btn-toggle-tg';
-    fill(btn, [el('span', { class: 'status-dot stopped', id: 'dotTG' }), ' Запустить TG']);
+// ── Worker status UI ──────────────────────────────────────────────────
+// A worker is not simply running-or-not. `error` means its task either
+// crashed or ignored cancellation; in the second case the manager keeps
+// tracking the task, so POST /api/{tg,hh}/start answers 400 "уже запущен".
+// Rendering `error` as a plain "Запустить" made a wedged worker look like a
+// stopped one and turned that 400 into a mystery — so `state` from
+// GET /api/state drives the button, not the running boolean alone.
+function workerView(state, name) {
+  switch (state) {
+    case 'running':
+      return { dot: 'running', active: true, label: 'Остановить ' + name };
+    case 'starting':
+      return { dot: 'running', active: true, label: 'Запуск ' + name + '…' };
+    case 'stopping':
+      return { dot: 'running', active: true, label: 'Остановка ' + name + '…' };
+    case 'error':
+      return { dot: 'error', active: false, label: 'Ошибка ' + name + ' — запустить снова' };
+    default:
+      return { dot: 'stopped', active: false, label: 'Запустить ' + name };
   }
 }
 
-function updateHHButton() {
-  const btn = document.getElementById('btnToggleHH');
+function workerSignature(worker) {
+  return `${worker.state}|${worker.lastError || ''}`;
+}
+
+function updateWorkerButton(worker, name, btnId, dotId, alertId, toggleClass) {
+  const btn = document.getElementById(btnId);
   if (!btn) return;
-  if (hhState.running) {
-    btn.className = 'btn-toggle btn-toggle-hh active';
-    fill(btn, [el('span', { class: 'status-dot running', id: 'dotHH' }), ' Остановить HH']);
-  } else {
-    btn.className = 'btn-toggle btn-toggle-hh';
-    fill(btn, [el('span', { class: 'status-dot stopped', id: 'dotHH' }), ' Запустить HH']);
+  const view = workerView(worker.state, name);
+  btn.className = `btn-toggle ${toggleClass}`
+    + (view.active ? ' active' : '')
+    + (worker.state === 'error' ? ' worker-error' : '');
+  fill(btn, [el('span', { class: `status-dot ${view.dot}`, id: dotId }), ' ' + view.label]);
+
+  const alert = document.getElementById(alertId);
+  if (alert) {
+    const failed = worker.state === 'error';
+    alert.textContent = failed
+      ? `⚠️ ${name}: ${worker.lastError || 'воркер остановлен с ошибкой'}`
+      : '';
+    alert.style.display = failed ? 'block' : 'none';
   }
+  worker.viewSig = workerSignature(worker);
+}
+
+function updateTGButton() {
+  updateWorkerButton(tgState, 'TG', 'btnToggleTG', 'dotTG', 'tgWorkerAlert', 'btn-toggle-tg');
+}
+
+function updateHHButton() {
+  updateWorkerButton(hhState, 'HH', 'btnToggleHH', 'dotHH', 'hhWorkerAlert', 'btn-toggle-hh');
 }
 
 function updateMetrics() {
@@ -200,17 +233,23 @@ function updateDashboard() {
 }
 
 // ── TG Script control ─────────────────────────────────────────────────
+function setWorkerState(worker, state, lastError) {
+  worker.state = state;
+  worker.running = state === 'running' || state === 'starting';
+  worker.lastError = lastError || null;
+}
+
 async function toggleTG() {
   if (tgState.running) {
     const r = await apiPost('/tg/stop');
     if (r && r.status === 'stopped') {
-      tgState.running = false; updateTGButton();
+      setWorkerState(tgState, 'stopped'); updateTGButton();
       showToast('TG монитор остановлен');
     } else showToast(r?.detail || 'Ошибка');
   } else {
     const r = await apiPost('/tg/start');
     if (r && r.status === 'started') {
-      tgState.running = true; updateTGButton();
+      setWorkerState(tgState, 'starting'); updateTGButton();
       showToast('TG монитор запущен');
     } else showToast(r?.detail || 'Ошибка запуска TG');
     hideRestartBanner();
@@ -222,13 +261,20 @@ async function toggleHH() {
   if (hhState.running) {
     const r = await apiPost('/hh/stop');
     if (r && r.status === 'stopped') {
-      hhState.running = false; updateHHButton();
+      setWorkerState(hhState, 'stopped'); updateHHButton();
       showToast('HH монитор остановлен');
-    } else showToast(r?.detail || 'Ошибка');
+    } else {
+      // POST /api/hh/stop answers with the worker's REAL state: a Selenium
+      // step that ignored cancellation leaves it `error` with the task still
+      // tracked, so the next start() will refuse. Show that instead of
+      // leaving the stale "running" button on screen.
+      if (r && r.status) { setWorkerState(hhState, r.status, r.detail); updateHHButton(); }
+      showToast(r?.detail || 'Ошибка');
+    }
   } else {
     const r = await apiPost('/hh/start');
     if (r && r.status === 'started') {
-      hhState.running = true; updateHHButton();
+      setWorkerState(hhState, 'starting'); updateHHButton();
       showToast('HH монитор запущен — войдите в браузере');
     } else showToast(r?.detail || 'Ошибка запуска HH');
   }
@@ -295,8 +341,9 @@ async function saveHHCoverLetter() {
   if (!configPatchOk(r)) { showToast(configErrorDetail(r)); return; }
   showToast('Сопроводительное письмо сохранено');
 }
-function onFileSelect(input) {
-  const file = input.files[0]; if (!file) return;
+// Delegated `change` handler: every action is called as action(arg, event).
+function onFileSelect(_arg, event) {
+  const file = event.target.files[0]; if (!file) return;
   document.getElementById('fileZone').classList.add('has-file');
   document.getElementById('fileZoneLabel').textContent = 'Файл выбран';
   document.getElementById('fileName').textContent = file.name;
@@ -672,6 +719,20 @@ function isHttpUrl(url) {
   return /^https?:\/\//i.test(url || '');
 }
 
+// hh.ru vacancy statuses are written by job_monitor/workers/hh.py:
+// HH_STATUS_APPLIED ("отклик отправлен"), "пропущено", and
+// HH_STATUS_SCENARIO_ERROR ("ошибка сценария") — the last one added when a
+// broken Selenium scenario is made terminal. It used to fall through to the
+// neutral "waiting" badge, so a permanently failed vacancy looked like one
+// still in the queue.
+function vacancyStatusClass(status) {
+  const st = status || '';
+  if (st.includes('ошибка')) return 'status-error';
+  if (st.includes('отправлен')) return 'status-sent';
+  if (st.includes('пропущено')) return 'status-skip';
+  return 'status-wait';
+}
+
 async function loadHHVacancies() {
   const vacs = await apiGet('/hh/vacancies');
   const vacEl = document.getElementById('hhRecentVacancies');
@@ -684,9 +745,8 @@ async function loadHHVacancies() {
     return;
   }
   fill(vacEl, vacs.slice(0, 4).map(v => {
-    let cls = 'status-wait'; const st = v.status || '';
-    if (st.includes('отправлен')) cls = 'status-sent';
-    else if (st.includes('пропущено')) cls = 'status-skip';
+    const st = v.status || '';
+    const cls = vacancyStatusClass(st);
     // No isHttpUrl() check here on purpose: el() validates href/src itself,
     // by construction, so a bad scheme in v.url just never gets attached.
     return el('div', { class: 'vac-card' }, [
@@ -738,40 +798,44 @@ async function refreshLogs() {
 
 function clearConsole() { fill(document.getElementById('logConsole'), el('span', { class: 'info', text: '// Очищено' })); }
 
-// ── Recent log parser ─────────────────────────────────────────────────
-function parseLogLine(line, source) {
-  const tm = line.match(/(\d{2}:\d{2}):\d{2}/); const time = tm ? tm[1] : '—';
-  let badge, cls, text;
-  if (line.includes('[OK]') || line.includes('Отправлено')) {
-    badge = 'OK'; cls = 'badge-ok';
-    const m = line.match(/Отправлено:\s*(@\S+)/);
-    text = m ? 'Отправлено ' + m[1] : line.split(']').slice(1).join(']').trim();
-  } else if (line.includes('[ERROR]')) {
-    badge = 'ERR'; cls = 'badge-error'; text = line.split('[ERROR]').slice(1).join('').trim();
-  } else if (line.includes('[SAFE MODE]')) {
-    badge = 'SAFE'; cls = 'badge-safe'; const m = line.match(/(@\S+)/); text = m ? 'Найден: ' + m[1] : 'Найден контакт';
-  } else if (line.includes('[SKIP]')) {
-    badge = 'SKIP'; cls = 'badge-skip'; text = line.split('[SKIP]').slice(1).join('').trim();
-  } else if (line.includes('[ВАКАНСИЯ]')) {
-    badge = 'VAC'; cls = 'badge-skip';
-    const parts = line.split('[ВАКАНСИЯ]');
-    text = parts.length > 1 ? parts[1].trim().slice(0, 80) : 'Найдена вакансия';
-  } else if (line.includes('[HH][OK]')) {
-    badge = 'HH'; cls = 'badge-ok'; text = line.split('[HH][OK]').slice(1).join('').trim().slice(0, 80);
-  } else if (line.includes('[START]')) {
-    badge = 'SYS'; cls = 'badge-skip'; text = 'Скрипт запущен, мониторинг активен';
-  } else if (line.includes('[DAILY RESET]')) {
-    badge = 'SYS'; cls = 'badge-skip'; text = 'Новый день — счётчики сброшены';
-  } else if (line.includes('Got difference')) {
-    badge = 'UPD'; cls = 'badge-skip'; text = 'Получены обновления из каналов';
-  } else if (line.includes('Connecting to')) {
-    badge = 'NET'; cls = 'badge-skip'; text = 'Подключение к Telegram...';
-  } else if (line.includes('Connection to') && line.includes('complete')) {
-    badge = 'NET'; cls = 'badge-ok'; text = 'Подключение установлено';
-  } else {
-    return null;
+// ── Recent activity feed ──────────────────────────────────────────────
+// GET /api/state returns `recent`: rows straight from the worker_events
+// table (worker, at, kind, detail) written by
+// job_monitor/workers/{telegram,hh}.py. This replaces the old approach of
+// re-downloading both log files every 3s and reverse-engineering their text.
+function eventBadge(kind) {
+  switch (kind) {
+    case 'sent': return { badge: 'OK', cls: 'badge-ok' };
+    case 'applied': return { badge: 'HH', cls: 'badge-ok' };
+    case 'vacancy': return { badge: 'VAC', cls: 'badge-skip' };
+    case 'skipped': return { badge: 'SKIP', cls: 'badge-skip' };
+    case 'steps_invalid': return { badge: 'STEP', cls: 'badge-error' };
+    case 'error': return { badge: 'ERR', cls: 'badge-error' };
+    case 'login_required': return { badge: 'AUTH', cls: 'badge-safe' };
+    default: return { badge: 'SYS', cls: 'badge-skip' };
   }
-  return { time, badge, cls, text: text ? text.slice(0, 90) : '', source };
+}
+
+function eventTime(at) {
+  const m = /T(\d{2}:\d{2})/.exec(at || '');
+  return m ? m[1] : '—';
+}
+
+function renderRecent(events) {
+  const recentEl = document.getElementById('recentLog');
+  // No events yet: leave the "Ожидание данных..." placeholder from
+  // index.html in place rather than blanking the card.
+  if (!recentEl || !events.length) return;
+  fill(recentEl, events.slice(0, 6).map(e => {
+    const view = eventBadge(e.kind);
+    const source = e.worker === 'hh' ? 'hh' : 'tg';
+    return el('div', { class: 'log-row' }, [
+      el('span', { class: 'log-time', text: eventTime(e.at) }),
+      el('span', { class: `log-source ${source}`, text: source.toUpperCase() }),
+      el('span', { class: `log-badge ${view.cls}`, text: view.badge }),
+      el('span', { style: 'font-size:12px', text: (e.detail || '').slice(0, 90) }),
+    ]);
+  }));
 }
 
 // ── Restart banner ────────────────────────────────────────────────────
@@ -807,69 +871,41 @@ function showToast(msg) {
 }
 
 // ── Poll ──────────────────────────────────────────────────────────────
+// L13: the dashboard used to fire four requests every three seconds
+// (/tg/status, /hh/status, /tg/logs, /hh/logs) for one screen. GET
+// /api/state (api/routes_state.py) aggregates all of it into one response.
+function applyWorkerState(worker, payload, update) {
+  worker.state = payload.state || (payload.running ? 'running' : 'stopped');
+  worker.running = !!payload.running;
+  worker.lastError = payload.last_error || null;
+  // Re-render only when what the button shows actually changed: this runs
+  // every 3s and rebuilding the node each tick would fight the :active and
+  // :hover states of a button the user is pressing.
+  if (workerSignature(worker) !== worker.viewSig) update();
+}
+
 async function pollStatus() {
-  // TG
-  const tg = await apiGet('/tg/status');
-  if (tg) {
-    const wasRunning = tgState.running;
-    tgState.running = tg.running;
+  const state = await apiGet('/state');
+  if (state) {
+    const tg = state.tg || {};
     tgState.safeMode = tg.safe_mode;
-    tgState.sentToday = tg.sent_today;
+    tgState.sentToday = tg.sent_today || 0;
     tgState.foundToday = tg.found_today || 0;
     tgState.sentTotal = tg.sent_total || 0;
-    tgState.maxPerDay = tg.max_per_day;
-    if (tg.api_id) tgState.apiId = tg.api_id;
+    if (tg.max_per_day) tgState.maxPerDay = tg.max_per_day;
     if (typeof tg.api_hash_set !== 'undefined') tgState.apiHashSet = tg.api_hash_set;
-    if (wasRunning !== tgState.running) updateTGButton();
-    updateMetrics();
-  }
+    applyWorkerState(tgState, tg, updateTGButton);
 
-  // HH
-  const hh = await apiGet('/hh/status');
-  if (hh) {
-    const wasRunning = hhState.running;
-    hhState.running = hh.running;
+    const hh = state.hh || {};
     hhState.sentToday = hh.sent_today || 0;
     hhState.foundToday = hh.found_today || 0;
     hhState.totalSent = hh.total_sent || 0;
     hhState.maxPerDay = hh.max_per_day || 20;
-    if (wasRunning !== hhState.running) updateHHButton();
+    applyWorkerState(hhState, hh, updateHHButton);
+
     updateMetrics();
+    renderRecent(state.recent || []);
   }
-
-  // Recent log
-  const l = await apiGet('/tg/logs?lines=200');
-  if (l && l.log) {
-    const lines = l.log.trim().split('\n').filter(Boolean).reverse();
-    const entries = [];
-    for (const line of lines) {
-      const p = parseLogLine(line, 'tg');
-      if (p) entries.push(p);
-      if (entries.length >= 6) break;
-    }
-    // Also check HH log
-    const hl = await apiGet('/hh/logs?lines=50');
-    if (hl && hl.log) {
-      const hlines = hl.log.trim().split('\n').filter(Boolean).reverse();
-      for (const line of hlines) {
-        const p = parseLogLine(line, 'hh');
-        if (p) { entries.push(p); }
-        if (entries.length >= 8) break;
-      }
-      entries.sort((a, b) => b.time.localeCompare(a.time));
-    }
-
-    const recentEl = document.getElementById('recentLog');
-    if (entries.length && recentEl) {
-      fill(recentEl, entries.slice(0, 6).map(e => el('div', { class: 'log-row' }, [
-        el('span', { class: 'log-time', text: e.time }),
-        el('span', { class: `log-source ${e.source}`, text: e.source.toUpperCase() }),
-        el('span', { class: `log-badge ${e.cls}`, text: e.badge }),
-        el('span', { style: 'font-size:12px', text: e.text }),
-      ])));
-    }
-  }
-
   setTimeout(pollStatus, 3000);
 }
 
@@ -924,5 +960,84 @@ function hideAbout() {
   document.getElementById('aboutModal').style.display = 'none';
 }
 document.addEventListener('keydown', e => { if (e.key === 'Escape') hideAbout(); });
+
+// ── Event delegation ──────────────────────────────────────────────────
+// index.html carries no on*= attributes any more: every control declares
+// data-action / data-change-action / data-enter-action and the three
+// listeners below dispatch it. That is precisely what lets
+// job_monitor/security.py ship `script-src 'self'` with no 'unsafe-inline'
+// — a single surviving handler attribute would force the policy back open.
+// Contract: every action is invoked as action(arg, event), where `arg` is
+// the element's data-arg attribute (undefined when absent).
+
+function pickFile(_arg, event) {
+  const input = document.getElementById('fileInput');
+  // #fileInput lives inside #fileZone, so the synthetic click from
+  // input.click() bubbles straight back into this handler. Measured in
+  // Chrome 152: without this guard pickFile runs twice per user click and
+  // input.click() is called a second time — harmless only because the DOM
+  // spec's "click in progress" flag makes that second call a no-op, which is
+  // what stops it being unbounded recursion. Returning early keeps the
+  // dispatch honest instead of relying on that flag.
+  if (!input || event.target === input) return;
+  input.click();
+}
+
+function reloadChat() {
+  return loadChatMessages(currentChat);
+}
+
+const ACTIONS = {
+  showAbout,
+  hideAbout,
+  toggleTG,
+  toggleHH,
+  reloadChat,
+  sendChatMessage,
+  saveChannels,
+  addChannel,
+  saveKeywords,
+  addKw,
+  addEx,
+  saveTemplate,
+  pickFile,
+  onFileSelect,
+  saveHHCoverLetter,
+  saveTGSettings,
+  saveApiKeys,
+  sendAuthCode,
+  verifyAuthCode,
+  saveHHSettings,
+  addHHKw,
+  addHHEx,
+  addStep,
+  showLog,
+  clearConsole,
+  refreshLogs,
+};
+
+function runAction(name, target, event) {
+  const action = ACTIONS[name];
+  if (!action) return;
+  action(target.dataset.arg, event);
+}
+
+document.addEventListener('click', event => {
+  const target = event.target.closest?.('[data-action]');
+  if (target) runAction(target.dataset.action, target, event);
+});
+
+document.addEventListener('change', event => {
+  const target = event.target.closest?.('[data-change-action]');
+  if (target) runAction(target.dataset.changeAction, target, event);
+});
+
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Enter') return;
+  const target = event.target.closest?.('[data-enter-action]');
+  if (!target) return;
+  event.preventDefault();
+  runAction(target.dataset.enterAction, target, event);
+});
 
 document.addEventListener('DOMContentLoaded', init);

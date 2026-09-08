@@ -52,6 +52,12 @@ body { font-family: 'Manrope', sans-serif; background: var(--bg); color: var(--t
 .sidebar-logo { padding: 16px 16px 14px; border-bottom: 1px solid var(--border); }
 .sidebar-logo h1 { font-size: 14px; font-weight: 700; }
 .sidebar-logo span { font-size: 11px; color: var(--muted); font-family: 'JetBrains Mono', monospace; }
+/* Replaces the inline onmouseover/onmouseout that used to live on this
+   button in index.html — the last two attributes blocking script-src 'self'. */
+.btn-about { background: none; border: 1px solid var(--border); border-radius: 50%; width: 24px; height: 24px;
+  cursor: pointer; font-size: 13px; color: var(--muted); display: flex; align-items: center;
+  justify-content: center; flex-shrink: 0; transition: all .15s; }
+.btn-about:hover { border-color: var(--accent); color: var(--accent); }
 .nav { padding: 8px; flex: 1; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
 .nav-item { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: var(--radius-sm); cursor: pointer; font-size: 13px; font-weight: 500; color: var(--muted); transition: all .15s; user-select: none; }
 .nav-item:hover { background: var(--bg); color: var(--text); }
@@ -88,6 +94,15 @@ body { font-family: 'Manrope', sans-serif; background: var(--bg); color: var(--t
 .status-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; transition: background .3s; }
 .status-dot.stopped { background: var(--red); }
 .status-dot.running { background: var(--green); animation: pulse 1.5s ease-in-out infinite; }
+/* A worker in `error` state is neither running nor cleanly stopped: it may
+   still hold a live task that makes start() refuse. Give it its own colour
+   so it never reads as an ordinary "stopped". */
+.status-dot.error { background: var(--yellow); animation: pulse 1.5s ease-in-out infinite; }
+.btn-toggle.worker-error { border-color: var(--yellow); color: var(--yellow); }
+
+/* Worker error banner (shows WorkerStatus.last_error from GET /api/state) */
+.worker-alert { background: var(--yellow-light); border: 1px solid var(--yellow); color: var(--yellow);
+  border-radius: var(--radius-sm); padding: 8px 12px; font-size: 12px; font-weight: 500; }
 @keyframes pulse { 0%,100%{opacity:1}50%{opacity:.3} }
 
 /* ── Cards ─────────────────────────────────────────────────────────── */
@@ -209,6 +224,9 @@ body { font-family: 'Manrope', sans-serif; background: var(--bg); color: var(--t
 .status-sent { background: var(--green-light); color: var(--green); }
 .status-skip { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
 .status-wait { background: var(--yellow-light); color: var(--yellow); }
+/* HH_STATUS_SCENARIO_ERROR ("ошибка сценария", job_monitor/workers/hh.py):
+   a terminal failure, not a vacancy still waiting its turn. */
+.status-error { background: var(--red-light); color: var(--red); }
 
 /* ── Selenium steps editor ─────────────────────────────────────────── */
 .step-item { display: flex; align-items: center; gap: 8px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 6px; }
