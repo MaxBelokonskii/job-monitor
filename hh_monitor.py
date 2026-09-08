@@ -13,13 +13,12 @@ from selenium.common.exceptions import (
     ElementClickInterceptedException, WebDriverException
 )
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
-HH_SENT_PATH = os.path.join(BASE_DIR, "hh_sent.json")
-HH_LOG_PATH = os.path.join(BASE_DIR, "logs", "hh.log")
-HH_COOKIES_PATH = os.path.join(BASE_DIR, "hh_cookies.json")
+from job_monitor import paths
 
-os.makedirs(os.path.join(BASE_DIR, "logs"), exist_ok=True)
+CONFIG_PATH = paths.config_file()
+HH_SENT_PATH = paths.path("hh_sent.json")
+HH_LOG_PATH = paths.logs_dir() / "hh.log"
+HH_COOKIES_PATH = paths.hh_cookies()
 
 # --- Логирование ---
 logging.basicConfig(

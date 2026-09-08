@@ -7,15 +7,16 @@ import os
 import signal
 from datetime import date
 from .config_routes import load_config
+from job_monitor import paths
 
 router = APIRouter(prefix="/api/tg", tags=["telegram"])
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT_PATH = os.path.join(BASE_DIR, "monitor.py")
-LOG_DIR = os.path.join(BASE_DIR, "logs")
-PID_FILE = os.path.join(BASE_DIR, "monitor_pid.txt")
-SYSTEM_LOG = os.path.join(LOG_DIR, "tg_system.log")
-ALL_SENT_FILE = os.path.join(BASE_DIR, "all_sent_users.txt")
+LOG_DIR = paths.logs_dir()
+PID_FILE = paths.path("monitor_pid.txt")
+SYSTEM_LOG = LOG_DIR / "tg_system.log"
+ALL_SENT_FILE = paths.path("all_sent_users.txt")
 
 monitor_process: Optional[subprocess.Popen] = None
 

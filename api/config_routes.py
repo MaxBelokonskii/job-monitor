@@ -4,11 +4,12 @@ from typing import Optional, List
 import os
 import json
 
+from job_monitor import paths
+
 router = APIRouter(prefix="/api/config", tags=["config"])
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
-ENV_PATH = os.path.join(BASE_DIR, ".env")
+CONFIG_PATH = paths.config_file()
+ENV_PATH = paths.env_file()
 
 DEFAULT_CONFIG = {
     # TG

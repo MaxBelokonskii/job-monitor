@@ -9,10 +9,12 @@ from telethon import TelegramClient, events
 from dotenv import load_dotenv
 import atexit
 
-load_dotenv()
+from job_monitor import paths
+
+load_dotenv(paths.env_file())
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+CONFIG_PATH = paths.config_file()
 
 # --- Загрузка конфига с кешированием (TTL 30 сек) ---
 import time as _time
@@ -56,7 +58,7 @@ if not API_ID or not API_HASH:
 API_ID = int(API_ID)
 
 # --- PID файл ---
-PID_FILE = os.path.join(BASE_DIR, "monitor_pid.txt")
+PID_FILE = paths.path("monitor_pid.txt")
 
 with open(PID_FILE, "w") as f:
     f.write(str(os.getpid()))
@@ -68,16 +70,15 @@ def remove_pid():
 atexit.register(remove_pid)
 
 # --- Клиент ---
-client = TelegramClient(os.path.join(BASE_DIR, "session"), API_ID, API_HASH)
+client = TelegramClient(str(paths.tg_session()), API_ID, API_HASH)
 
 # --- Режим работы из env ---
 SAFE_MODE = os.getenv("SAFE_MODE", "true").lower() == "true"
 PARSE_HISTORY = os.getenv("PARSE_HISTORY", "false").lower() == "true"
 
 # --- Логирование ---
-LOG_DIR = os.path.join(BASE_DIR, "logs")
+LOG_DIR = paths.logs_dir()
 ARCHIVE_DIR = os.path.join(LOG_DIR, "archive")
-os.makedirs(LOG_DIR, exist_ok=True)
 os.makedirs(ARCHIVE_DIR, exist_ok=True)
 
 SYSTEM_LOG = os.path.join(LOG_DIR, "tg_system.log")
@@ -110,7 +111,7 @@ sent_users = set()
 sent_today = 0
 last_run_date = date.today()
 
-ALL_SENT_FILE = os.path.join(BASE_DIR, "all_sent_users.txt")
+ALL_SENT_FILE = paths.path("all_sent_users.txt")
 
 def get_log_file(for_date=None):
     d = for_date or date.today()

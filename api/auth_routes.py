@@ -4,10 +4,9 @@ from typing import Optional
 import os
 from telethon import TelegramClient
 from .config_routes import load_config
+from job_monitor import paths
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
-
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 _tg_client: Optional[TelegramClient] = None
 _auth_state: dict = {}
@@ -17,7 +16,7 @@ def get_web_client() -> TelegramClient:
     cfg = load_config()
     api_id = int(cfg.get("api_id") or os.getenv("TG_API_ID", 0))
     api_hash = cfg.get("api_hash") or os.getenv("TG_API_HASH", "")
-    session_path = os.path.join(BASE_DIR, "session_web")
+    session_path = str(paths.path("telegram_web"))
     if _tg_client is None:
         _tg_client = TelegramClient(session_path, api_id, api_hash)
     return _tg_client

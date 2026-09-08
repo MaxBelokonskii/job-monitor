@@ -6,14 +6,15 @@ import os
 import json
 from datetime import date
 from .config_routes import load_config
+from job_monitor import paths
 
 router = APIRouter(prefix="/api/hh", tags=["hh"])
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HH_SCRIPT_PATH = os.path.join(BASE_DIR, "hh_monitor.py")
-HH_SENT_PATH = os.path.join(BASE_DIR, "hh_sent.json")
-HH_LOG_PATH = os.path.join(BASE_DIR, "logs", "hh.log")
-HH_PID_FILE = os.path.join(BASE_DIR, "hh_pid.txt")
+HH_SENT_PATH = paths.path("hh_sent.json")
+HH_LOG_PATH = paths.logs_dir() / "hh.log"
+HH_PID_FILE = paths.path("hh_pid.txt")
 
 hh_process: Optional[subprocess.Popen] = None
 

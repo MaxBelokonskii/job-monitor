@@ -26,4 +26,4 @@ asyncio_mode = "auto"
 
 [tool.setuptools]
 py-modules = ["monitor", "hh_monitor"]
-packages = ["api"]
+packages = ["api", "job_monitor"]
