@@ -85,13 +85,18 @@
 - **D5 — секреты.** `TG_API_ID`/`TG_API_HASH` только в окружении (файл `.env` в каталоге данных, права `0600`). API никогда не возвращает секрет и не дублирует его в БД.
 - **D6 — состояние вне репозитория.** Каталог данных `$JOB_MONITOR_DATA_DIR`, по умолчанию `~/.job-monitor`: `.env`, сессии Telethon, cookies hh.ru, БД, логи. Структурно исключает повтор S1.
 
-## 4. Целевая структура
+## 4. Структура проекта
 
 ```
 job_monitor/            пакет приложения
   paths.py              каталог данных, все пути к состоянию
   security.py           токен приложения, проверка Host, CSP
   settings.py           модель настроек, секреты из окружения
+  envfile.py            атомарная запись .env (0600)
+  telegram_client.py    единственный Telethon-клиент приложения
+  logging_setup.py      файлы логов: tg_system.log и hh.log
+  legacy_import.py      импорт состояния из версий до 2.1.0
+  cli.py                точка входа: run, migrate-legacy
   db/
     connection.py       подключение, PRAGMA, транзакции
     migrations.py       раннер + версионированные SQL-миграции
@@ -101,14 +106,35 @@ job_monitor/            пакет приложения
     telegram.py         TG-воркер
     hh.py               HH-воркер и машина состояний логина
     hh_steps.py         исполнитель сценария Selenium (белый список шагов)
-  api/
-    app.py              сборка FastAPI, middleware, lifespan
-    routes_config.py    routes_state.py  routes_tg.py  routes_hh.py  routes_auth.py
-  cli.py                точка входа: run, migrate-legacy
+api/                    (пакет верхнего уровня, не подпакет job_monitor)
+  main.py               сборка FastAPI, middleware, lifespan
+  config_routes.py      tg_routes.py  hh_routes.py  auth_routes.py  routes_state.py
 frontend/               index.html, app.js, style.css
 tests/                  pytest
 docs/superpowers/       specs/ и plans/
+docs/adr/               архитектурные решения
 ```
+
+**Отступления от первоначального замысла — зафиксированы сознательно.** Этот
+раздел изначально описывал желаемую структуру; реализация от неё отступила в
+двух местах, и переименовывать код задним числом дороже, чем признать факт:
+
+1. **`api/` — пакет верхнего уровня, а не `job_monitor/api/`.** Так было в
+   исходном репозитории, и `api.main:app` — путь, зашитый в `start_web.bat`, в
+   `Makefile` и в инструкции README. Переезд сломал бы все три и не дал бы
+   ничего, кроме симметрии.
+2. **Имена модулей роутов — `<домен>_routes.py`, а не `routes_<домен>.py`**
+   (`config_routes.py`, `tg_routes.py`, `hh_routes.py`, `auth_routes.py`).
+   Эти четыре файла существовали до начала работ; спецификация предлагала
+   переименовать их «за компанию» с новым `routes_state.py`, но переименование
+   ради порядка слов — чистый шум в истории. Единственный новый модуль,
+   `routes_state.py`, назван по замыслу спецификации, поэтому в каталоге
+   сейчас соседствуют оба порядка слов. Это цена решения, а не недосмотр.
+   Аналогично `app.py` остался `main.py`.
+
+Актуальное дерево целиком — `структура.txt` и раздел «Структура проекта» в
+`README.md`; расхождение всех трёх документов с деревом ловит
+`tests/test_docs_structure.py`.
 
 ## 5. Глобальные ограничения
 

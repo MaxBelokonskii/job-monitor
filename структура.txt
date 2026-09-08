@@ -1,32 +1,59 @@
 JobMonitor/
-├── api/
+├── api/                        FastAPI-бэкенд
 │   ├── __init__.py
-│   ├── main.py           ← FastAPI + автозапуск
-│   ├── config_routes.py  ← /api/config
-│   ├── tg_routes.py      ← /api/tg/*
-│   ├── hh_routes.py      ← /api/hh/*
-│   └── auth_routes.py    ← /api/auth/*
+│   ├── main.py                 сборка приложения, middleware, lifespan, автозапуск
+│   ├── config_routes.py        /api/config
+│   ├── tg_routes.py            /api/tg/*
+│   ├── hh_routes.py            /api/hh/*
+│   ├── auth_routes.py          /api/auth/*
+│   └── routes_state.py         /api/state — агрегированное состояние дашборда
 ├── frontend/
-│   ├── index.html        ← только разметка
-│   ├── style.css         ← все стили
-│   └── app.js            ← вся логика
-├── job_monitor/
-│   ├── paths.py           ← единственное место, где вычисляются пути к $JOB_MONITOR_DATA_DIR
-│   ├── envfile.py         ← атомарная запись .env
-│   ├── security.py        ← APP_TOKEN, TrustedHost, CSP
-│   └── db/                ← SQLite: connection, migrations, repositories
-├── monitor.py            ← TG скрипт
-├── hh_monitor.py         ← HH скрипт
+│   ├── index.html              только разметка
+│   ├── style.css               все стили
+│   └── app.js                  вся логика
+├── job_monitor/                пакет приложения
+│   ├── __init__.py
+│   ├── paths.py                единственное место, где вычисляются пути к $JOB_MONITOR_DATA_DIR
+│   ├── envfile.py              атомарная запись .env (0600)
+│   ├── security.py             APP_TOKEN, TrustedHost, CSP
+│   ├── settings.py             модель настроек (SQLite) и секреты (окружение)
+│   ├── telegram_client.py      единственный Telethon-клиент приложения
+│   ├── logging_setup.py        файлы логов: tg_system.log и hh.log
+│   ├── legacy_import.py        импорт состояния из версий до 2.1.0
+│   ├── cli.py                  job-monitor run | migrate-legacy
+│   ├── db/                     SQLite
+│   │   ├── __init__.py
+│   │   ├── connection.py       подключение, PRAGMA, транзакции
+│   │   ├── migrations.py       раннер и версионированные SQL-миграции
+│   │   └── repositories.py     SettingsRepo, TgRepo, HhRepo, EventsRepo
+│   └── workers/                воркеры — asyncio-таски внутри процесса API
+│       ├── __init__.py
+│       ├── manager.py          WorkerManager: старт/стоп/статус
+│       ├── telegram.py         TG-воркер
+│       ├── hh.py               HH-воркер и машина состояний входа
+│       └── hh_steps.py         исполнитель сценария Selenium (белый список шагов)
 ├── scripts/
-│   └── check_no_secrets.py ← pre-commit хук
+│   └── check_no_secrets.py     pre-commit хук
 ├── tests/
-├── start_web.bat
-├── pyproject.toml        ← зависимости (диапазоны версий) + [build-system]
-├── requirements.lock     ← зависимости (точные пины)
-├── .env.example          ← только справочный шаблон переменных
-├── SECURITY.md           ← модель угроз, секреты, действия при утечке
+├── docs/
+│   ├── adr/                    архитектурные решения
+│   └── superpowers/            спецификация и планы работ
+├── Makefile                    install / test / run / migrate-legacy
+├── start_web.bat               запуск одной кнопкой (Windows)
+├── pyproject.toml              зависимости (диапазоны версий) + [build-system]
+├── requirements.lock           зависимости (точные пины)
+├── .env.example                только справочный шаблон переменных
+├── SECURITY.md                 модель угроз, секреты, действия при утечке
 └── README.md
 
-Секреты и состояние (.env, config.json, *.session, логи, hh_sent.json,
-all_sent_users.txt) в репозитории не хранятся — всё это живёт под
-$JOB_MONITOR_DATA_DIR (по умолчанию ~/.job-monitor), см. SECURITY.md.
+Отдельных скриптов-мониторов в корне (`monitor.py`, `hh_monitor.py`) больше
+нет: их логика переехала в `job_monitor/workers/`, а воркеры стали
+asyncio-тасками того же процесса, что и API, под супервизором
+`job_monitor/workers/manager.py`. Почему так — `docs/adr/0001-in-process-workers.md`;
+что их возвращение запрещено — `tests/test_paths.py`.
+
+Секреты и состояние (.env, *.session, job_monitor.db, логи, hh_cookies.json)
+в репозитории не хранятся — всё это живёт под $JOB_MONITOR_DATA_DIR
+(по умолчанию ~/.job-monitor), см. SECURITY.md.
+
+Соответствие этого файла дереву проверяется tests/test_docs_structure.py.
