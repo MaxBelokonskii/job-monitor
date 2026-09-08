@@ -139,7 +139,7 @@ body { font-family: 'Manrope', sans-serif; background: var(--bg); color: var(--t
 .badge-safe { background: var(--yellow-light); color: var(--yellow); }
 
 /* ── Log console ───────────────────────────────────────────────────── */
-.log-console { background: #0f1117; border-radius: var(--radius); padding: 14px; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #c9d1d9; height: 440px; overflow-y: auto; line-height: 1.7; border: 1px solid #30363d; }
+.log-console { background: #0f1117; border-radius: var(--radius); padding: 14px; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #c9d1d9; height: 440px; overflow-y: auto; line-height: 1.7; border: 1px solid #30363d; white-space: pre-wrap; }
 .log-console .ok { color: #56d364; }
 .log-console .err { color: #f85149; }
 .log-console .info { color: #79c0ff; }

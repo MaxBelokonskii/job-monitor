@@ -9,6 +9,14 @@ function el(tag, props = {}, children = []) {
     else if (key === 'text') node.textContent = value;
     else if (key === 'style') node.style.cssText = value;
     else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
+    else if ((key === 'href' || key === 'src') && !isHttpUrl(value)) {
+      // Untrusted data (Telegram/hh.ru content) must never reach a
+      // navigable attribute with an unvalidated scheme (javascript:, data:,
+      // ...). Validating here, inside el(), means every call site gets this
+      // for free by construction — a new href/src call site can't reopen
+      // the hole the way a call-site-only check could.
+      continue;
+    }
     else node.setAttribute(key, value);
   }
   for (const child of [].concat(children)) {
@@ -26,17 +34,40 @@ function headers(extra = {}) {
   return { 'X-App-Token': APP_TOKEN, ...extra };
 }
 
+// A stale APP_TOKEN (server restarted, tab left open) makes every /api/*
+// call come back 403. The body is `{detail: "invalid app token"}` — a
+// truthy object — so callers that only check "did I get something back"
+// would otherwise sail past their guard and render `undefined`/`NaN`
+// everywhere. Catch the 403 here, once, for both helpers.
+function showTokenExpiredBanner() {
+  if (document.getElementById('tokenExpiredBanner')) return;
+  const b = el('div', { id: 'tokenExpiredBanner', class: 'restart-banner' }, [
+    el('span', { text: '⚠️ Сервер был перезапущен — токен устарел. Обновите страницу.' }),
+    el('button', {
+      style: 'padding:4px 12px;background:var(--red);color:#fff;border:none;border-radius:5px;cursor:pointer;font-size:12px;font-weight:600',
+      text: 'Обновить',
+      onclick: () => location.reload(),
+    }),
+  ]);
+  document.body.appendChild(b);
+}
+
 async function apiGet(path) {
-  try { return await (await fetch(API + path, { headers: headers() })).json(); }
-  catch { return null; }
+  try {
+    const res = await fetch(API + path, { headers: headers() });
+    if (res.status === 403) { showTokenExpiredBanner(); return null; }
+    return await res.json();
+  } catch { return null; }
 }
 async function apiSend(method, path, body = {}) {
   try {
-    return await (await fetch(API + path, {
+    const res = await fetch(API + path, {
       method,
       headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(body),
-    })).json();
+    });
+    if (res.status === 403) { showTokenExpiredBanner(); return null; }
+    return await res.json();
   } catch { return null; }
 }
 const apiPost = (path, body) => apiSend('POST', path, body);
@@ -560,7 +591,9 @@ async function sendChatMessage() {
 // ── HH Vacancies ──────────────────────────────────────────────────────
 // hh.ru-scraped data must never drive an <a href>: an unvalidated scheme
 // (javascript:, data:, ...) would execute on click with the app token in
-// scope. Only allow the schemes a "view on hh.ru" link ever legitimately needs.
+// scope. Only allow the schemes a "view on hh.ru" link ever legitimately
+// needs. el() itself enforces this for every href/src it sets (see above);
+// this predicate is what it calls.
 function isHttpUrl(url) {
   return /^https?:\/\//i.test(url || '');
 }
@@ -580,7 +613,8 @@ async function loadHHVacancies() {
     let cls = 'status-wait'; const st = v.status || '';
     if (st.includes('отправлен')) cls = 'status-sent';
     else if (st.includes('пропущено')) cls = 'status-skip';
-    const href = isHttpUrl(v.url) ? v.url : null;
+    // No isHttpUrl() check here on purpose: el() validates href/src itself,
+    // by construction, so a bad scheme in v.url just never gets attached.
     return el('div', { class: 'vac-card' }, [
       el('div', { style: 'display:flex;align-items:flex-start;justify-content:space-between;gap:8px' }, [
         el('div', {}, [
@@ -589,8 +623,8 @@ async function loadHHVacancies() {
         ]),
         el('span', { class: `status-badge ${cls}`, style: 'flex-shrink:0', text: st || 'ожидание' }),
       ]),
-      href ? el('div', { style: 'margin-top:8px' }, [
-        el('a', { href, target: '_blank', style: 'font-size:11px;color:var(--hh);text-decoration:none', text: 'Открыть на HH →' }),
+      v.url ? el('div', { style: 'margin-top:8px' }, [
+        el('a', { href: v.url, target: '_blank', rel: 'noopener noreferrer', style: 'font-size:11px;color:var(--hh);text-decoration:none', text: 'Открыть на HH →' }),
       ]) : null,
     ]);
   }));
