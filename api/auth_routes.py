@@ -1,10 +1,9 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-import os
 from telethon import TelegramClient
-from .config_routes import load_config
 from job_monitor import paths
+from job_monitor.settings import load_secrets
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -13,12 +12,10 @@ _auth_state: dict = {}
 
 def get_web_client() -> TelegramClient:
     global _tg_client
-    cfg = load_config()
-    api_id = int(cfg.get("api_id") or os.getenv("TG_API_ID", 0))
-    api_hash = cfg.get("api_hash") or os.getenv("TG_API_HASH", "")
+    secrets = load_secrets()
     session_path = str(paths.path("telegram_web"))
     if _tg_client is None:
-        _tg_client = TelegramClient(session_path, api_id, api_hash)
+        _tg_client = TelegramClient(session_path, secrets.api_id or 0, secrets.api_hash or "")
     return _tg_client
 
 class AuthRequest(BaseModel):
