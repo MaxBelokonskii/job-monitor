@@ -156,6 +156,15 @@ def test_standalone_monitor_scripts_are_gone() -> None:
 # которого ещё нет в списке: новый файл состояния не должен уметь появиться
 # в обход инварианта. То, что проверка ловит все эти формы, само по себе
 # закреплено тестом ниже (`test_the_state_path_check_is_not_vacuous`).
+#
+# Ревью первой версии сканера прогнало через него 20 форм и нашло шесть
+# щелей: `logging.FileHandler`, `os.makedirs`, `shutil.copy`, `shutil.rmtree`,
+# `tempfile.mkstemp(dir=…)` и `sys.argv[0]` как корень. Важна была первая —
+# именно так проект и пишет логи, а `logs` давно стоит в STATE_MARKERS.
+# Все шесть добавлены в MUTATIONS ниже; ALLOWED заодно расширен близкими
+# законными формами (`d.copy()`, `str.replace`, `mkstemp(dir=…)` рядом с
+# целью), чтобы расширение списка имён не купило покрытие ложными
+# срабатываниями.
 
 STATE_MARKERS = (
     ".env", "config.json", ".db", ".session", "session", "cookies",
@@ -166,6 +175,27 @@ CWD_CALLS = {"getcwd", "cwd"}
 PATH_BUILDERS = {"join", "abspath", "dirname", "expanduser", "realpath"}
 PATH_OPENERS = {"open", "connect", "TelegramClient"}
 WRITE_METHODS = {"write_text", "write_bytes", "mkdir", "touch", "chmod", "unlink", "replace"}
+# Вызовы, у которых путь — ПЕРВЫЙ позиционный аргумент, а сам вызов создаёт
+# или переписывает файл/каталог. Имена здесь однозначные: `d.copy()` или
+# `text.replace(a, b)` под них не попадают, поэтому ложных срабатываний на
+# обычном коде они не дают. Ради `logging.FileHandler` список и заведён:
+# проект пишет логи именно так, а `logs` уже стоит в STATE_MARKERS.
+WRITE_CALLS = {
+    "makedirs", "rmtree", "copytree", "copyfile",
+    "FileHandler", "WatchedFileHandler", "RotatingFileHandler",
+    "TimedRotatingFileHandler",
+}
+# `shutil.copy(src, dst)` и `shutil.move(src, dst)`: путь и в первом, и во
+# втором аргументе. Требуется именно `shutil.`, потому что голые `copy` и
+# `move` — слишком частые имена методов (`dict.copy`, `deque.move`).
+COPY_MODULE = "shutil"
+COPY_CALLS = {"copy", "copy2", "copyfile", "copytree", "move"}
+# Путь, переданный именованным аргументом: `tempfile.mkstemp(dir=…)`,
+# `logging.basicConfig(filename=…)`, `NamedTemporaryFile(dir=…)`. Режим
+# оставлен читающим: сюда попадает и безобидное `open(file=…)`, поэтому
+# нарушением такой путь становится, только если он ведёт к состоянию
+# (STATE_MARKERS) — этого хватает, чтобы `dir="logs"` не прошёл.
+PATH_KEYWORDS = {"dir", "filename", "path", "file"}
 PATHS_MODULE_EXEMPT = "paths.py"
 
 
@@ -184,6 +214,15 @@ class _StatePathScan:
             if isinstance(sub, ast.Name) and (sub.id == "__file__" or sub.id in self.repo_anchored_names):
                 return True
             if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Attribute) and sub.func.attr in CWD_CALLS:
+                return True
+            # `sys.argv[0]` — путь к запущенному скрипту, то есть тот же
+            # корень «рядом с кодом», что и `__file__`, только через чёрный ход.
+            if (
+                isinstance(sub, ast.Attribute)
+                and sub.attr == "argv"
+                and isinstance(sub.value, ast.Name)
+                and sub.value.id == "sys"
+            ):
                 return True
         return False
 
@@ -242,6 +281,14 @@ class _StatePathScan:
                 return str(keyword.value.value)
         return "r"
 
+    @staticmethod
+    def _keyword_paths(call: ast.Call) -> list:
+        return [
+            (call, keyword.value, "r")
+            for keyword in call.keywords
+            if keyword.arg in PATH_KEYWORDS
+        ]
+
     def _candidates(self, node: ast.AST):
         """(всё выражение, выражение-путь, режим доступа)."""
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
@@ -250,15 +297,27 @@ class _StatePathScan:
             return []
         function = node.func
         called = function.id if isinstance(function, ast.Name) else getattr(function, "attr", "")
+        keyword_paths = self._keyword_paths(node)
         if called in PATH_OPENERS and node.args:
-            return [(node, node.args[0], self._mode(node))]
+            return [(node, node.args[0], self._mode(node))] + keyword_paths
+        if (
+            isinstance(function, ast.Attribute)
+            and isinstance(function.value, ast.Name)
+            and function.value.id == COPY_MODULE
+            and function.attr in COPY_CALLS
+        ):
+            # И источник, и назначение: копия состояния «рядом с кодом» —
+            # такая же утечка, как оригинал.
+            return [(node, argument, "w") for argument in node.args[:2]] + keyword_paths
+        if called in WRITE_CALLS and node.args:
+            return [(node, node.args[0], "w")] + keyword_paths
         if isinstance(function, ast.Attribute) and function.attr == "join":
             return [(node, node, "r")]
         if isinstance(function, ast.Name) and function.id == "Path":
             return [(node, node, "r")]
         if isinstance(function, ast.Attribute) and function.attr in WRITE_METHODS:
-            return [(node, function.value, "w")]
-        return []
+            return [(node, function.value, "w")] + keyword_paths
+        return keyword_paths
 
     def violations(self) -> list[str]:
         found: list[str] = []
@@ -336,6 +395,36 @@ conn = sqlite3.connect("job_monitor.db")
 import os
 COOKIES = os.path.join(os.getcwd(), "hh_cookies.json")
 """,
+    "logging.FileHandler по относительному пути": """
+import logging
+handler = logging.FileHandler("logs/hh.log")
+""",
+    "RotatingFileHandler от __file__": """
+import os
+from logging.handlers import RotatingFileHandler
+handler = RotatingFileHandler(os.path.join(os.path.dirname(__file__), "logs", "hh.log"))
+""",
+    "os.makedirs по относительному пути": """
+import os
+os.makedirs("logs", exist_ok=True)
+""",
+    "shutil.copy состояния рядом с кодом": """
+import shutil
+def backup(source):
+    shutil.copy(source, "job_monitor.db.bak")
+""",
+    "shutil.rmtree по относительному пути": """
+import shutil
+shutil.rmtree("logs")
+""",
+    "tempfile.mkstemp(dir=...) в каталоге репозитория": """
+import tempfile
+handle, name = tempfile.mkstemp(dir="logs")
+""",
+    "sys.argv[0] как корень": """
+import os, sys
+ENV = os.path.join(os.path.dirname(sys.argv[0]), ".env")
+""",
 }
 
 ALLOWED = {
@@ -355,6 +444,40 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 with open(os.path.join(FRONTEND_DIR, "index.html"), "r", encoding="utf-8") as f:
     html = f.read()
+""",
+    "обработчик лога по пути из paths": """
+import logging
+from job_monitor import paths
+handler = logging.FileHandler(paths.logs_dir() / "hh.log")
+""",
+    "временный файл рядом с целью, а не с кодом": """
+import tempfile
+from job_monitor import paths
+target = paths.env_file()
+handle, name = tempfile.mkstemp(dir=str(target.parent))
+""",
+    "makedirs по каталогу, названному пользователем": """
+import os
+def prepare(destination):
+    os.makedirs(destination, exist_ok=True)
+""",
+    "copy — это метод словаря, а не shutil": """
+def snapshot(settings):
+    return settings.copy()
+""",
+    "str.replace, а не Path.replace": """
+def escape(text):
+    return text.replace("\\n", "\\\\n")
+""",
+    "shutil.copy между путями, названными снаружи": """
+import shutil
+def backup(source, destination):
+    shutil.copy(source, destination)
+""",
+    "open(file=...) по абсолютному пути": """
+def read(handle_path="/etc/hosts"):
+    with open(file=handle_path, mode="r", encoding="utf-8") as handle:
+        return handle.read()
 """,
 }
 
