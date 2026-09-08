@@ -113,6 +113,9 @@ const hhState = {
   areaIds: [113], schedule: ['remote', 'fullDay', 'flexible'],
   maxPerDay: 20, sentToday: 0, foundToday: 0, totalSent: 0,
   autostart: false, seleniumSteps: [],
+  // HhLoginState из job_monitor/workers/hh.py. Приходит в каждом
+  // GET /api/state (hh.login_state), см. applyHHLoginState().
+  loginState: 'logged_out',
 };
 
 // ── Navigation ────────────────────────────────────────────────────────
@@ -452,7 +455,7 @@ async function loadSettings() {
   if (cfg.hh_autostart !== undefined) document.getElementById('toggleHHAutostart').checked = cfg.hh_autostart;
   if (cfg.hh_selenium_steps) { hhState.seleniumSteps = cfg.hh_selenium_steps; renderSeleniumSteps(); }
   renderHHLoginControls();
-  await refreshHHLoginStatus();
+  renderHHLoginStatus(hhState.loginState);
 
   await checkWebAuth();
 }
@@ -588,12 +591,22 @@ const HH_LOGIN_LABELS = {
 function renderHHLoginControls() {
   const box = document.getElementById('hhLoginButtons');
   if (!box) return;
+  // «Я вошёл» имеет смысл только при открытом окне: без драйвера
+  // POST /api/hh/login/confirm честно отвечает 400 (см. его докстринг), и
+  // до этого дизейбла последовательность «Закрыть окно» → «Я вошёл» была
+  // достижима в два клика. 400 никуда не делся — он нужен любому клиенту,
+  // не только этой вкладке, — но кнопка больше не приглашает в него нажать.
+  const canConfirm = hhState.loginState === 'browser_open';
+  const confirmProps = {
+    class: 'btn btn-primary', style: 'background:var(--hh)',
+    text: 'Я вошёл, сохранить сессию', onclick: hhLoginConfirm,
+  };
+  // Только когда true: el() кладёт неизвестные ключи через setAttribute, а
+  // `disabled="false"` в HTML — это всё равно disabled.
+  if (!canConfirm) confirmProps.disabled = true;
   fill(box, [
     el('button', { class: 'btn btn-secondary', text: 'Открыть вход в hh.ru', onclick: hhLoginStart }),
-    el('button', {
-      class: 'btn btn-primary', style: 'background:var(--hh)',
-      text: 'Я вошёл, сохранить сессию', onclick: hhLoginConfirm,
-    }),
+    el('button', confirmProps),
   ]);
 }
 
@@ -603,21 +616,29 @@ function renderHHLoginStatus(state) {
   fill(statusEl, el('span', { text: HH_LOGIN_LABELS[state] || state }));
 }
 
-async function refreshHHLoginStatus() {
-  const r = await apiGet('/hh/login/status');
-  if (r && r.state) renderHHLoginStatus(r.state);
+// Единственная точка входа для состояния входа в hh.ru, откуда бы оно ни
+// пришло: из периодического GET /api/state или из ответа самой кнопки.
+// Раньше состояние читалось отдельным GET /api/hh/login/status ровно один
+// раз — при открытии страницы настроек, — поэтому `/api/state.hh.login_state`
+// не читал никто, а показанная строка устаревала молча: приложение
+// перезапустили, окна нет, а на экране «Окно открыто».
+function applyHHLoginState(state) {
+  if (!state || state === hhState.loginState) return;
+  hhState.loginState = state;
+  renderHHLoginStatus(state);
+  renderHHLoginControls();
 }
 
 async function hhLoginStart() {
   const r = await apiPost('/hh/login/start');
-  if (r && r.state) { renderHHLoginStatus(r.state); showToast('Открываю окно входа в hh.ru'); }
+  if (r && r.state) { applyHHLoginState(r.state); showToast('Открываю окно входа в hh.ru'); }
   else showToast(r?.detail || 'Не удалось открыть окно входа');
 }
 
 async function hhLoginConfirm() {
   const r = await apiPost('/hh/login/confirm');
   if (!r || !r.state) { showToast(r?.detail || 'Ошибка проверки входа'); return; }
-  renderHHLoginStatus(r.state);
+  applyHHLoginState(r.state);
   if (r.state === 'logged_in') showToast('Сессия сохранена');
   else showToast('Вход ещё не подтверждён — войдите в открывшемся окне');
 }
@@ -627,7 +648,7 @@ async function hhLoginCancel() {
   // роута Chrome, открытый «Открыть вход в hh.ru», жил до конца сессии
   // пользователя и переживал остановку приложения.
   const r = await apiPost('/hh/login/cancel');
-  if (r && r.state) { renderHHLoginStatus(r.state); showToast('Окно входа закрыто'); }
+  if (r && r.state) { applyHHLoginState(r.state); showToast('Окно входа закрыто'); }
   else showToast(r?.detail || 'Не удалось закрыть окно входа');
 }
 
@@ -1005,6 +1026,7 @@ async function pollStatus() {
       hhState.totalSent = hh.total_sent || 0;
       hhState.maxPerDay = hh.max_per_day || 20;
       applyWorkerState(hhState, hh, updateHHButton);
+      applyHHLoginState(hh.login_state);
 
       updateMetrics();
       renderRecent(state.recent || []);

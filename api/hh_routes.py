@@ -82,8 +82,9 @@ async def hh_login_confirm() -> dict:
     приводила в `confirm()` без драйвера: необработанный RuntimeError и 500.
     Это ошибка последовательности вызовов, а не сбой сервера, — 400 с
     объяснением. Дизейбл кнопки в UI сюда не годится в одиночку: 500 отдаётся
-    любому клиенту (curl, вкладка со старым состоянием), а состояние входа
-    фронтенд не опрашивает периодически.
+    любому клиенту (curl, вкладка со старым состоянием). Сам дизейбл теперь
+    есть — `login.state` приходит в каждом `GET /api/state`, — но он гасит
+    лишь приглашение нажать, а не сам вызов.
 
     Ловится именно `LoginWindowNotOpen`, а не всякий RuntimeError: упавший
     посреди проверки Selenium — это настоящая поломка, и она должна остаться
@@ -109,11 +110,6 @@ async def hh_login_cancel() -> dict:
     поэтому — как и `login.start` выше — через `asyncio.to_thread`.
     """
     await asyncio.to_thread(login.close)
-    return {"state": login.state.value}
-
-
-@router.get("/login/status")
-async def hh_login_status() -> dict:
     return {"state": login.state.value}
 
 
