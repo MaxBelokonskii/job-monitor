@@ -62,6 +62,32 @@ def _job_monitor_data_dir(tmp_path_factory, _no_real_telegram_credentials):
     yield data_dir
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _no_state_in_the_real_home():
+    """Прогон не создаёт настоящий `~/.job-monitor`.
+
+    `JOB_MONITOR_DATA_DIR` уводит состояние во временный каталог, но
+    `paths.DEFAULT_DIR` вычисляется от настоящего `Path.home()` на импорте
+    модуля, и любой тест, который снимает переменную (`test_paths.py`), снова
+    попадает в домашний каталог разработчика — причём `paths.path()` делает
+    по дороге `mkdir`. Проверено `HOME=<tmp> pytest -q`.
+
+    Сторож честно ограничен: если каталог у разработчика уже есть (обычное
+    дело — он им пользуется), проверить нечего. На чистой машине и в CI он
+    работает; тот же инвариант с другой стороны закрывает
+    `test_importing_the_app_creates_nothing_on_disk`.
+    """
+    from job_monitor import paths
+
+    existed = paths.DEFAULT_DIR.exists()
+    yield
+    if not existed:
+        assert not paths.DEFAULT_DIR.exists(), (
+            f"прогон создал {paths.DEFAULT_DIR} в настоящем домашнем каталоге —"
+            " тесты должны жить только в JOB_MONITOR_DATA_DIR"
+        )
+
+
 @pytest.fixture
 def client(_job_monitor_data_dir) -> TestClient:
     from api.main import app

@@ -23,6 +23,11 @@ def test_data_dir_is_private(tmp_path, monkeypatch):
 
 def test_default_is_outside_repository(monkeypatch):
     monkeypatch.delenv("JOB_MONITOR_DATA_DIR", raising=False)
+    # Вопрос теста — «куда указывает путь», а не «создался ли каталог». Без
+    # заглушки он был единственным местом, где прогон создавал `~/.job-monitor`
+    # в НАСТОЯЩЕМ домашнем каталоге — просто чтобы посмотреть на путь:
+    # `paths.path()` делает mkdir по дороге. Проверено `HOME=<tmp> pytest -q`.
+    monkeypatch.setattr(Path, "mkdir", lambda *_args, **_kwargs: None)
     for factory in (paths.env_file, paths.db_file, paths.tg_session, paths.hh_cookies):
         assert REPO_ROOT not in factory().parents, f"{factory.__name__} внутри репозитория"
 
