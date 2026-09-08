@@ -73,6 +73,27 @@ async function apiSend(method, path, body = {}) {
 const apiPost = (path, body) => apiSend('POST', path, body);
 const apiPatch = (path, body) => apiSend('PATCH', path, body);
 
+// PATCH /api/config replies { status: 'saved' } on success. A rejected
+// patch (422 validation error, e.g. an empty numeric input serialised as
+// null, or an out-of-range value) replies { detail: ... } instead, and a
+// 403/network failure comes back as `null` from apiSend above. Every save
+// handler below must check this before telling the user it saved — before
+// this, apiPatch('/config', ...)'s return value was ignored entirely, so a
+// rejected save still showed "сохранено".
+function configPatchOk(r) {
+  return !!r && r.status === 'saved';
+}
+function configErrorDetail(r) {
+  if (!r) return 'Не удалось сохранить: сервер недоступен или токен устарел';
+  if (typeof r.detail === 'string') return r.detail;
+  if (Array.isArray(r.detail)) {
+    return r.detail
+      .map(d => (Array.isArray(d.loc) ? d.loc.join('.') + ': ' : '') + (d.msg || ''))
+      .join('; ');
+  }
+  return 'Ошибка сохранения';
+}
+
 // ── State ─────────────────────────────────────────────────────────────
 const tgState = {
   running: false, safeMode: true, parseHistory: false,
@@ -230,7 +251,8 @@ function addChannel() {
 }
 function removeChannel(i) { tgState.channels.splice(i, 1); renderChannelEdit(); updateDashboard(); }
 async function saveChannels() {
-  await apiPatch('/config', { channels: tgState.channels });
+  const r = await apiPatch('/config', { channels: tgState.channels });
+  if (!configPatchOk(r)) { showToast(configErrorDetail(r)); return; }
   if (tgState.running) { showToast('Сохранено — перезапустите TG'); showRestartBanner(); }
   else showToast('Каналы сохранены');
 }
@@ -252,7 +274,8 @@ function removeKw(i) { tgState.keywords.splice(i, 1); renderKeywords(); }
 function addEx() { const v = document.getElementById('newEx').value.trim().toLowerCase(); if (!v) return; if (tgState.exclude.includes(v)) { showToast('Уже есть'); return; } tgState.exclude.push(v); document.getElementById('newEx').value = ''; renderKeywords(); }
 function removeEx(i) { tgState.exclude.splice(i, 1); renderKeywords(); }
 async function saveKeywords() {
-  await apiPatch('/config', { keywords: tgState.keywords, exclude: tgState.exclude });
+  const r = await apiPatch('/config', { keywords: tgState.keywords, exclude: tgState.exclude });
+  if (!configPatchOk(r)) { showToast(configErrorDetail(r)); return; }
   updateDashboard();
   if (tgState.running) { showToast('Сохранено — перезапустите TG'); showRestartBanner(); }
   else showToast('Ключевые слова сохранены');
@@ -261,13 +284,15 @@ async function saveKeywords() {
 // ── Templates ─────────────────────────────────────────────────────────
 async function saveTemplate() {
   tgState.template = document.getElementById('templateText').value;
-  await apiPatch('/config', { template: tgState.template });
+  const r = await apiPatch('/config', { template: tgState.template });
+  if (!configPatchOk(r)) { showToast(configErrorDetail(r)); return; }
   if (tgState.running) { showToast('Сохранено — перезапустите TG'); showRestartBanner(); }
   else showToast('Шаблон сохранён');
 }
 async function saveHHCoverLetter() {
   const letter = document.getElementById('hhCoverLetter').value;
-  await apiPatch('/config', { hh_cover_letter: letter });
+  const r = await apiPatch('/config', { hh_cover_letter: letter });
+  if (!configPatchOk(r)) { showToast(configErrorDetail(r)); return; }
   showToast('Сопроводительное письмо сохранено');
 }
 function onFileSelect(input) {
@@ -336,10 +361,11 @@ async function saveTGSettings() {
     history_limit: parseInt(document.getElementById('historyLimit').value),
     tg_autostart: document.getElementById('toggleTGAutostart').checked,
   };
+  const r = await apiPatch('/config', data);
+  if (!configPatchOk(r)) { showToast(configErrorDetail(r)); return; }
   tgState.safeMode = data.safe_mode;
   tgState.parseHistory = data.parse_history;
   tgState.maxPerDay = data.max_per_day;
-  await apiPatch('/config', data);
   updateMetrics();
   if (tgState.running) { showToast('Сохранено — перезапустите TG'); showRestartBanner(); }
   else showToast('TG настройки сохранены');
@@ -351,7 +377,8 @@ async function saveApiKeys() {
   if (!api_id) { showToast('Введите API ID'); return; }
   const body = { api_id };
   if (api_hash && !api_hash.startsWith('••')) body.api_hash = api_hash;
-  await apiPatch('/config', body);
+  const r = await apiPatch('/config', body);
+  if (!configPatchOk(r)) { showToast(configErrorDetail(r)); return; }
   showToast('API ключи сохранены');
   if (tgState.running) showRestartBanner();
 }
@@ -438,7 +465,8 @@ async function saveHHSettings() {
     hh_autostart: document.getElementById('toggleHHAutostart').checked,
     hh_selenium_steps: hhState.seleniumSteps,
   };
-  await apiPatch('/config', data);
+  const r = await apiPatch('/config', data);
+  if (!configPatchOk(r)) { showToast(configErrorDetail(r)); return; }
   showToast('HH настройки сохранены');
 }
 
