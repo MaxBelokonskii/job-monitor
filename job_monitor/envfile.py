@@ -27,7 +27,10 @@ def read_env() -> dict[str, str]:
         if not line or line.startswith("#") or "=" not in line:
             continue
         key, value = line.split("=", 1)
-        result[key.strip()] = value.strip()
+        key = key.strip()
+        value = value.strip()
+        _validate(key, value)
+        result[key] = value
     return result
 
 

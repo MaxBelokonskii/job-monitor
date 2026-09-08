@@ -24,6 +24,20 @@ def test_roundtrip(tmp_path, monkeypatch):
     assert envfile.read_env() == {"TG_API_ID": "123", "SAFE_MODE": "true"}
 
 
+def test_read_env_rejects_null_byte_in_existing_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
+    (tmp_path / ".env").write_text("TG_API_HASH=abc\x00def\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        envfile.read_env()
+
+
+def test_write_env_preserves_previously_written_keys(tmp_path, monkeypatch):
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
+    envfile.write_env({"TG_API_HASH": "abc"})
+    envfile.write_env({"SAFE_MODE": "false"})
+    assert envfile.read_env() == {"TG_API_HASH": "abc", "SAFE_MODE": "false"}
+
+
 def test_reveal_hash_endpoint_is_gone(client):
     assert client.get("/api/config/reveal-hash").status_code == 404
 
