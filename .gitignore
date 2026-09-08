@@ -44,6 +44,10 @@ desktop.ini
 *.tar
 *.tar.gz
 *.tgz
+*.tar.bz2
+*.tar.xz
+*.txz
+*.zst
 # Состояние приложения (дублирует $JOB_MONITOR_DATA_DIR на случай локального оверрайда)
 *.sqlite
 *.db
