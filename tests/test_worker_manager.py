@@ -163,3 +163,76 @@ async def test_status_dict_of_an_idle_worker_allows_start():
     manager.register("idle", lambda: asyncio.sleep(3600))
     assert manager.status_dict("idle")["can_start"] is True
     assert manager.status_dict("nope")["can_start"] is True
+
+
+async def test_a_cancelled_stop_does_not_strand_the_worker_in_stopping():
+    """Клиент отсоединился, пока `stop()` ждал — статус всё равно обязан
+    прийти к терминальному.
+
+    `stop()` ждал до 10 секунд прямо в обработчике HTTP-запроса. Перезагрузка
+    вкладки в это окно отменяла корутину, и если воркер игнорировал cancel,
+    `_statuses[name].state` навсегда оставался `stopping`: таска не done,
+    `/api/state` вечно отдаёт `stopping`, кнопка вечно `disabled`, баннер не
+    показывается (он только для `error`), объяснения нет и выхода из
+    состояния тоже.
+    """
+    release = asyncio.Event()
+
+    async def stubborn() -> None:
+        while True:
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                if release.is_set():
+                    raise
+
+    manager = WorkerManager()
+    manager.register("stubborn", stubborn)
+    await manager.start("stubborn")
+    await wait_for(manager, "stubborn", WorkerState.running)
+    task = manager._tasks["stubborn"]
+
+    stopping = asyncio.create_task(manager.stop("stubborn", timeout=0.2))
+    await wait_for(manager, "stubborn", WorkerState.stopping)
+    stopping.cancel()                       # вкладку перезагрузили
+    with pytest.raises(asyncio.CancelledError):
+        await stopping
+
+    await wait_for(manager, "stubborn", WorkerState.error)
+    assert manager.status("stubborn").last_error is not None, (
+        "пользователю нужно объяснение: баннер показывается только при error"
+    )
+    assert manager.status_dict("stubborn")["can_start"] is False
+
+    release.set()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+async def test_a_cancelled_stop_still_reaches_stopped_for_a_cooperative_worker():
+    manager = WorkerManager()
+    started = asyncio.Event()
+
+    async def cooperative() -> None:
+        started.set()
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            await asyncio.sleep(0.05)      # уборка занимает мгновение
+            raise
+
+    manager.register("idle", cooperative)
+    await manager.start("idle")
+    await started.wait()
+
+    stopping = asyncio.create_task(manager.stop("idle", timeout=5))
+    await wait_for(manager, "idle", WorkerState.stopping)
+    stopping.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await stopping
+
+    await wait_for(manager, "idle", WorkerState.stopped)
+    assert manager.status_dict("idle")["can_start"] is True, (
+        "воркер честно остановился — start() должен снова стать возможен"
+    )

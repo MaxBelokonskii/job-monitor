@@ -7,7 +7,7 @@ from .config_routes import load_config
 from job_monitor.db.connection import get_connection
 from job_monitor.db.repositories import HhRepo
 from job_monitor.logging_setup import log_file
-from job_monitor.workers.hh import login
+from job_monitor.workers.hh import LoginWindowNotOpen, login
 from job_monitor.workers.manager import WorkerAlreadyRunning, WorkerNotRunning, manager
 
 router = APIRouter(prefix="/api/hh", tags=["hh"])
@@ -75,7 +75,28 @@ async def hh_login_start() -> dict:
 
 @router.post("/login/confirm")
 async def hh_login_confirm() -> dict:
-    return {"state": (await asyncio.to_thread(login.confirm)).value}
+    """«Я вошёл, сохранить сессию».
+
+    Кнопка «Закрыть окно входа» видна всегда и стоит рядом, поэтому
+    последовательность «Закрыть» → «Я вошёл» достижима в два клика и
+    приводила в `confirm()` без драйвера: необработанный RuntimeError и 500.
+    Это ошибка последовательности вызовов, а не сбой сервера, — 400 с
+    объяснением. Дизейбл кнопки в UI сюда не годится в одиночку: 500 отдаётся
+    любому клиенту (curl, вкладка со старым состоянием), а состояние входа
+    фронтенд не опрашивает периодически.
+
+    Ловится именно `LoginWindowNotOpen`, а не всякий RuntimeError: упавший
+    посреди проверки Selenium — это настоящая поломка, и она должна остаться
+    500, а не притвориться ошибкой пользователя.
+    """
+    try:
+        state = await asyncio.to_thread(login.confirm)
+    except LoginWindowNotOpen as error:
+        raise HTTPException(
+            status_code=400,
+            detail="Окно входа не открыто — нажмите «Открыть вход в hh.ru»",
+        ) from error
+    return {"state": state.value}
 
 
 @router.post("/login/cancel")

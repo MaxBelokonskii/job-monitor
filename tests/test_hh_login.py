@@ -321,3 +321,56 @@ def test_the_close_thread_is_a_daemon(monkeypatch):
     monkeypatch.setattr(app_login, "close", spying_close)
     asyncio.run(main.close_login_window(timeout=5))
     assert seen == [True], f"close() выполнился в потоке daemon={seen}"
+
+
+# ── «Закрыть окно входа» → «Я вошёл» — это 400, а не 500 ───────────────
+
+
+def test_confirm_without_an_open_window_is_a_400_not_a_500(client):
+    """Кнопка «Закрыть окно входа» видна всегда и стоит рядом с «Я вошёл»,
+    так что последовательность достижима в два клика. Раньше она приводила в
+    `confirm()` без драйвера, и необработанный RuntimeError давал 500."""
+    from job_monitor.workers.hh import login as app_login
+
+    app_login._driver = None
+    app_login.state = HhLoginState.logged_out
+    response = client.post("/api/hh/login/confirm")
+    assert response.status_code == 400
+    assert "Открыть вход" in response.json()["detail"]
+
+
+def test_close_then_confirm_is_the_reproduction(client):
+    """Тот же дефект, воспроизведённый последовательностью кликов из UI."""
+    from job_monitor.workers.hh import login as app_login
+
+    driver = CountingDriver()
+    saved_factory = app_login._driver_factory
+    app_login._driver_factory = lambda: driver
+    try:
+        assert client.post("/api/hh/login/start").status_code == 200
+        assert client.post("/api/hh/login/cancel").status_code == 200
+        assert client.post("/api/hh/login/confirm").status_code == 400
+    finally:
+        app_login._driver_factory = saved_factory
+        app_login._driver = None
+        app_login.state = HhLoginState.logged_out
+
+
+def test_a_real_selenium_failure_inside_confirm_is_not_disguised_as_a_400(client):
+    """400 предназначен ровно для ошибки последовательности вызовов. Упавший
+    посреди проверки драйвер — настоящая поломка, и превращать её в «нажмите
+    Открыть вход» значило бы врать пользователю."""
+    from job_monitor.workers.hh import login as app_login
+
+    driver = CountingDriver()
+    saved_check = app_login._is_logged_in
+    app_login._driver = driver
+    app_login.state = HhLoginState.browser_open
+    app_login._is_logged_in = lambda _d: (_ for _ in ()).throw(RuntimeError("driver умер"))
+    try:
+        with pytest.raises(RuntimeError, match="driver умер"):
+            client.post("/api/hh/login/confirm")
+    finally:
+        app_login._is_logged_in = saved_check
+        app_login._driver = None
+        app_login.state = HhLoginState.logged_out

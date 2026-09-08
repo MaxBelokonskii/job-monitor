@@ -105,6 +105,18 @@ def load_cookies(driver: Any, target: Path) -> bool:
     return True
 
 
+class LoginWindowNotOpen(RuntimeError):
+    """`confirm()` вызван, когда окна входа нет.
+
+    Отдельный тип, а не голый `RuntimeError`: это ошибка последовательности
+    вызовов (клиент нажал «Я вошёл» раньше «Открыть вход» — или после
+    «Закрыть окно входа»), а не сбой драйвера. Роут переводит её в 400, тогда
+    как настоящие поломки Selenium внутри `confirm()` должны оставаться 500.
+    Наследуется от RuntimeError, чтобы прежний контракт («confirm без start —
+    это ошибка») продолжал выполняться для всех, кто ловил RuntimeError.
+    """
+
+
 class HhLogin:
     """Ручной вход в hh.ru без блокировки процесса: два вызова вместо input()."""
 
@@ -147,7 +159,7 @@ class HhLogin:
 
     def confirm(self) -> HhLoginState:
         if self._driver is None:
-            raise RuntimeError("сначала вызови start()")
+            raise LoginWindowNotOpen("сначала вызови start()")
         try:
             if not self._is_logged_in(self._driver):
                 # Окно намеренно остаётся открытым: пользователь ещё не вошёл

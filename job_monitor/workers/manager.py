@@ -70,6 +70,7 @@ class WorkerManager:
     _factories: dict[str, WorkerFactory] = field(default_factory=dict)
     _tasks: dict[str, asyncio.Task] = field(default_factory=dict)
     _statuses: dict[str, WorkerStatus] = field(default_factory=dict)
+    _stop_waiters: dict[str, asyncio.Task] = field(default_factory=dict)
 
     def register(self, name: str, factory: WorkerFactory) -> None:
         self._factories[name] = factory
@@ -121,6 +122,25 @@ class WorkerManager:
             raise WorkerNotRunning(name)
         self._statuses[name].state = WorkerState.stopping
         task.cancel()
+        # `stopping` — состояние ожидания, и кто-то обязан довести его до
+        # конца. Раньше ждал сам `stop()`, то есть обработчик HTTP-запроса:
+        # клиент, отсоединившийся за время десятисекундного ожидания
+        # (перезагрузка вкладки — обычное дело), отменял корутину, и если
+        # воркер при этом игнорировал cancel, статус навсегда оставался
+        # `stopping`. Кнопка была вечно `disabled`, баннера нет (он только
+        # для `error`), выхода из состояния — тоже. Сторож живёт отдельной
+        # таской и переживает отмену ожидающего: `shield` отменяет только
+        # ожидание, но не сторожа, поэтому терминальный статус будет
+        # выставлен в любом случае.
+        waiter = self._stop_waiters.get(name)
+        if waiter is None or waiter.done():
+            waiter = asyncio.create_task(
+                self._await_stop(name, task, timeout), name=f"stop:{name}"
+            )
+            self._stop_waiters[name] = waiter
+        return await asyncio.shield(waiter)
+
+    async def _await_stop(self, name: str, task: asyncio.Task, timeout: float) -> WorkerStatus:
         # asyncio.wait_for(task, timeout) cannot be used here: once its
         # internal deadline fires it cancels the task *again* and then
         # waits for it to actually finish with NO further bound at all —
