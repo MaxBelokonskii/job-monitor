@@ -64,31 +64,46 @@ async def test_status_of_unknown_worker_is_stopped():
     assert WorkerManager().status("nope").state is WorkerState.stopped
 
 
-async def test_stop_timeout_leaves_consistent_state():
-    """A worker that ignores cancellation for longer than the timeout must
-    not leave the manager stuck in "stopping", and a fresh start() for the
-    same name must not be blocked by the orphaned task."""
+async def test_stop_timeout_reports_error_and_refuses_restart():
+    """A worker that ignores cancellation entirely — unconditionally, on
+    every attempt, not just the first — must not be reported as "stopped":
+    that would invite a second instance under the same name, exactly the
+    "second Chrome" failure class this module exists to prevent (now for a
+    wedged asyncio task, e.g. a stuck Selenium step, instead of a wedged
+    subprocess). It must instead surface as `error`, keep the still-alive
+    task tracked, and make start() refuse.
+    """
+    release = asyncio.Event()
 
     async def stubborn() -> None:
         while True:
             try:
                 await asyncio.sleep(3600)
             except asyncio.CancelledError:
-                # swallow the first cancellation and keep going, simulating
-                # a worker that takes a while to actually shut down
-                await asyncio.sleep(3600)
+                if release.is_set():
+                    raise
+                # swallow every cancellation unconditionally — this worker
+                # never responds to being asked to stop
 
     manager = WorkerManager()
     manager.register("stubborn", stubborn)
     await manager.start("stubborn")
     await wait_for(manager, "stubborn", WorkerState.running)
+    task = manager._tasks["stubborn"]
 
     status = await manager.stop("stubborn", timeout=0.05)
-    assert status.state is WorkerState.stopped
-    assert manager.status("stubborn").state is WorkerState.stopped
 
-    # bookkeeping must allow a new start even though the orphaned task
-    # is technically still alive in the background
-    await manager.start("stubborn")
-    assert manager.status("stubborn").state in (WorkerState.starting, WorkerState.running)
-    await manager.stop("stubborn", timeout=0.05)
+    assert status.state is WorkerState.error
+    assert status.last_error is not None
+    assert manager.status("stubborn").state is WorkerState.error
+    assert task.done() is False, "stop() must not claim the task finished when it did not"
+
+    with pytest.raises(WorkerAlreadyRunning):
+        await manager.start("stubborn")
+
+    # cleanup: let the still-alive task actually exit so it doesn't linger
+    # past the end of the test
+    release.set()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task

@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -22,6 +23,8 @@ from job_monitor.security import (
 from job_monitor.settings import load_settings
 from job_monitor.workers.manager import manager
 
+log = logging.getLogger(__name__)
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 
@@ -40,10 +43,22 @@ def register_workers() -> None:
 async def lifespan(app: FastAPI):
     register_workers()
     settings = load_settings(get_connection())
+    # Each autostart is isolated in its own try/except, matching the
+    # resilience of the on_event handler this replaces: an exception
+    # raised inside a lifespan startup context fails the whole app boot
+    # (uvicorn logs "Application startup failed" and exits), so one
+    # worker that is unregistered or fails to start must not be allowed
+    # to take the other worker — or the entire API — down with it.
     if settings.tg_autostart:
-        await manager.start("tg")
+        try:
+            await manager.start("tg")
+        except Exception:
+            log.exception("автозапуск TG воркера не удался")
     if settings.hh_autostart:
-        await manager.start("hh")
+        try:
+            await manager.start("hh")
+        except Exception:
+            log.exception("автозапуск HH воркера не удался")
     yield
     await manager.stop_all()
 

@@ -86,16 +86,34 @@ class WorkerManager:
             raise WorkerNotRunning(name)
         self._statuses[name].state = WorkerState.stopping
         task.cancel()
-        try:
-            await asyncio.wait_for(task, timeout=timeout)
-        except (asyncio.CancelledError, asyncio.TimeoutError):
-            pass
-        # Whether the task finished cleanly, was cancelled, or ignored the
-        # cancellation until the timeout fired, the manager's bookkeeping
-        # must not stay half-stopped: drop the (possibly still-orphaned)
-        # task and replace the status wholesale with a fresh "stopped"
-        # object, so a subsequent start() is never blocked by a stale
-        # entry and status() never reports a "stopping" state forever.
+        # asyncio.wait_for(task, timeout) cannot be used here: once its
+        # internal deadline fires it cancels the task *again* and then
+        # waits for it to actually finish with NO further bound at all —
+        # confirmed by hand: a task that swallows every CancelledError in
+        # a loop makes wait_for hang forever, regardless of `timeout`.
+        # asyncio.wait() is the primitive that genuinely honours the
+        # timeout: it returns the task in `pending` instead of blocking,
+        # so stop() itself can never hang on an uncooperative worker.
+        _done, pending = await asyncio.wait({task}, timeout=timeout)
+        if pending:
+            # The task ignored cancellation within the timeout window and
+            # is still alive. Do NOT report "stopped": a caller that
+            # believed that and called start() again would end up running
+            # a second instance under the same name — exactly the "second
+            # Chrome" failure class this module exists to prevent, now for
+            # a wedged asyncio task (e.g. a stuck Selenium step) instead of
+            # a wedged subprocess. Keep the task tracked so start() keeps
+            # refusing, and surface the wedged state honestly as `error`
+            # instead. The consequence — this worker cannot be restarted
+            # without restarting the process — is the lesser evil, and it
+            # is visible in the status rather than silently wrong.
+            status = WorkerStatus(
+                name=name,
+                state=WorkerState.error,
+                last_error=f"воркер не остановился за {timeout}s (проигнорировал cancel)",
+            )
+            self._statuses[name] = status
+            return status
         self._tasks.pop(name, None)
         self._statuses[name] = WorkerStatus(name=name, state=WorkerState.stopped)
         return self._statuses[name]
