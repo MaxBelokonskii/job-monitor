@@ -50,10 +50,19 @@ async def hh_start():
 @router.post("/stop")
 async def hh_stop():
     try:
-        await manager.stop("hh")
+        status = await manager.stop("hh")
     except WorkerNotRunning:
         raise HTTPException(status_code=400, detail="HH монитор не запущен")
-    return {"status": "stopped"}
+    # Возвращаем НАСТОЯЩЕЕ состояние, а не безусловное "stopped": воркер
+    # может не уложиться в бюджет остановки (apply_to_vacancy — это
+    # WebDriverWait(15) плюс фиксированные паузы), и тогда manager.stop()
+    # ставит error и продолжает отслеживать таску. Раньше UI в этом случае
+    # показывал «монитор остановлен», пользователь жал «Старт», получал 400
+    # «уже запущен» и жал «Стоп» ещё раз — то самое место, где второй стоп
+    # раньше бросал живой поток Selenium без присмотра.
+    # Форма ответа сохранена: успешная остановка по-прежнему даёт
+    # {"status": "stopped"}, на который смотрит frontend/app.js.
+    return {"status": status.state.value, "detail": status.last_error}
 
 
 @router.post("/login/start")

@@ -456,12 +456,24 @@ def _blocking_loop(stop_event: threading.Event) -> None:
             events.add("hh", "login_required", "нужен вход через настройки", datetime.now())
             return
         while not stop_event.is_set():
-            settings = load_settings(conn)
-            if repo.applied_on(date.today()) >= settings.hh_max_per_day:
-                if not _interruptible_sleep(stop_event, 600):
-                    return
-                continue
+            # Весь цикл — включая load_settings()/applied_on() — под общей
+            # защитой. Раньше эти два вызова стояли ВНЕ try, а ловился только
+            # WebDriverException, поэтому воркер насмерть убивал не только
+            # баг Selenium: sqlite3.OperationalError («database is locked»
+            # при двух писателях и busy_timeout=5000) из applied_on/exists/
+            # upsert/events.add или ValueError из random.randint при
+            # hh_delay_min > hh_delay_max — и ничего не попадало в
+            # worker_events. Ловим Exception целиком (так и делал исходный
+            # hh_monitor.py вокруг всего тела цикла); последним рубежом
+            # остаётся WorkerManager._supervise, так что ничего не теряется
+            # безвозвратно, а тип исключения пишем в событие, чтобы даже
+            # программная ошибка была видна в журнале.
             try:
+                settings = load_settings(conn)
+                if repo.applied_on(date.today()) >= settings.hh_max_per_day:
+                    if not _interruptible_sleep(stop_event, 600):
+                        return
+                    continue
                 for keyword in settings.hh_keywords:
                     for area_id in settings.hh_area_ids:
                         if stop_event.is_set():
@@ -475,20 +487,28 @@ def _blocking_loop(stop_event: threading.Event) -> None:
                             _process_one(driver, vacancy, settings, repo, events)
                             if not _interruptible_sleep(
                                 stop_event,
-                                random.randint(settings.hh_delay_min, settings.hh_delay_max),
+                                # min/max, а не как есть: настройки не
+                                # запрещают hh_delay_min > hh_delay_max, а
+                                # random.randint на пустом диапазоне бросает
+                                # ValueError и обрывал бы цикл.
+                                random.randint(
+                                    min(settings.hh_delay_min, settings.hh_delay_max),
+                                    max(settings.hh_delay_min, settings.hh_delay_max),
+                                ),
                             ):
                                 return
-            except WebDriverException as error:
+            except Exception as error:  # noqa: BLE001 — см. комментарий выше
                 # Перенос из hh_monitor.py: браузер/сеть иногда моргают
                 # (таймаут, потеря соединения, временно упавшая страница
                 # поиска) — старый цикл логировал и спал минуту вместо того,
                 # чтобы падать насовсем. Порт этого файла потерял эту
                 # устойчивость (осталось только driver.quit() в finally),
-                # из-за чего необработанный WebDriverException из
-                # driver.get()/get_vacancies_from_page() поднимался в
-                # run_worker() и помечал воркер как error() навсегда, требуя
+                # из-за чего необработанное исключение из
+                # driver.get()/get_vacancies_from_page() поднималось в
+                # run_worker() и помечало воркер как error() навсегда, требуя
                 # ручного перезапуска, и ничего не попадало в worker_events.
-                events.add("hh", "error", str(error), datetime.now())
+                log.exception("[HH] цикл прерван ошибкой")
+                events.add("hh", "error", f"{type(error).__name__}: {error}", datetime.now())
                 if not _interruptible_sleep(stop_event, 60):
                     return
                 continue
@@ -511,7 +531,22 @@ async def run_worker() -> None:
     inner = asyncio.ensure_future(asyncio.to_thread(_blocking_loop, stop_event))
     try:
         await asyncio.shield(inner)
-    except asyncio.CancelledError:
+    except asyncio.CancelledError as cancelled:
         stop_event.set()
-        await inner
-        raise
+        # Ждать поток нужно ТОЖЕ под shield и столько раз, сколько потребуется.
+        # Голый `await inner` переживал только первую отмену: после того как
+        # stop() истёк по таймауту (менеджер ставит error и продолжает
+        # отслеживать таску), второй stop() отменяет таску снова, отмена
+        # приходит прямо в `await inner` и отменяет сам `inner` — run_worker()
+        # завершался мгновенно, stop() рапортовал "stopped" и забывал таску,
+        # хотя поток Selenium был жив. Следующий start() открывал второй
+        # Chrome. Сценарий не экзотический: apply_to_vacancy — это
+        # WebDriverWait(15) плюс ~7–13 секунд фиксированных пауз, так что даже
+        # послушный воркер регулярно не укладывается в 10-секундный бюджет
+        # менеджера, а пользователь жмёт «Стоп» второй раз.
+        while not inner.done():
+            try:
+                await asyncio.shield(inner)
+            except asyncio.CancelledError:
+                continue  # повторный stop(): проглатываем, поток ещё не вышел
+        raise cancelled

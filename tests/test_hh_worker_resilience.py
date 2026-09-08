@@ -23,11 +23,27 @@ worker `error` — requiring a manual restart, with nothing recorded to
 `worker_events`. Fixed by wrapping the per-cycle Selenium calls in
 `try/except WebDriverException`, recording an `events.add("hh", "error", ...)`
 row, and pausing (interruptibly) before retrying instead of dying.
+
+Round 2 added two more:
+
+Finding A — the round-1 wait survived only the FIRST cancellation. A bare
+`await inner` inside the CancelledError handler is itself a cancellation
+point: once a stop() had timed out (manager records `error`, keeps the task),
+a second stop() cancelled `inner`, run_worker() returned instantly, stop()
+reported "stopped" and dropped the task while the Selenium thread lived on —
+and the next start() opened a second Chrome. Fixed by re-awaiting under
+`asyncio.shield` until `inner.done()`, swallowing repeated cancellations.
+
+Finding B — `except WebDriverException` was too narrow and `load_settings()` /
+`applied_on()` sat outside the try entirely, so a sqlite3.OperationalError or
+a ValueError from `random.randint(min, max)` with reversed bounds still killed
+the worker permanently with nothing in `worker_events`.
 """
 
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import threading
 import time
 
@@ -38,7 +54,7 @@ import job_monitor.workers.hh as hh
 from job_monitor.db import connection as db_connection
 from job_monitor.db.repositories import EventsRepo
 from job_monitor.settings import save_settings
-from job_monitor.workers.manager import WorkerManager
+from job_monitor.workers.manager import WorkerAlreadyRunning, WorkerManager, WorkerState
 
 
 async def _wait_until(predicate, timeout: float = 2.0, interval: float = 0.01) -> None:
@@ -198,3 +214,185 @@ def test_blocking_loop_survives_a_webdriver_exception(monkeypatch, tmp_path):
     assert len(error_events) == 1
     assert "net::ERR_CONNECTION_RESET" in error_events[0]["detail"]
     assert scrape_calls["n"] >= 1, "the loop never recovered to retry after the error"
+
+
+# ── Finding A (round 2): a SECOND stop must not orphan the thread ───────
+
+
+async def test_a_second_stop_does_not_orphan_the_worker_thread(monkeypatch):
+    """Pins the round-2 fix: the wait for the Selenium thread must survive
+    *repeated* cancellations, not just the first one.
+
+    Round 1 wrote `except CancelledError: stop_event.set(); await inner`.
+    That bare `await inner` only survives one cancellation: after a stop()
+    times out (the manager records `error` and keeps the task tracked), a
+    second stop() cancels the task again, the cancellation is delivered at
+    `await inner` and cancels `inner` itself, so run_worker() returns at
+    once, stop() reports "stopped" and pops the task while the Selenium
+    thread is still alive — and the next start() opens a second Chrome.
+
+    This is routine, not exotic: apply_to_vacancy is a WebDriverWait(15)
+    plus ~7-13s of fixed sleeps, so even a cooperative worker regularly
+    overruns the manager's 10s budget, and the user clicks Stop again.
+    """
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+    release = threading.Event()
+
+    def wedged_loop(stop_event: threading.Event) -> None:
+        """A worker stuck inside a long Selenium call: it does not look at
+        stop_event until the call returns."""
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        try:
+            release.wait(10.0)  # hard bound so the test can never hang
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(hh, "_blocking_loop", wedged_loop)
+
+    mgr = WorkerManager()
+    mgr.register("hh", hh.run_worker)
+    try:
+        await mgr.start("hh")
+        await _wait_until(lambda: active == 1)
+
+        first = await mgr.stop("hh", timeout=0.2)
+        assert first.state is WorkerState.error
+        assert active == 1
+
+        second = await mgr.stop("hh", timeout=0.2)
+        assert second.state is WorkerState.error, (
+            "the second stop() reported success while the Selenium thread was "
+            "still running — the next start() would open a second Chrome"
+        )
+        assert active == 1
+
+        with pytest.raises(WorkerAlreadyRunning):
+            await mgr.start("hh")
+        assert max_active == 1, "two worker threads were alive at the same time"
+    finally:
+        release.set()
+
+    # Once the thread really exits, run_worker() finishes on its own and the
+    # worker becomes restartable again — without ever having run twice.
+    await _wait_until(lambda: active == 0)
+    assert max_active == 1
+
+
+# ── Finding B (round 2): the guard must not be Selenium-only ───────────
+
+
+def _prepare_db(monkeypatch, tmp_path, **settings_overrides):
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
+    db_connection.reset_connection()
+    conn = db_connection.connect()
+    save_settings(conn, {
+        "hh_keywords": ["qa"], "hh_area_ids": [1],
+        "hh_max_per_day": 50, "hh_check_interval": 60,
+        **settings_overrides,
+    })
+    # Skip the real waits without touching the global time module: the
+    # cancellation semantics of _interruptible_sleep are pinned by the tests
+    # above, here only the control flow around it matters.
+    monkeypatch.setattr(
+        hh, "_interruptible_sleep",
+        lambda stop_event, seconds: not stop_event.is_set(),
+    )
+    return conn
+
+
+class _OkDriver:
+    def get(self, url: str) -> None:
+        pass
+
+    def quit(self) -> None:
+        pass
+
+
+def test_blocking_loop_survives_an_error_outside_the_selenium_calls(monkeypatch, tmp_path):
+    """Pins the round-2 fix: load_settings()/applied_on() must be inside the
+    guarded region, and the guard must not be `except WebDriverException`.
+
+    Before the fix those two calls sat outside the try entirely, so a
+    sqlite3.OperationalError ("database is locked" is plausible with WAL,
+    two writers and busy_timeout=5000) killed the worker permanently with
+    nothing written to worker_events.
+    """
+    conn = _prepare_db(monkeypatch, tmp_path)
+
+    real_load_settings = hh.load_settings
+    calls = {"n": 0}
+
+    def flaky_load_settings(connection):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise sqlite3.OperationalError("database is locked")
+        return real_load_settings(connection)
+
+    stop_event = threading.Event()
+
+    def fake_get_vacancies(driver, settings):
+        stop_event.set()  # one successful pass after the recorded error is enough
+        return []
+
+    monkeypatch.setattr(hh, "load_settings", flaky_load_settings)
+    monkeypatch.setattr(hh, "setup_driver", lambda headless=False: _OkDriver())
+    monkeypatch.setattr(hh, "load_cookies", lambda driver, target: True)
+    monkeypatch.setattr(hh, "is_logged_in", lambda driver: True)
+    monkeypatch.setattr(hh, "get_vacancies_from_page", fake_get_vacancies)
+
+    try:
+        hh._blocking_loop(stop_event)  # must return normally, not raise
+    finally:
+        db_connection.reset_connection()
+
+    assert calls["n"] >= 2, "the loop never recovered to retry after the error"
+    error_events = [e for e in EventsRepo(conn).recent("hh", 10) if e["kind"] == "error"]
+    assert len(error_events) == 1
+    # The exception type is logged too, so a programming error stays legible.
+    assert "OperationalError" in error_events[0]["detail"]
+    assert "database is locked" in error_events[0]["detail"]
+
+
+def test_reversed_delay_bounds_do_not_break_the_cycle(monkeypatch, tmp_path):
+    """Pins the round-2 fix: nothing forces hh_delay_min <= hh_delay_max
+    (AppSettings validates each field on its own), and
+    random.randint(90, 30) raises ValueError — which used to escape the
+    loop and kill the worker. min()/max() removes the crash path instead of
+    merely logging it, so no error event may be recorded either.
+    """
+    conn = _prepare_db(monkeypatch, tmp_path, hh_delay_min=90, hh_delay_max=30)
+
+    stop_event = threading.Event()
+    scrapes = {"n": 0}
+    processed: list[dict] = []
+    vacancy = {"vacancy_id": "42", "title": "QA", "url": "https://hh.ru/vacancy/42"}
+
+    def fake_get_vacancies(driver, settings):
+        scrapes["n"] += 1
+        if scrapes["n"] == 1:
+            return [vacancy]
+        stop_event.set()
+        return []
+
+    monkeypatch.setattr(hh, "setup_driver", lambda headless=False: _OkDriver())
+    monkeypatch.setattr(hh, "load_cookies", lambda driver, target: True)
+    monkeypatch.setattr(hh, "is_logged_in", lambda driver: True)
+    monkeypatch.setattr(hh, "get_vacancies_from_page", fake_get_vacancies)
+    monkeypatch.setattr(
+        hh, "_process_one",
+        lambda driver, vacancy, settings, repo, events: processed.append(vacancy) or True,
+    )
+
+    try:
+        hh._blocking_loop(stop_event)  # must return normally, not raise
+    finally:
+        db_connection.reset_connection()
+
+    assert processed == [vacancy]
+    assert [e for e in EventsRepo(conn).recent("hh", 10) if e["kind"] == "error"] == []
