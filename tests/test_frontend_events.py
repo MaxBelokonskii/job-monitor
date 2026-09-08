@@ -17,14 +17,16 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from conftest import requires_node
 
 FRONTEND_DIR = Path(__file__).resolve().parents[1] / "frontend"
 APP_JS = FRONTEND_DIR / "app.js"
 INDEX_HTML = FRONTEND_DIR / "index.html"
 STYLE_CSS = FRONTEND_DIR / "style.css"
 
-NODE_AVAILABLE = shutil.which("node") is not None
-skip_without_node = pytest.mark.skipif(not NODE_AVAILABLE, reason="Node.js not available")
+# Маркер и его причина — общие на весь набор, в tests/conftest.py: там же
+# живёт итоговое предупреждение о том, что именно осталось непроверенным.
+skip_without_node = requires_node
 
 # `\son` and not just `on`: `<div data-on...>` or a word ending in "on" must
 # not match, but every real handler attribute is preceded by whitespace.

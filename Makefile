@@ -7,6 +7,7 @@ install:
 	$(PY) -m pip install -r requirements.lock
 
 test:
+	@command -v node >/dev/null || echo "[внимание] Node.js не найден: поведенческие тесты frontend/app.js будут пропущены (XSS/CSP — только грепом)"
 	$(PY) -m pytest -q
 
 run:

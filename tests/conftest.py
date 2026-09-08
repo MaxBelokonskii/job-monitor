@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -105,3 +106,42 @@ def raw_client(_job_monitor_data_dir) -> TestClient:
     from api.main import app
 
     return TestClient(app, base_url="http://127.0.0.1:8000")
+
+
+# ── Тесты, которым нужен Node.js ──────────────────────────────────────
+#
+# `frontend/app.js` — не собираемый скрипт, и единственный способ проверить
+# его ПОВЕДЕНИЕ (а не наличие подстроки) — исполнить настоящую функцию в
+# node. Без node такие тесты пропускаются, и это молчаливое сужение защиты:
+# среди них поведенческие пины S5/S6 (экранирование недоверенного текста из
+# Telegram и hh.ru, запрет `javascript:`-URL) — на машине без node от них
+# остаётся только grep по исходнику. Причина пропуска поэтому говорит, что
+# именно не проверено, а `pytest_terminal_summary` ниже не даёт этому
+# потеряться в общем «14 skipped».
+
+NODE_AVAILABLE = shutil.which("node") is not None
+NODE_SKIP_REASON = (
+    "Node.js не найден: поведение frontend/app.js не проверено "
+    "(экранирование недоверенного текста, запрет javascript:-URL, "
+    "разбор ответов API). Установите node для полного прогона."
+)
+requires_node = pytest.mark.skipif(not NODE_AVAILABLE, reason=NODE_SKIP_REASON)
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:
+    """Пропуск из-за отсутствия Node не должен выглядеть как «всё зелено»."""
+    if NODE_AVAILABLE:
+        return
+    skipped = [
+        report
+        for report in terminalreporter.stats.get("skipped", [])
+        if NODE_SKIP_REASON in str(getattr(report, "longrepr", ""))
+    ]
+    if not skipped:
+        return
+    terminalreporter.write_sep("=", "Node.js не найден", yellow=True, bold=True)
+    terminalreporter.write_line(
+        f"{len(skipped)} тест(ов) поведения frontend/app.js пропущено. Среди них "
+        "поведенческие пины XSS и CSP (S5/S6): без node защита фронтенда держится "
+        "только грепом по исходнику. Полный прогон требует Node.js — см. README."
+    )

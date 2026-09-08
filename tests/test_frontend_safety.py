@@ -5,12 +5,14 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from conftest import requires_node
 
 FRONTEND_DIR = Path(__file__).resolve().parents[1] / "frontend"
 APP_JS = FRONTEND_DIR / "app.js"
 
-NODE_AVAILABLE = shutil.which("node") is not None
-skip_without_node = pytest.mark.skipif(not NODE_AVAILABLE, reason="Node.js not available")
+# Маркер и его причина — общие на весь набор, в tests/conftest.py: там же
+# живёт итоговое предупреждение о том, что именно осталось непроверенным.
+skip_without_node = requires_node
 
 # Verified by hand during the security review: none of these ever appear in
 # frontend/*.js. Each is a way untrusted Telegram/hh.ru content could turn
