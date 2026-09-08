@@ -10,6 +10,21 @@ from job_monitor import paths
 
 FORBIDDEN = ("\n", "\r", "\x00")
 
+# Ключи, которые приложение когда-то само писало в `.env` и больше не пишет.
+# Читателя у них нет и не было: `.env` читает только
+# `job_monitor/settings.py::load_secrets`, и берёт он оттуда ровно TG_API_ID и
+# TG_API_HASH, а прикладные настройки живут в SQLite. Опасна не сама мёртвая
+# строка, а её вид: пользователь открывает `~/.job-monitor/.env`, видит
+# `SAFE_MODE=false`, правит на `true`, перезапускает приложение и считает себя
+# в безопасном режиме, пока воркер продолжает писать людям.
+#
+# Удаляются именно эти три, а не «все незнакомые ключи»: `.env` лежит в
+# каталоге пользователя, и приложение убирает за собой, а не наводит порядок в
+# чужом файле. Пользователь мог дописать туда что-то осмысленное для себя —
+# `JOB_MONITOR_DATA_DIR`, переменную для прокси, — и молча стереть это было бы
+# ровно тем сюрпризом, от которого мы его и защищаем.
+RETIRED_KEYS = ("SAFE_MODE", "PARSE_HISTORY", "HISTORY_LIMIT")
+
 
 def _validate(key: str, value: str) -> None:
     if not key or "=" in key or any(bad in key for bad in FORBIDDEN):
@@ -40,6 +55,11 @@ def write_env(values: dict[str, str]) -> None:
     for key, value in values.items():
         _validate(key, value)
         merged[key] = value
+    # Вычистка при первой же записи: у пользователя, обновившегося с версии,
+    # которая эти ключи писала, файл иначе носил бы их вечно. Удаление стоит
+    # ПОСЛЕ слияния, поэтому мёртвый ключ не вернуть и через сам write_env().
+    for retired in RETIRED_KEYS:
+        merged.pop(retired, None)
     target = paths.env_file()
     handle, temporary = tempfile.mkstemp(dir=str(target.parent))
     replaced = False

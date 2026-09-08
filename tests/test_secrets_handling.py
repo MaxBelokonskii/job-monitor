@@ -24,8 +24,8 @@ def test_env_file_is_private(tmp_path, monkeypatch):
 
 def test_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
-    envfile.write_env({"TG_API_ID": "123", "SAFE_MODE": "true"})
-    assert envfile.read_env() == {"TG_API_ID": "123", "SAFE_MODE": "true"}
+    envfile.write_env({"TG_API_ID": "123", "HTTPS_PROXY": "http://127.0.0.1:3128"})
+    assert envfile.read_env() == {"TG_API_ID": "123", "HTTPS_PROXY": "http://127.0.0.1:3128"}
 
 
 def test_read_env_rejects_null_byte_in_existing_file(tmp_path, monkeypatch):
@@ -38,8 +38,55 @@ def test_read_env_rejects_null_byte_in_existing_file(tmp_path, monkeypatch):
 def test_write_env_preserves_previously_written_keys(tmp_path, monkeypatch):
     monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
     envfile.write_env({"TG_API_HASH": "abc"})
-    envfile.write_env({"SAFE_MODE": "false"})
-    assert envfile.read_env() == {"TG_API_HASH": "abc", "SAFE_MODE": "false"}
+    envfile.write_env({"HTTPS_PROXY": "http://127.0.0.1:3128"})
+    assert envfile.read_env() == {
+        "TG_API_HASH": "abc", "HTTPS_PROXY": "http://127.0.0.1:3128",
+    }
+
+
+# Ключи перечислены здесь буквально, а не взяты из `envfile.RETIRED_KEYS`:
+# тесты ниже должны падать на СВОЙСТВЕ («мёртвый ключ остался в файле»), а не
+# на отсутствии константы. Синхронность списков держит отдельная проверка.
+RETIRED_IN_ENV = ("SAFE_MODE", "PARSE_HISTORY", "HISTORY_LIMIT")
+
+
+def test_the_retired_key_list_matches_the_module() -> None:
+    assert set(envfile.RETIRED_KEYS) == set(RETIRED_IN_ENV), (
+        "список мёртвых ключей разошёлся с job_monitor/envfile.py — тесты ниже "
+        "перестали покрывать часть из них"
+    )
+
+
+@pytest.mark.parametrize("retired", RETIRED_IN_ENV)
+def test_a_retired_key_is_swept_out_on_the_next_write(tmp_path, monkeypatch, retired):
+    """`.env` пользователя, обновившегося с версии, которая писала туда копию
+    прикладных настроек, носил бы `SAFE_MODE=false` вечно: `write_env`
+    сливается со старым содержимым. Читателя у ключа нет, но его ВИД и был
+    первопричиной находки — пользователь правит `SAFE_MODE` на `true` и
+    считает себя в безопасном режиме, пока воркер читает `safe_mode` из базы
+    и продолжает писать людям."""
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
+    (tmp_path / ".env").write_text(
+        f"TG_API_ID=123\n{retired}=false\nHTTPS_PROXY=http://127.0.0.1:3128\n",
+        encoding="utf-8",
+    )
+
+    envfile.write_env({"TG_API_HASH": "abc"})
+
+    assert envfile.read_env() == {
+        "TG_API_ID": "123",
+        "TG_API_HASH": "abc",
+        "HTTPS_PROXY": "http://127.0.0.1:3128",
+    }, "мёртвый ключ остался, либо вместе с ним снесло что-то пользовательское"
+
+
+@pytest.mark.parametrize("retired", RETIRED_IN_ENV)
+def test_a_retired_key_cannot_be_written_back(tmp_path, monkeypatch, retired):
+    """Вычистка стоит после слияния, поэтому мёртвый ключ не вернуть даже
+    прямым вызовом: в `.env` живут только секреты (D5)."""
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
+    envfile.write_env({"TG_API_ID": "123", retired: "false"})
+    assert envfile.read_env() == {"TG_API_ID": "123"}
 
 
 def test_write_env_cleans_up_temp_file_on_failure(tmp_path, monkeypatch):
