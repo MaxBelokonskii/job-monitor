@@ -13,6 +13,13 @@
   /* Telegram */
   --tg: #2AABEE;
   --tg-dark: #1a8ec7;
+  /* Заливка нажатой кнопки-переключателя. Белым по --tg (#2AABEE) — 2.57:1,
+     по --tg-dark — 3.66:1: подпись «Остановить TG» на работающем воркере
+     читалась хуже любого другого текста в интерфейсе. Тон тот же (H=200°,
+     S=85%), светлота ниже: 6.10:1 и 8.18:1 при наведении. Считается
+     формулой WCAG из этого файла в tests/test_frontend_events.py. */
+  --tg-fill: #0c6897;
+  --tg-fill-hover: #0a547b;
   --tg-light: #e8f6fd;
   --tg-text: #0a4a6e;
 
@@ -89,11 +96,11 @@ body { font-family: 'Manrope', sans-serif; background: var(--bg); color: var(--t
 /* Toggle script buttons */
 .btn-toggle { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600; font-family: 'Manrope', sans-serif; cursor: pointer; border: 2px solid; transition: all .2s; }
 .btn-toggle-tg { background: var(--bg); border-color: var(--tg); color: var(--text); }
-.btn-toggle-tg.active { background: var(--tg); border-color: var(--tg); color: #fff; }
-.btn-toggle-tg.active:hover { background: var(--tg-dark); }
+.btn-toggle-tg.active { background: var(--tg-fill); border-color: var(--tg-fill); color: #fff; }
+.btn-toggle-tg.active:hover:not(:disabled) { background: var(--tg-fill-hover); border-color: var(--tg-fill-hover); }
 .btn-toggle-hh { background: var(--bg); border-color: var(--hh); color: var(--text); }
 .btn-toggle-hh.active { background: var(--hh); border-color: var(--hh); color: #fff; }
-.btn-toggle-hh.active:hover { background: var(--hh-dark); }
+.btn-toggle-hh.active:hover:not(:disabled) { background: var(--hh-dark); border-color: var(--hh-dark); }
 
 /* Status indicator dot */
 .status-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; transition: background .3s; }
@@ -103,15 +110,28 @@ body { font-family: 'Manrope', sans-serif; background: var(--bg); color: var(--t
    still hold a live task that makes start() refuse. Give it its own colour
    so it never reads as an ordinary "stopped". */
 .status-dot.error { background: var(--yellow); animation: pulse 1.5s ease-in-out infinite; }
-.btn-toggle.worker-error { border-color: var(--yellow); color: var(--yellow); }
+/* Цвет подписи — --yellow-text, а не --yellow: последний на --bg даёт 2.67:1,
+   и «Ошибка HH — нужен перезапуск приложения» читалось хуже всего именно
+   тогда, когда это важнее всего. Рамка остаётся жёлтой: она не текст. */
+.btn-toggle.worker-error { border-color: var(--yellow); background: var(--yellow-light); color: var(--yellow-text); }
 
 /* Worker error banner (shows WorkerStatus.last_error from GET /api/state) */
 .worker-alert { background: var(--yellow-light); border: 1px solid var(--yellow); color: var(--yellow-text);
   border-radius: var(--radius-sm); padding: 8px 12px; font-size: 12px; font-weight: 500; }
 /* Кнопка воркера, нажатие на которую заведомо ничего не сделает
    (state=stopping — остановка уже идёт; state=error с can_start=false —
-   таска не отвечает на отмену). См. workerView() в app.js. */
-.btn-toggle:disabled { opacity: .65; cursor: not-allowed; }
+   таска не отвечает на отмену). См. workerView() в app.js.
+
+   Сплошная `opacity` здесь недопустима: она гасит и подпись, а в состоянии
+   `stopping` подпись — ЕДИНСТВЕННЫЙ индикатор (баннер .worker-alert
+   показывается только при `error`). Считано по WCAG для реальной палитры,
+   13px/600: «Остановка TG…» уходило до 1.86:1, «Остановка HH…» — 5.42 →
+   3.57. Поэтому «выключено» рисуется явными цветами: заливка становится
+   светлой версией фирменного цвета, подпись — тёмной, контраст растёт, а
+   не падает. */
+.btn-toggle:disabled { cursor: not-allowed; }
+.btn-toggle-tg.active:disabled { background: var(--tg-light); border-color: var(--tg); color: var(--tg-text); }
+.btn-toggle-hh.active:disabled { background: var(--hh-light); border-color: var(--hh); color: var(--hh-text); }
 @keyframes pulse { 0%,100%{opacity:1}50%{opacity:.3} }
 
 /* ── Cards ─────────────────────────────────────────────────────────── */
@@ -160,7 +180,7 @@ body { font-family: 'Manrope', sans-serif; background: var(--bg); color: var(--t
 .badge-ok { background: var(--green-light); color: var(--green); }
 .badge-skip { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
 .badge-error { background: var(--red-light); color: var(--red); }
-.badge-safe { background: var(--yellow-light); color: var(--yellow); }
+.badge-safe { background: var(--yellow-light); color: var(--yellow-text); }
 
 /* ── Log console ───────────────────────────────────────────────────── */
 .log-console { background: #0f1117; border-radius: var(--radius); padding: 14px; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #c9d1d9; height: 440px; overflow-y: auto; line-height: 1.7; border: 1px solid #30363d; white-space: pre-wrap; }
@@ -235,7 +255,7 @@ body { font-family: 'Manrope', sans-serif; background: var(--bg); color: var(--t
 .status-badge { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 10px; font-weight: 600; }
 .status-sent { background: var(--green-light); color: var(--green); }
 .status-skip { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
-.status-wait { background: var(--yellow-light); color: var(--yellow); }
+.status-wait { background: var(--yellow-light); color: var(--yellow-text); }
 /* HH_STATUS_SCENARIO_ERROR ("ошибка сценария", job_monitor/workers/hh.py):
    a terminal failure, not a vacancy still waiting its turn. */
 .status-error { background: var(--red-light); color: var(--red); }

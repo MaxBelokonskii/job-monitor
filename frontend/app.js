@@ -969,29 +969,41 @@ function isStatePayload(value) {
     && !!value.hh && typeof value.hh === 'object';
 }
 
+// Перепланировка стоит в `finally`, а не последней строкой тела. apiGet() свои
+// сбои уже глотает, но applyWorkerState / updateMetrics / renderRecent — нет:
+// одно исключение в любой из них останавливало опрос НАВСЕГДА. Раньше ценой
+// были устаревшие цифры; с тех пор как кнопка воркера дизейблится по
+// `state` из этого же ответа, ценой стала ещё и кнопка, залипшая в
+// `disabled` без единого объяснения на экране. Ошибка при этом не глотается
+// молча — она уходит в консоль, — но цикл жизни опроса от неё не зависит.
 async function pollStatus() {
-  const state = await apiGet('/state');
-  if (isStatePayload(state)) {
-    const tg = state.tg;
-    tgState.safeMode = tg.safe_mode;
-    tgState.sentToday = tg.sent_today || 0;
-    tgState.foundToday = tg.found_today || 0;
-    tgState.sentTotal = tg.sent_total || 0;
-    if (tg.max_per_day) tgState.maxPerDay = tg.max_per_day;
-    if (typeof tg.api_hash_set !== 'undefined') tgState.apiHashSet = tg.api_hash_set;
-    applyWorkerState(tgState, tg, updateTGButton);
+  try {
+    const state = await apiGet('/state');
+    if (isStatePayload(state)) {
+      const tg = state.tg;
+      tgState.safeMode = tg.safe_mode;
+      tgState.sentToday = tg.sent_today || 0;
+      tgState.foundToday = tg.found_today || 0;
+      tgState.sentTotal = tg.sent_total || 0;
+      if (tg.max_per_day) tgState.maxPerDay = tg.max_per_day;
+      if (typeof tg.api_hash_set !== 'undefined') tgState.apiHashSet = tg.api_hash_set;
+      applyWorkerState(tgState, tg, updateTGButton);
 
-    const hh = state.hh;
-    hhState.sentToday = hh.sent_today || 0;
-    hhState.foundToday = hh.found_today || 0;
-    hhState.totalSent = hh.total_sent || 0;
-    hhState.maxPerDay = hh.max_per_day || 20;
-    applyWorkerState(hhState, hh, updateHHButton);
+      const hh = state.hh;
+      hhState.sentToday = hh.sent_today || 0;
+      hhState.foundToday = hh.found_today || 0;
+      hhState.totalSent = hh.total_sent || 0;
+      hhState.maxPerDay = hh.max_per_day || 20;
+      applyWorkerState(hhState, hh, updateHHButton);
 
-    updateMetrics();
-    renderRecent(state.recent || []);
+      updateMetrics();
+      renderRecent(state.recent || []);
+    }
+  } catch (error) {
+    console.error('pollStatus:', error);
+  } finally {
+    setTimeout(pollStatus, 3000);
   }
-  setTimeout(pollStatus, 3000);
 }
 
 // ── Init ──────────────────────────────────────────────────────────────

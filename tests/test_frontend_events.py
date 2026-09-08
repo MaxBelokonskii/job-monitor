@@ -486,6 +486,44 @@ def test_poll_ignores_a_json_error_body() -> None:
     assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
 
 
+@skip_without_node
+def test_a_throwing_renderer_does_not_kill_the_poll_loop() -> None:
+    """Перепланировка обязана стоять в `finally`.
+
+    `setTimeout(pollStatus, 3000)` был последней строкой тела: apiGet() свои
+    сбои глотает сам, но applyWorkerState / updateMetrics / renderRecent —
+    нет, и одно исключение в любой из них останавливало опрос НАВСЕГДА.
+    Раньше ценой были устаревшие цифры; с тех пор как кнопка воркера
+    дизейблится по `state` из этого же ответа, ценой стала ещё и кнопка,
+    залипшая в `disabled` — без баннера и без объяснения.
+    """
+    sources = "\n".join(_maybe_extract(name) for name in ("isStatePayload", "pollStatus"))
+    harness = """
+    let scheduled = 0;
+    globalThis.setTimeout = () => { scheduled++; };
+    let boom = null;
+    function applyWorkerState() { if (boom === 'apply') throw new Error('apply boom'); }
+    function updateTGButton() {}
+    function updateHHButton() {}
+    function updateMetrics() { if (boom === 'metrics') throw new Error('metrics boom'); }
+    function renderRecent() { if (boom === 'recent') throw new Error('recent boom'); }
+    const tgState = {}; const hhState = {};
+    const payload = { tg: { state: 'running', running: true },
+                      hh: { state: 'running', running: true }, recent: [] };
+    async function apiGet() { return payload; }
+
+    (async () => {
+      for (const which of ['apply', 'metrics', 'recent', null]) {
+        boom = which;
+        await pollStatus();
+      }
+      same('опрос перепланирован после каждого тика', scheduled, 4);
+    })();
+    """
+    result = _run_node(f"{sources}\n{NODE_CHECK_HELPER}\n{harness}")
+    assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
+
+
 # ── Ровно один периодический таймер во всём app.js (L13) ──────────────
 
 
@@ -561,13 +599,152 @@ def test_file_zone_has_a_visible_focus_ring() -> None:
     assert ".file-zone:focus-visible" in STYLE_CSS.read_text(encoding="utf-8")
 
 
-# ── Контраст текста предупреждения (WCAG AA) ──────────────────────────
+# ── Контраст текста (WCAG AA) ─────────────────────────────────────────
+#
+# Проверка считает коэффициент формулой WCAG по РЕАЛЬНОМУ style.css, а не
+# сверяет строку правила с хардкодом: прежняя версия смотрела ровно на
+# `.worker-alert` и на то, что цвет взят из переменной, поэтому целый класс
+# регрессий проходил мимо неё. `.btn-toggle:disabled { opacity: .65 }`,
+# добавленный тем же кругом правок, который поднял `.worker-alert` с 2.84:1
+# до 8.38:1, уронил подпись «Остановка TG…» до 1.86:1 — и тест этого не
+# заметил, потому что смотрел не туда и не так.
+#
+# Ниже — маленький резолвер каскада: он раскрывает `var(--…)`, применяет
+# правила по специфичности и порядку и отвечает на вопрос «какой цвет и на
+# каком фоне реально увидит пользователь». Состояния кнопок при этом не
+# переписаны заново, а получены запуском настоящего `updateWorkerButton()`
+# из app.js в Node — иначе список состояний разошёлся бы с кодом.
 
 
-def _css_var(name: str) -> str:
-    match = re.search(rf"{re.escape(name)}:\s*(#[0-9a-fA-F]{{6}})", STYLE_CSS.read_text(encoding="utf-8"))
-    assert match, f"переменная {name} не найдена в style.css"
-    return match.group(1)
+def _css_source() -> str:
+    return STYLE_CSS.read_text(encoding="utf-8")
+
+
+def _strip_comments_and_at_rules(css: str) -> str:
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    out, index = [], 0
+    while index < len(css):
+        at = css.find("@", index)
+        if at == -1:
+            out.append(css[index:])
+            break
+        out.append(css[index:at])
+        brace = css.find("{", at)
+        assert brace != -1, "at-правило без блока"
+        depth, position = 0, brace
+        while position < len(css):
+            if css[position] == "{":
+                depth += 1
+            elif css[position] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            position += 1
+        index = position + 1
+    return "".join(out)
+
+
+RULE = re.compile(r"([^{}]+)\{([^{}]*)\}", re.DOTALL)
+SELECTOR_TOKEN = re.compile(r"\.([\w-]+)|:not\(([^)]*)\)|(::?[\w-]+)|(\S)")
+
+
+def _declarations(body: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for piece in body.split(";"):
+        if ":" not in piece:
+            continue
+        name, _, value = piece.partition(":")
+        result[name.strip()] = value.strip()
+    return result
+
+
+def _rules() -> list[tuple[str, dict[str, str], int]]:
+    return [
+        (selector.strip(), _declarations(body), order)
+        for order, (selectors, body) in enumerate(RULE.findall(_strip_comments_and_at_rules(_css_source())))
+        for selector in selectors.split(",")
+    ]
+
+
+def _root_variables() -> dict[str, str]:
+    variables: dict[str, str] = {}
+    for selector, declarations, _order in _rules():
+        if selector == ":root":
+            variables.update({k: v for k, v in declarations.items() if k.startswith("--")})
+    assert variables, ":root с переменными не найден в style.css"
+    return variables
+
+
+VAR_CALL = re.compile(r"var\(\s*(--[\w-]+)\s*\)")
+
+
+def _resolve(value: str, variables: dict[str, str], depth: int = 0) -> str:
+    assert depth < 10, f"циклическая переменная в {value!r}"
+    match = VAR_CALL.search(value)
+    if not match:
+        return value.strip()
+    name = match.group(1)
+    assert name in variables, f"переменная {name} не объявлена в :root"
+    return _resolve(value.replace(match.group(0), variables[name]), variables, depth + 1)
+
+
+def _parse_selector(selector: str):
+    """`.a.b:disabled` → (классы, псевдоклассы, отрицания). None — не поддержано."""
+    classes, pseudos, negations = set(), set(), set()
+    for klass, negated, pseudo, other in SELECTOR_TOKEN.findall(selector):
+        if klass:
+            classes.add(klass)
+        elif negated:
+            inner = negated.strip()
+            if not inner.startswith(":"):
+                return None
+            negations.add(inner)
+        elif pseudo:
+            pseudos.add(pseudo)
+        elif other:
+            return None            # комбинаторы, теги, атрибуты — не наш случай
+    return classes, pseudos, negations
+
+
+def _specificity(classes, pseudos, negations) -> int:
+    return len(classes) + len(pseudos) + len(negations)
+
+
+def _computed(classes: set[str], pseudos: set[str]) -> dict[str, str]:
+    """Значения свойств для элемента с этими классами и псевдоклассами."""
+    variables = _root_variables()
+    winners: dict[str, tuple[int, int, str]] = {}
+    for selector, declarations, order in _rules():
+        parsed = _parse_selector(selector)
+        if parsed is None:
+            continue
+        needed_classes, needed_pseudos, negations = parsed
+        if not needed_classes or not needed_classes <= classes:
+            continue
+        if not needed_pseudos <= pseudos:
+            continue
+        if any(negated in pseudos for negated in negations):
+            continue
+        rank = (_specificity(needed_classes, needed_pseudos, negations), order)
+        for name, value in declarations.items():
+            if name.startswith("--"):
+                continue
+            previous = winners.get(name)
+            if previous is None or rank >= previous[:2]:
+                winners[name] = (*rank, _resolve(value, variables))
+    return {name: value for name, (_s, _o, value) in winners.items()}
+
+
+HEX = re.compile(r"#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})\b")
+
+
+def _as_hex(value: str) -> str:
+    match = HEX.search(value)
+    assert match, f"не цвет: {value!r}"
+    raw = match.group(0)
+    if len(raw) == 4:
+        raw = "#" + "".join(channel * 2 for channel in raw[1:])
+    return raw.lower()
 
 
 def _relative_luminance(hex_colour: str) -> float:
@@ -582,17 +759,140 @@ def _contrast(foreground: str, background: str) -> float:
     return (lighter + 0.05) / (darker + 0.05)
 
 
+PAGE_BACKGROUND = "--bg"
+
+
+def _blend(colour: str, backdrop: str, alpha: float) -> str:
+    top = [int(colour[i:i + 2], 16) for i in (1, 3, 5)]
+    bottom = [int(backdrop[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#" + "".join(f"{round(a * alpha + b * (1 - alpha)):02x}" for a, b in zip(top, bottom))
+
+
+def _text_contrast(classes: set[str], pseudos: set[str] = frozenset()) -> float:
+    """Контраст подписи элемента с фоном, который он реально получает.
+
+    `opacity` учитывается: она композитит ВЕСЬ элемент — и подпись, и
+    заливку — поверх фона страницы, и именно так `.btn-toggle:disabled
+    { opacity: .65 }` уводил «Остановка TG…» с 2.57:1 на 1.86:1. Без этого
+    шага проверка не увидела бы ровно тот дефект, ради которого написана.
+    """
+    computed = _computed(set(classes), set(pseudos))
+    variables = _root_variables()
+    colour = computed.get("color")
+    assert colour, f"у {sorted(classes)} нет цвета текста"
+    background = computed.get("background") or computed.get("background-color")
+    if background is None or "transparent" in background or background == "none":
+        background = variables[PAGE_BACKGROUND]
+    foreground, backdrop = _as_hex(colour), _as_hex(background)
+    alpha = float(computed.get("opacity", "1"))
+    if alpha < 1:
+        page = _as_hex(variables[PAGE_BACKGROUND])
+        foreground = _blend(foreground, page, alpha)
+        backdrop = _blend(backdrop, page, alpha)
+    return _contrast(foreground, backdrop)
+
+
+def _css_var(name: str) -> str:
+    """Оставлено для совместимости с проверками, которым нужен сам цвет."""
+    return _as_hex(_resolve(f"var({name})", _root_variables()))
+
+
+def test_the_cascade_resolver_agrees_with_the_stylesheet() -> None:
+    """Сначала — доверие к самому инструменту: он обязан видеть и
+    специфичность, и переменные, иначе всё, что он «проверяет», ничего не
+    стоит."""
+    assert _computed({"btn-toggle", "btn-toggle-tg"}, set())["color"] == _css_var("--text")
+    assert _computed({"btn-toggle", "btn-toggle-tg", "active"}, set())["background"] == _css_var("--tg-fill")
+    disabled = _computed({"btn-toggle", "btn-toggle-tg", "active"}, {":disabled"})
+    assert disabled["background"] == _css_var("--tg-light")
+    assert disabled["cursor"] == "not-allowed"
+    hovered = _computed({"btn-toggle", "btn-toggle-tg", "active"}, {":hover", ":disabled"})
+    assert hovered["background"] == _css_var("--tg-light"), (
+        ":hover не должен переигрывать :disabled — иначе наведение возвращает"
+        " нечитаемую заливку"
+    )
+
+
+WORKER_BUTTON_STATES = """
+const nodes = {};
+globalThis.document = { getElementById: (id) => nodes[id] || null };
+function el() { return {}; }
+function fill() {}
+
+const rows = [];
+for (const state of ['stopped', 'starting', 'running', 'stopping', 'error']) {
+  for (const canStart of [true, false]) {
+    for (const [name, toggleClass] of [['TG', 'btn-toggle-tg'], ['HH', 'btn-toggle-hh']]) {
+      const button = { className: '', disabled: false };
+      nodes.button = button;
+      nodes.alert = { style: {}, textContent: '' };
+      updateWorkerButton(
+        { state, canStart, lastError: 'воркер не остановился' },
+        name, 'button', 'dot', 'alert', toggleClass,
+      );
+      rows.push({ state, canStart, name, className: button.className, disabled: button.disabled });
+    }
+  }
+}
+console.log(JSON.stringify(rows));
+"""
+
+
+def _worker_button_states() -> list[dict]:
+    sources = "\n".join(
+        _maybe_extract(name) for name in ("workerView", "workerSignature", "updateWorkerButton")
+    )
+    result = _run_node(f"{sources}\n{WORKER_BUTTON_STATES}")
+    assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    rows = json.loads(result.stdout.strip().splitlines()[-1])
+    assert len(rows) == 20, rows
+    assert any(row["disabled"] for row in rows), "ни одного disabled — состояния собраны неверно"
+    return rows
+
+
+@skip_without_node
+def test_every_worker_button_label_meets_wcag_aa() -> None:
+    """Подпись кнопки воркера читаема в КАЖДОМ состоянии, включая выключенное.
+
+    В состоянии `stopping` подпись — единственный индикатор: баннер
+    `.worker-alert` показывается только при `error`. Сплошная
+    `.btn-toggle:disabled { opacity: .65 }` роняла её до 1.86:1 («Остановка
+    TG…»), 3.57:1 («Остановка HH…») и 1.87:1 («Ошибка HH — нужен перезапуск
+    приложения»). Состояния берутся из настоящего `updateWorkerButton()`,
+    поэтому новое состояние кнопки нельзя добавить в обход этой проверки.
+    """
+    failures = []
+    for row in _worker_button_states():
+        classes = set(row["className"].split())
+        variants = [frozenset(), frozenset({":hover"})]
+        if row["disabled"]:
+            variants = [frozenset({":disabled"}), frozenset({":disabled", ":hover"})]
+        for pseudos in variants:
+            ratio = _text_contrast(classes, pseudos)
+            if ratio < 4.5:
+                failures.append(
+                    f"{row['name']} state={row['state']} can_start={row['canStart']}"
+                    f" {sorted(pseudos) or 'обычная'}: {ratio:.2f}:1"
+                )
+    assert not failures, "подписи кнопок ниже WCAG AA 4.5:1:\n" + "\n".join(failures)
+
+
 def test_worker_alert_text_meets_wcag_aa() -> None:
     """`.worker-alert` — единственное место, где показывается `last_error`
     воркера, и он был `--yellow` (#ca8a04) на `--yellow-light` (#fefce8):
     2.84:1 при 12px, норма AA — 4.5:1."""
-    css = STYLE_CSS.read_text(encoding="utf-8")
-    rule = re.search(r"\.worker-alert \{[^}]*\}", css, re.DOTALL)
-    assert rule, ".worker-alert не найден"
-    colour = re.search(r"color:\s*var\((--[\w-]+)\)", rule.group(0))
-    assert colour, ".worker-alert должен брать цвет текста из переменной"
-    ratio = _contrast(_css_var(colour.group(1)), _css_var("--yellow-light"))
+    ratio = _text_contrast({"worker-alert"})
     assert ratio >= 4.5, f"контраст текста предупреждения {ratio:.2f}:1 — ниже WCAG AA 4.5:1"
+
+
+def test_yellow_status_badges_meet_wcag_aa() -> None:
+    """`.badge-safe` («безопасный режим» в ленте событий) и `.status-wait`
+    (вакансия, ожидающая отклика) — те же `--yellow` на `--yellow-light`,
+    2.84:1. Теперь, когда `--yellow-text` существует, у них нет причин
+    оставаться нечитаемыми."""
+    for name in ("badge-safe", "status-wait"):
+        ratio = _text_contrast({name})
+        assert ratio >= 4.5, f".{name}: {ratio:.2f}:1 — ниже WCAG AA 4.5:1"
 
 
 def test_the_old_low_contrast_yellow_is_not_used_for_warning_text() -> None:
