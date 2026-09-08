@@ -20,7 +20,17 @@ from job_monitor.security import (
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 
-app = FastAPI(title="QA Monitor API", version="2.0")
+app = FastAPI(
+    title="QA Monitor API",
+    version="2.1.0",
+    # /api/* is token-gated (see app_token_middleware below), but FastAPI's
+    # own /docs, /redoc, /openapi.json and /docs/oauth2-redirect are not
+    # under /api/ and would otherwise return 200 with no token at all —
+    # unnecessary surface on a tool whose premise is a token-gated API.
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 
 app.add_middleware(
     CORSMiddleware,
