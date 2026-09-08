@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import stat
 from pathlib import Path
 
@@ -91,18 +92,80 @@ def test_rotation_is_bounded(isolated_logging) -> None:
     assert handler.backupCount > 0
 
 
-@pytest.mark.parametrize(
-    "logger_name, channel",
-    [
-        ("job_monitor.workers.telegram", "tg"),
-        ("job_monitor.telegram_client", "tg"),
-        ("api.tg_routes", "tg"),
-        ("api.auth_routes", "tg"),
-        ("job_monitor.workers.hh", "hh"),
-        ("job_monitor.workers.hh_steps", "hh"),
-        ("api.hh_routes", "hh"),
-    ],
-)
+# ── Кто логирует, тот и виден на вкладке ──────────────────────────────
+#
+# Прежняя версия этих тестов была параметризована списком из семи имён,
+# скопированным из `CHANNELS`, и сама же создавала запись в каждом. Пять из
+# семи имён принадлежали модулям без единого `getLogger` — то есть проверка
+# пиннила таблицу конфигурации, а не свойство: она осталась бы зелёной и
+# если бы модуль перестал логировать, и если бы новый модуль начал логировать
+# мимо таблицы. Ниже список берётся из ИСХОДНИКОВ, а таблица проверяется на
+# соответствие им в обе стороны.
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SCANNED_PACKAGES = ("api", "job_monitor")
+MODULE_LOGGER = re.compile(r"^\s*\w+\s*=\s*logging\.getLogger\(__name__\)", re.MULTILINE)
+
+# Модули, которые логируют, но сознательно не подключены ни к одной вкладке.
+UNROUTED = {
+    # Пишет только через дочерние логгеры `…manager.<имя воркера>` (см.
+    # `_worker_log`), и они в таблице есть. Сам модульный логгер молчит:
+    # сообщение «про какой-то воркер» без указания, про какой, попало бы не
+    # на ту вкладку.
+    "job_monitor.workers.manager",
+}
+
+
+def _modules_that_log() -> set[str]:
+    """Имена логгеров всех модулей с `logging.getLogger(__name__)`."""
+    found: set[str] = set()
+    for package in SCANNED_PACKAGES:
+        for source in (REPO_ROOT / package).rglob("*.py"):
+            if "__pycache__" in source.parts:
+                continue
+            if not MODULE_LOGGER.search(source.read_text(encoding="utf-8")):
+                continue
+            relative = source.relative_to(REPO_ROOT).with_suffix("")
+            parts = [part for part in relative.parts if part != "__init__"]
+            found.add(".".join(parts))
+    assert found, "не найдено ни одного модуля с getLogger(__name__) — дерево переехало?"
+    return found
+
+
+def _routed() -> dict[str, str]:
+    return {name: channel for channel, (_file, names) in CHANNELS.items() for name in names}
+
+
+def test_every_module_that_logs_is_visible_on_some_tab() -> None:
+    """Единственный способ увидеть сообщение приложения — вкладка логов в UI,
+    а обработчики вешаются на конкретные логгеры, а не на общего родителя.
+    Модуль, начавший логировать и не вписанный в CHANNELS, поэтому пишет в
+    пустоту."""
+    missing = sorted(_modules_that_log() - set(_routed()) - UNROUTED)
+    assert not missing, (
+        "модуль логирует, но его логгера нет ни в одном канале — его записи "
+        "не попадут ни в один файл и не будут видны в UI:\n" + "\n".join(missing)
+    )
+
+
+def test_no_channel_lists_a_module_that_never_logs() -> None:
+    """Обратная сторона: имя в таблице, за которым никто не стоит, — это
+    обещание вкладки, которое никогда не исполнится."""
+    logging_modules = _modules_that_log()
+    dead = sorted(
+        name
+        for name in _routed()
+        if name not in logging_modules
+        # дочерние логгеры супервизора (`…manager.tg`) заводятся динамически
+        and not name.startswith("job_monitor.workers.manager.")
+    )
+    assert not dead, (
+        "канал перечисляет логгер, которого никто не заводит — таблица описывает "
+        "намерение, а не устройство:\n" + "\n".join(dead)
+    )
+
+
+@pytest.mark.parametrize("logger_name, channel", sorted(_routed().items()))
 def test_records_land_in_the_right_file(isolated_logging, logger_name, channel) -> None:
     configure_logging()
     logging.getLogger(logger_name).info("метка %s", logger_name)
@@ -111,7 +174,51 @@ def test_records_land_in_the_right_file(isolated_logging, logger_name, channel) 
 
     assert logger_name in log_file(channel).read_text(encoding="utf-8")
     other = "hh" if channel == "tg" else "tg"
-    assert logger_name not in log_file(other).read_text(encoding="utf-8")
+    if logger_name in _routed_to_both():
+        assert logger_name in log_file(other).read_text(encoding="utf-8")
+    else:
+        assert logger_name not in log_file(other).read_text(encoding="utf-8")
+
+
+def _routed_to_both() -> set[str]:
+    channels_of: dict[str, set[str]] = {}
+    for channel, (_file, names) in CHANNELS.items():
+        for name in names:
+            channels_of.setdefault(name, set()).add(channel)
+    return {name for name, channels in channels_of.items() if len(channels) > 1}
+
+
+def test_a_dropped_settings_key_is_reported_on_both_tabs(isolated_logging) -> None:
+    """Настройки, которые молча не применились, — сообщение для пользователя,
+    а не для разработчика.
+
+    `job_monitor/settings.py::_drop_unknown_fields` предупреждает о ключах,
+    выброшенных при чтении сохранённой конфигурации: часть настроек не
+    действует, и объяснение этому есть только здесь. Логгер `job_monitor.
+    settings` не был подключён ни к одному файлу, то есть предупреждение не
+    было видно НИГДЕ. Разделить «телеграмный ключ» и «hh-шный» неоткуда,
+    поэтому оно идёт на обе вкладки.
+
+    Проверяется настоящий путь: неизвестный ключ кладётся в базу, читается
+    штатным `load_settings()`, и предупреждение ищется в файлах логов.
+    """
+    from job_monitor.db.connection import connect
+    from job_monitor.db.repositories import SettingsRepo
+    from job_monitor.settings import load_settings
+
+    configure_logging()
+    conn = connect(":memory:")
+    SettingsRepo(conn).save({"safe_mode": True, "unicorn_mode": "yes"})
+
+    load_settings(conn)
+
+    for handler in logging.getLogger("job_monitor.settings").handlers:
+        handler.flush()
+    for channel in CHANNELS:
+        text = log_file(channel).read_text(encoding="utf-8")
+        assert "unicorn_mode" in text, (
+            f"предупреждение о выброшенном ключе не видно на вкладке {channel}"
+        )
 
 
 @pytest.mark.parametrize("worker", ["tg", "hh"])

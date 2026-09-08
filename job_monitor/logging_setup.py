@@ -52,24 +52,38 @@ _MARKER = "_job_monitor_channel"
 # Логгер → файл. Ключ словаря совпадает с именем воркера в WorkerManager,
 # поэтому worker_logger() ниже умеет по имени воркера отдать логгер,
 # попадающий в нужный файл.
+#
+# В таблице только те логгеры, которые кто-то действительно заводит. Раньше
+# из семи имён пять (`api.tg_routes`, `api.auth_routes`, `api.hh_routes`,
+# `job_monitor.telegram_client`, `job_monitor.workers.hh_steps`) принадлежали
+# модулям без единого `getLogger` — конфигурация наполовину описывала
+# намерение, а не устройство, и параметризованный по ней тест пиннил сам
+# список, а не свойство. Обработчики вешаются на конкретные (листовые)
+# логгеры, а не на общего родителя, так что незаписанный сюда модуль в файл
+# не попадёт вообще; ровно это и проверяет tests/test_logging_setup.py —
+# «модуль, который логирует, обязан быть виден на какой-то вкладке».
+#
+# `job_monitor.settings` — в ОБА канала. Он предупреждает о выброшенных при
+# чтении неизвестных ключах настроек (`_drop_unknown_fields`), то есть о том,
+# что часть сохранённой конфигурации молча не применяется. Ключ мог быть и
+# телеграмный, и hh-шный, разделить их источник неоткуда, а невидимое
+# предупреждение бесполезно — пусть лучше строчка продублируется на обеих
+# вкладках, чем не появится ни на одной.
 CHANNELS: dict[str, tuple[str, tuple[str, ...]]] = {
     "tg": (
         "tg_system.log",
         (
             "job_monitor.workers.telegram",
             "job_monitor.workers.manager.tg",
-            "job_monitor.telegram_client",
-            "api.tg_routes",
-            "api.auth_routes",
+            "job_monitor.settings",
         ),
     ),
     "hh": (
         "hh.log",
         (
             "job_monitor.workers.hh",
-            "job_monitor.workers.hh_steps",
             "job_monitor.workers.manager.hh",
-            "api.hh_routes",
+            "job_monitor.settings",
         ),
     ),
 }
