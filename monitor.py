@@ -13,7 +13,6 @@ from job_monitor import paths
 
 load_dotenv(paths.env_file())
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = paths.config_file()
 
 # --- Загрузка конфига с кешированием (TTL 30 сек) ---
@@ -149,6 +148,14 @@ load_sent_users()
 def extract_usernames(text):
     return re.findall(r'@[\w\d_]+', text)
 
+def sanitize_log_field(value: str) -> str:
+    """Telegram message text is untrusted. sent_log_*.txt is parsed line by
+    line via a naive split("|") (api/tg_routes.py::get_sent_list), so a
+    literal newline in the text would forge additional fake log lines
+    (log injection). Collapse any newline into a space before it ever
+    reaches the log file."""
+    return value.replace("\r", " ").replace("\n", " ")
+
 def reset_daily_state():
     global sent_today, last_run_date, sent_users, LOG_FILE
     old_log = get_log_file(last_run_date)
@@ -175,7 +182,7 @@ async def handler(event):
     delay_min = cfg["delay_min"]
     delay_max = cfg["delay_max"]
     message_text = cfg.get("template") or ""
-    file_path = cfg.get("file_path") or os.path.join(BASE_DIR, "Пак_Виталий_Владимирович.pdf")
+    file_path = cfg.get("file_path") or str(paths.path("resume.pdf"))
 
     # Проверяем что сообщение из нужного канала
     try:
@@ -241,7 +248,7 @@ async def handler(event):
             sent_today += 1
 
             with open(LOG_FILE, "a", encoding="utf-8") as f:
-                f.write(f"{username} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {text[:80].strip()}...\n")
+                f.write(f"{username} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | {sanitize_log_field(text[:80].strip())}...\n")
 
             log.info(f"[OK] Отправлено: {username} | Сегодня: {sent_today}/{max_per_day}")
 
@@ -266,7 +273,7 @@ async def parse_history(cfg: dict):
     delay_min = cfg["delay_min"]
     delay_max = cfg["delay_max"]
     message_text = cfg.get("template") or ""
-    file_path = cfg.get("file_path") or os.path.join(BASE_DIR, "Пак_Виталий_Владимирович.pdf")
+    file_path = cfg.get("file_path") or str(paths.path("resume.pdf"))
     history_limit = int(os.getenv("HISTORY_LIMIT", str(cfg.get("history_limit", 50))))
 
     log.info(f"[HISTORY] Читаю последние {history_limit} сообщений из каждого канала...")
@@ -310,7 +317,7 @@ async def parse_history(cfg: dict):
                         save_sent_user(username)
                         sent_today += 1
                         with open(LOG_FILE, "a", encoding="utf-8") as f:
-                            f.write(f"{username} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | [HISTORY] {msg.text[:80].strip()}...\n")
+                            f.write(f"{username} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | [HISTORY] {sanitize_log_field(msg.text[:80].strip())}...\n")
                         log.info(f"[HISTORY][OK] Отправлено: {username} | Сегодня: {sent_today}/{max_per_day}")
                         await asyncio.sleep(random.randint(delay_min, delay_max))
                     except Exception as e:

@@ -38,6 +38,24 @@ def test_write_env_preserves_previously_written_keys(tmp_path, monkeypatch):
     assert envfile.read_env() == {"TG_API_HASH": "abc", "SAFE_MODE": "false"}
 
 
+def test_write_env_cleans_up_temp_file_on_failure(tmp_path, monkeypatch):
+    """write_env() writes through a temp file (mkstemp) then os.replace()s it
+    onto .env. A failure anywhere in between used to leave that 0600 temp
+    file sitting in the data directory forever — no try/finally around the
+    sequence."""
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
+
+    def boom(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(envfile.os, "replace", boom)
+    with pytest.raises(OSError):
+        envfile.write_env({"TG_API_ID": "123"})
+
+    leftover = list(tmp_path.iterdir())
+    assert leftover == [], f"temp file(s) left behind after a failed write: {leftover}"
+
+
 def test_reveal_hash_endpoint_is_gone(client):
     assert client.get("/api/config/reveal-hash").status_code == 404
 

@@ -32,7 +32,8 @@ def test_nested_path_creates_parent(tmp_path, monkeypatch):
 
 STATE_LITERALS = re.compile(
     r"os\.path\.join\(\s*BASE_DIR\s*,\s*[\"'](?:\.env|config\.json|session|"
-    r"session_web|hh_cookies\.json|hh_sent\.json|all_sent_users\.txt|logs)"
+    r"session_web|hh_cookies\.json|hh_sent\.json|all_sent_users\.txt|logs|"
+    r"resume\.pdf)"
 )
 
 
@@ -41,3 +42,20 @@ def test_no_state_paths_relative_to_repo():
                  "api/tg_routes.py", "api/hh_routes.py", "api/auth_routes.py"):
         source = (REPO_ROOT / name).read_text(encoding="utf-8")
         assert not STATE_LITERALS.search(source), f"{name} всё ещё пишет состояние в репозиторий"
+
+
+def test_monitor_default_resume_path_is_not_the_leaked_cv() -> None:
+    """monitor.py used to default the résumé attachment to
+    os.path.join(BASE_DIR, "Пак_Виталий_Владимирович.pdf") — the previous
+    author's CV, one of the four artifacts in the original leaked archive,
+    resolved against the repository directory. Task 2's invariant was that
+    no runtime state resolves against BASE_DIR; this was the one survivor,
+    missed because STATE_LITERALS' literal list didn't include the
+    filename."""
+    source = (REPO_ROOT / "monitor.py").read_text(encoding="utf-8")
+    assert "Пак_Виталий_Владимирович.pdf" not in source, (
+        "monitor.py still hardcodes the previous author's leaked CV filename"
+    )
+    assert 'paths.path("resume.pdf")' in source, (
+        "monitor.py should default the résumé path via job_monitor.paths, not BASE_DIR"
+    )

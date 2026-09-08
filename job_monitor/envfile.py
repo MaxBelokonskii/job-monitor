@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from pathlib import Path
 
 from job_monitor import paths
 
@@ -41,8 +42,16 @@ def write_env(values: dict[str, str]) -> None:
         merged[key] = value
     target = paths.env_file()
     handle, temporary = tempfile.mkstemp(dir=str(target.parent))
-    with os.fdopen(handle, "w", encoding="utf-8") as stream:
-        for key, value in merged.items():
-            stream.write(f"{key}={value}\n")
-    os.chmod(temporary, 0o600)
-    os.replace(temporary, target)
+    replaced = False
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            for key, value in merged.items():
+                stream.write(f"{key}={value}\n")
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, target)
+        replaced = True
+    finally:
+        # A failure anywhere between mkstemp() and the rename above must not
+        # leave a 0600 temp file sitting in the data directory forever.
+        if not replaced:
+            Path(temporary).unlink(missing_ok=True)
