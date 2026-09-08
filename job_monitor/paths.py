@@ -26,10 +26,6 @@ def env_file() -> Path:
     return path(".env")
 
 
-def config_file() -> Path:
-    return path("config.json")
-
-
 def db_file() -> Path:
     return path("job_monitor.db")
 

@@ -79,9 +79,6 @@ class WorkerManager:
     def status(self, name: str) -> WorkerStatus:
         return self._statuses.get(name, WorkerStatus(name=name))
 
-    def all(self) -> dict[str, WorkerStatus]:
-        return dict(self._statuses)
-
     def status_dict(self, name: str) -> dict:
         """`WorkerStatus.as_dict()` плюс живой признак `can_start`.
 

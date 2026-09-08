@@ -60,7 +60,6 @@
 | FastAPI | REST API бэкенд |
 | Uvicorn | ASGI сервер |
 | asyncio | Асинхронная обработка событий Telegram |
-| python-dotenv | Управление секретами через .env |
 | Regex | Извлечение @username из текста вакансий |
 | HTML/CSS/JS | Фронтенд без фреймворков |
 
