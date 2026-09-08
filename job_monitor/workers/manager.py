@@ -147,6 +147,19 @@ class WorkerManager:
         # timeout: it returns the task in `pending` instead of blocking,
         # so stop() itself can never hang on an uncooperative worker.
         _done, pending = await asyncio.wait({task}, timeout=timeout)
+        # Сторож переживает отмену ожидающего (в этом весь смысл отдельной
+        # таски), поэтому к моменту пробуждения `_tasks[name]` может уже
+        # принадлежать ДРУГОМУ запуску: клиент, бьющий в API напрямую, успевает
+        # получить `stopped`/`can_start` и вызвать start() за один-два тика
+        # цикла. Записать тогда терминальный статус или, того хуже, выкинуть
+        # чужую таску из `_tasks` — значит потерять живого воркера: менеджер
+        # рапортует «остановлен», start() соглашается ещё раз, и появляется
+        # второй (третий) экземпляр под тем же именем — ровно тот «второй
+        # Chrome», ради которого этот модуль существует. Сторож устаревшего
+        # запуска обязан промолчать: статус принадлежит тому, кто владеет
+        # таской сейчас.
+        if self._tasks.get(name) is not task:
+            return self.status(name)
         if pending:
             # The task ignored cancellation within the timeout window and
             # is still alive. Do NOT report "stopped": a caller that

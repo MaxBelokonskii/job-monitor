@@ -236,3 +236,97 @@ async def test_a_cancelled_stop_still_reaches_stopped_for_a_cooperative_worker()
     assert manager.status_dict("idle")["can_start"] is True, (
         "воркер честно остановился — start() должен снова стать возможен"
     )
+
+
+async def _tick(times: int = 1) -> None:
+    for _ in range(times):
+        await asyncio.sleep(0)
+
+
+async def test_a_restart_during_a_pending_stop_is_not_reported_as_stopped():
+    """Сторож остановки не имеет права хоронить чужой запуск.
+
+    `_await_stop` живёт отдельной таской и переживает отмену ожидающего — в
+    этом весь смысл выноса ожидания из `stop()`. Но пока сторож спит на
+    `asyncio.wait`, отменённая таска успевает завершиться, и `start()`
+    кладёт в `_tasks` НОВУЮ: между «воркер завершился» и «сторож проснулся»
+    проходит ещё один тик цикла, а клиенту, который бьёт в API напрямую
+    (в UI кнопка разблокируется только следующим опросом), этого хватает.
+
+    Проснувшийся сторож делал `_tasks.pop(name)` и писал `stopped`, не
+    глядя, чья таска лежит в словаре. Менеджер терял живого воркера —
+    `state` рассинхронизирован, `can_start=True`, таска работает, — и
+    следующий `start()` поднимал ВТОРОЙ экземпляр под тем же именем. Это тот
+    самый класс «второй Chrome», ради которого модуль существует.
+
+    Воспроизведение на 2156332: `tracked=False`, `can_start=True`,
+    `new_task_alive=True`, а второй `start()` проходит.
+    """
+    manager = WorkerManager()
+    manager.register("hh", lambda: asyncio.sleep(3600))
+
+    await manager.start("hh")
+    await wait_for(manager, "hh", WorkerState.running)
+    first_task = manager._tasks["hh"]
+
+    # Клиент нажал «стоп» и отсоединился: ожидание отменено, сторож жив.
+    # Ожидание тиками, а не `wait_for` со сном: всё окно гонки укладывается
+    # в один-два тика цикла, и сон в 10 мс его просто проспал бы.
+    stopping = asyncio.create_task(manager.stop("hh", timeout=5))
+    await _tick()
+    assert manager.status("hh").state is WorkerState.stopping
+    stopping.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await stopping
+
+    # ...и тут же нажал «старт». Воркер уже завершился, так что start()
+    # проходит, но сторож старого запуска ещё не просыпался.
+    assert first_task.done(), "отменённая таска ещё жива — start() и не должен проходить"
+    assert not manager._stop_waiters["hh"].done(), (
+        "сторож уже проснулся: в этом порядке тиков гонку не воспроизвести,"
+        " тест перестал что-либо проверять"
+    )
+    await manager.start("hh")
+    second_task = manager._tasks["hh"]
+    assert second_task is not first_task
+
+    await _tick(20)      # сторож просыпается и делает всё, что собирался
+
+    assert manager._tasks.get("hh") is second_task, (
+        "сторож старого запуска выкинул из-под наблюдения ЖИВУЮ таску нового"
+    )
+    assert not second_task.done(), "второй запуск не должен был пострадать"
+    assert manager.status_dict("hh")["can_start"] is False, (
+        "менеджер разрешает ещё один start() поверх работающего воркера"
+    )
+    with pytest.raises(WorkerAlreadyRunning):
+        await manager.start("hh")
+
+    second_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await second_task
+
+
+async def test_a_superseded_stop_waiter_leaves_the_status_alone():
+    """Тот же инвариант без гонки, напрямую: сторож, чья таска больше не
+    числится в `_tasks`, обязан вернуть текущий статус и не тронуть ни
+    словарь тасок, ни статус. Гоночный тест выше зависит от порядка тиков
+    цикла; этот проверяет сам контракт."""
+    manager = WorkerManager()
+    manager.register("hh", lambda: asyncio.sleep(3600))
+
+    stale = asyncio.create_task(asyncio.sleep(0))
+    await stale
+    await manager.start("hh")
+    live = manager._tasks["hh"]
+    live_status = manager.status("hh")
+
+    returned = await manager._await_stop("hh", stale, timeout=0)
+
+    assert manager._tasks.get("hh") is live
+    assert manager.status("hh") is live_status
+    assert returned is live_status
+
+    live.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await live
