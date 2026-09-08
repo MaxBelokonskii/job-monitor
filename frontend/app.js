@@ -99,7 +99,7 @@ function configErrorDetail(r) {
 // running / stopping / error) and is what the toggle buttons render;
 // `running` stays as the plain boolean the start/stop handlers branch on.
 const tgState = {
-  running: false, state: 'stopped', lastError: null, viewSig: null,
+  running: false, state: 'stopped', canStart: true, lastError: null, viewSig: null,
   safeMode: true, parseHistory: false,
   channels: [], keywords: [], exclude: [],
   template: '', maxPerDay: 25, historyLimit: 50,
@@ -108,7 +108,7 @@ const tgState = {
 };
 
 const hhState = {
-  running: false, state: 'stopped', lastError: null, viewSig: null,
+  running: false, state: 'stopped', canStart: true, lastError: null, viewSig: null,
   keywords: [], exclude: [],
   areaIds: [113], schedule: ['remote', 'fullDay', 'flexible'],
   maxPerDay: 20, sentToday: 0, foundToday: 0, totalSent: 0,
@@ -141,39 +141,71 @@ document.querySelectorAll('.nav-item[data-page]').forEach(item => {
 // Rendering `error` as a plain "Запустить" made a wedged worker look like a
 // stopped one and turned that 400 into a mystery — so `state` from
 // GET /api/state drives the button, not the running boolean alone.
-function workerView(state, name) {
+//
+// The same switch also decides WHAT A CLICK DOES (`action`). Splitting those
+// two decisions is what produced the bug this function now prevents: the
+// label came from `state`, the branch in toggleTG/toggleHH came from the
+// `running` boolean, and `running` is false for both `stopping` and `error`.
+// A button reading «Остановка HH…» therefore fired POST /api/hh/start, the
+// manager saw the still-live task and answered 400 «HH монитор уже запущен».
+// Keeping label and action in one arm makes that class of mismatch
+// unrepresentable: whatever the button promises is what the click does.
+//
+// `canStart` comes from GET /api/state (`can_start`, computed by
+// WorkerManager.status_dict): in `error` it says whether the task is really
+// gone (crashed on its own — start() will work) or still tracked (wedged on
+// stop — start() can only 400). `undefined` is treated as "start is worth a
+// try", so an older payload without the field keeps the previous behaviour.
+function workerView(state, name, canStart) {
   switch (state) {
     case 'running':
-      return { dot: 'running', active: true, label: 'Остановить ' + name };
+      return { dot: 'running', active: true, label: 'Остановить ' + name, action: 'stop' };
     case 'starting':
-      return { dot: 'running', active: true, label: 'Запуск ' + name + '…' };
+      return { dot: 'running', active: true, label: 'Запуск ' + name + '…', action: 'stop' };
     case 'stopping':
-      return { dot: 'running', active: true, label: 'Остановка ' + name + '…' };
+      // Никакой ветки: stop() уже идёт и ждёт до 10 секунд, повторный stop
+      // получит 400 «не запущен», а start — 400 «уже запущен».
+      return { dot: 'running', active: true, label: 'Остановка ' + name + '…', action: 'none' };
     case 'error':
-      return { dot: 'error', active: false, label: 'Ошибка ' + name + ' — запустить снова' };
+      return canStart === false
+        ? {
+            dot: 'error', active: false, action: 'none',
+            label: 'Ошибка ' + name + ' — нужен перезапуск приложения',
+          }
+        : {
+            dot: 'error', active: false, action: 'start',
+            label: 'Ошибка ' + name + ' — запустить снова',
+          };
     default:
-      return { dot: 'stopped', active: false, label: 'Запустить ' + name };
+      return { dot: 'stopped', active: false, label: 'Запустить ' + name, action: 'start' };
   }
 }
 
 function workerSignature(worker) {
-  return `${worker.state}|${worker.lastError || ''}`;
+  return `${worker.state}|${worker.canStart === false ? 'wedged' : 'ok'}|${worker.lastError || ''}`;
 }
 
 function updateWorkerButton(worker, name, btnId, dotId, alertId, toggleClass) {
   const btn = document.getElementById(btnId);
   if (!btn) return;
-  const view = workerView(worker.state, name);
+  const view = workerView(worker.state, name, worker.canStart);
   btn.className = `btn-toggle ${toggleClass}`
     + (view.active ? ' active' : '')
     + (worker.state === 'error' ? ' worker-error' : '');
+  // A click that does nothing must look like it: `stopping` (a stop is
+  // already in flight) and a wedged `error` (the task is still tracked, so
+  // start() can only 400) leave the button inert, and disabling it is the
+  // only way the promise on the button matches what pressing it does.
+  btn.disabled = view.action === 'none';
   fill(btn, [el('span', { class: `status-dot ${view.dot}`, id: dotId }), ' ' + view.label]);
 
   const alert = document.getElementById(alertId);
   if (alert) {
     const failed = worker.state === 'error';
+    const wedged = failed && worker.canStart === false;
     alert.textContent = failed
       ? `⚠️ ${name}: ${worker.lastError || 'воркер остановлен с ошибкой'}`
+        + (wedged ? ' — задача не отвечает на отмену, помочь может только перезапуск приложения' : '')
       : '';
     alert.style.display = failed ? 'block' : 'none';
   }
@@ -233,14 +265,28 @@ function updateDashboard() {
 }
 
 // ── TG Script control ─────────────────────────────────────────────────
-function setWorkerState(worker, state, lastError) {
+function setWorkerState(worker, state, lastError, canStart) {
   worker.state = state;
   worker.running = state === 'running' || state === 'starting';
   worker.lastError = lastError || null;
+  // Optimistic local transitions know their own answer: a fresh `error` we
+  // just got back from POST /stop is by definition the wedged kind (the
+  // manager kept the task), everything else can be started.
+  worker.canStart = canStart === undefined ? state !== 'error' : canStart;
+}
+
+// The branch is taken from workerView(), i.e. from exactly the object that
+// drew the label — never from `worker.running`, which is false for both
+// `stopping` and `error` and used to send those two states down the start
+// branch straight into a 400.
+function workerToggleAction(worker, name) {
+  return workerView(worker.state, name, worker.canStart).action;
 }
 
 async function toggleTG() {
-  if (tgState.running) {
+  const action = workerToggleAction(tgState, 'TG');
+  if (action === 'none') return;
+  if (action === 'stop') {
     const r = await apiPost('/tg/stop');
     if (r && r.status === 'stopped') {
       setWorkerState(tgState, 'stopped'); updateTGButton();
@@ -265,7 +311,9 @@ async function toggleTG() {
 
 // ── HH Script control ─────────────────────────────────────────────────
 async function toggleHH() {
-  if (hhState.running) {
+  const action = workerToggleAction(hhState, 'HH');
+  if (action === 'none') return;
+  if (action === 'stop') {
     const r = await apiPost('/hh/stop');
     if (r && r.status === 'stopped') {
       setWorkerState(hhState, 'stopped'); updateHHButton();
@@ -572,6 +620,15 @@ async function hhLoginConfirm() {
   renderHHLoginStatus(r.state);
   if (r.state === 'logged_in') showToast('Сессия сохранена');
   else showToast('Вход ещё не подтверждён — войдите в открывшемся окне');
+}
+
+async function hhLoginCancel() {
+  // Единственный способ погасить окно входа, не подтверждая его: до этого
+  // роута Chrome, открытый «Открыть вход в hh.ru», жил до конца сессии
+  // пользователя и переживал остановку приложения.
+  const r = await apiPost('/hh/login/cancel');
+  if (r && r.state) { renderHHLoginStatus(r.state); showToast('Окно входа закрыто'); }
+  else showToast(r?.detail || 'Не удалось закрыть окно входа');
 }
 
 // ── Selenium Steps Editor ─────────────────────────────────────────────
@@ -890,16 +947,32 @@ function applyWorkerState(worker, payload, update) {
   worker.state = payload.state || (payload.running ? 'running' : 'stopped');
   worker.running = !!payload.running;
   worker.lastError = payload.last_error || null;
+  // Absent (older payload) means "assume a start is possible" — the previous
+  // behaviour. Only an explicit false marks the wedged worker whose task the
+  // manager is still tracking.
+  worker.canStart = payload.can_start !== false;
   // Re-render only when what the button shows actually changed: this runs
   // every 3s and rebuilding the node each tick would fight the :active and
   // :hover states of a button the user is pressing.
   if (workerSignature(worker) !== worker.viewSig) update();
 }
 
+// `apiGet` returns whatever JSON came back, and a 4xx/5xx with a JSON body
+// is `{detail: "..."}` — truthy. A bare `if (state)` therefore sailed past
+// the guard, `state.tg || {}` gave an empty object, and the dashboard drew a
+// running worker as stopped with every counter reset to 0. Check the SHAPE,
+// not the truthiness. (The common Starlette 500 is plain text, so `res.json()`
+// throws and apiGet already returns null — this closes the JSON-bodied case.)
+function isStatePayload(value) {
+  return !!value && typeof value === 'object'
+    && !!value.tg && typeof value.tg === 'object'
+    && !!value.hh && typeof value.hh === 'object';
+}
+
 async function pollStatus() {
   const state = await apiGet('/state');
-  if (state) {
-    const tg = state.tg || {};
+  if (isStatePayload(state)) {
+    const tg = state.tg;
     tgState.safeMode = tg.safe_mode;
     tgState.sentToday = tg.sent_today || 0;
     tgState.foundToday = tg.found_today || 0;
@@ -908,7 +981,7 @@ async function pollStatus() {
     if (typeof tg.api_hash_set !== 'undefined') tgState.apiHashSet = tg.api_hash_set;
     applyWorkerState(tgState, tg, updateTGButton);
 
-    const hh = state.hh || {};
+    const hh = state.hh;
     hhState.sentToday = hh.sent_today || 0;
     hhState.foundToday = hh.found_today || 0;
     hhState.totalSent = hh.total_sent || 0;
@@ -1014,6 +1087,7 @@ const ACTIONS = {
   saveTemplate,
   pickFile,
   onFileSelect,
+  hhLoginCancel,
   saveHHCoverLetter,
   saveTGSettings,
   saveApiKeys,
@@ -1045,7 +1119,12 @@ document.addEventListener('change', event => {
 });
 
 document.addEventListener('keydown', event => {
-  if (event.key !== 'Enter') return;
+  // Space activates only an element that declares role="button" (the file
+  // drop zone). Accepting it everywhere would swallow the space bar inside
+  // #chatInput, which carries data-enter-action too.
+  const activates = event.key === 'Enter'
+    || (event.key === ' ' && event.target.getAttribute?.('role') === 'button');
+  if (!activates) return;
   const target = event.target.closest?.('[data-enter-action]');
   if (!target) return;
   event.preventDefault();

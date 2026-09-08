@@ -81,6 +81,28 @@ class WorkerManager:
     def all(self) -> dict[str, WorkerStatus]:
         return dict(self._statuses)
 
+    def status_dict(self, name: str) -> dict:
+        """`WorkerStatus.as_dict()` плюс живой признак `can_start`.
+
+        `state == "error"` покрывает два разных случая, которые снаружи
+        выглядели одинаково:
+
+        * воркер упал сам (`_supervise` поймал исключение) — таска завершена,
+          `start()` сработает;
+        * воркер завис при остановке (`stop()` не дождался за timeout) — таска
+          осталась под наблюдением (см. комментарий в `stop()`), и `start()`
+          всегда ответит `WorkerAlreadyRunning`.
+
+        UI не мог их различить и в обоих случаях предлагал «запустить снова»,
+        то есть в половине случаев обещал то, чего сделать нельзя. Признак
+        считается здесь, а не хранится в `WorkerStatus`: только менеджер видит
+        таски, и только вычисление на момент запроса остаётся правдой, если
+        зависшая таска всё-таки завершилась позже — тогда `can_start` честно
+        станет `True` без внешнего вмешательства.
+        """
+        task = self._tasks.get(name)
+        return {**self.status(name).as_dict(), "can_start": task is None or task.done()}
+
     async def start(self, name: str) -> WorkerStatus:
         if name not in self._factories:
             raise KeyError(f"воркер {name} не зарегистрирован")

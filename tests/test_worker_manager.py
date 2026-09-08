@@ -107,3 +107,59 @@ async def test_stop_timeout_reports_error_and_refuses_restart():
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+async def test_status_dict_distinguishes_a_crash_from_a_wedged_stop():
+    """`error` покрывал два случая, снаружи неразличимых, и UI в обоих
+    предлагал «запустить снова»: после самостоятельного падения start()
+    действительно сработает, а после зависшей остановки таска осталась под
+    наблюдением и start() может только ответить 400. `can_start` отвечает
+    на этот вопрос — и отвечает на момент запроса, а не копией, снятой
+    когда-то раньше."""
+    async def boom() -> None:
+        raise RuntimeError("сломалось")
+
+    manager = WorkerManager()
+    manager.register("boom", boom)
+    await manager.start("boom")
+    await wait_for(manager, "boom", WorkerState.error)
+    crashed = manager.status_dict("boom")
+    assert crashed["state"] == "error"
+    assert crashed["can_start"] is True
+
+    release = asyncio.Event()
+
+    async def stubborn() -> None:
+        while True:
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                if release.is_set():
+                    raise
+
+    manager.register("stubborn", stubborn)
+    await manager.start("stubborn")
+    await wait_for(manager, "stubborn", WorkerState.running)
+    assert manager.status_dict("stubborn")["can_start"] is False
+    task = manager._tasks["stubborn"]
+
+    wedged = await manager.stop("stubborn", timeout=0.05)
+    assert wedged.state is WorkerState.error
+    assert manager.status_dict("stubborn")["can_start"] is False, (
+        "зависшая таска ещё отслеживается — start() ответит 400, и UI не должен обещать иного"
+    )
+
+    # Если зависшая таска всё-таки завершилась, признак обязан стать честным
+    # сам, без внешнего вмешательства: он вычисляется, а не хранится.
+    release.set()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert manager.status_dict("stubborn")["can_start"] is True
+
+
+async def test_status_dict_of_an_idle_worker_allows_start():
+    manager = WorkerManager()
+    manager.register("idle", lambda: asyncio.sleep(3600))
+    assert manager.status_dict("idle")["can_start"] is True
+    assert manager.status_dict("nope")["can_start"] is True

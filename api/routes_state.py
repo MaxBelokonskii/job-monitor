@@ -31,7 +31,7 @@ async def get_state() -> dict:
 
     return {
         "tg": {
-            **manager.status("tg").as_dict(),
+            **manager.status_dict("tg"),
             "sent_today": tg_repo.sent_on(today),
             "sent_total": tg_repo.contacts_total(),
             "found_today": events.count_on("tg", "vacancy", today),
@@ -41,7 +41,7 @@ async def get_state() -> dict:
             "api_hash_set": load_secrets().api_hash is not None,
         },
         "hh": {
-            **manager.status("hh").as_dict(),
+            **manager.status_dict("hh"),
             "sent_today": hh_repo.applied_on(today),
             "found_today": hh_repo.found_on(today),
             "total_sent": hh_repo.applied_total(),

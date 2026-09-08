@@ -319,3 +319,292 @@ def test_only_the_api_helpers_call_fetch_directly() -> None:
         assert "fetch(" in _extract_function_source(helper)
     for caller in ("sendChatMessage", "verifyAuthCode"):
         assert "fetch(" not in _extract_function_source(caller)
+
+
+# ── Кнопка воркера: подпись и ветка приходят из одного места ──────────
+
+
+def _maybe_extract(name: str) -> str:
+    """Как `_extract_function_source`, но пустая строка, если функции нет.
+
+    Нужно, чтобы тест на поведение падал на СТАРОМ коде с содержательным
+    сообщением («счётчики обнулились»), а не с «функции нет в app.js»:
+    исчезновение помощника не должно превращать проверку свойства в
+    проверку присутствия имени.
+    """
+    pattern = rf"(?:async )?function {re.escape(name)}\(.*?\) \{{.*?\n\}}"
+    match = re.search(pattern, _app_source(), re.DOTALL)
+    return match.group(0) if match else ""
+
+
+NODE_CHECK_HELPER = """
+function check(name, cond) {
+  if (!cond) { console.error('FAIL:', name); process.exitCode = 1; }
+}
+function same(name, got, want) {
+  check(name + ' (got ' + JSON.stringify(got) + ', want ' + JSON.stringify(want) + ')',
+        JSON.stringify(got) === JSON.stringify(want));
+}
+"""
+
+
+@skip_without_node
+def test_worker_view_label_and_action_come_from_the_same_arm() -> None:
+    """Задача 6 перевела на настоящий `state` только РЕНДЕР. Решение «жать
+    start или stop» осталось на булеве `running`, ложном и для `stopping`, и
+    для `error`, — кнопка «Остановка HH…» отправляла POST /api/hh/start.
+    `workerView` теперь отдаёт и подпись, и действие, так что разойтись им
+    больше негде."""
+    script = "\n".join((
+        _maybe_extract("workerView"),
+        NODE_CHECK_HELPER,
+        """
+        same('stopped',  workerView('stopped', 'TG').action, 'start');
+        same('running',  workerView('running', 'TG').action, 'stop');
+        same('starting', workerView('starting', 'TG').action, 'stop');
+        same('stopping', workerView('stopping', 'TG').action, 'none');
+        same('error, task gone',   workerView('error', 'TG', true).action, 'start');
+        same('error, task wedged', workerView('error', 'TG', false).action, 'none');
+        same('error, unknown',     workerView('error', 'TG').action, 'start');
+
+        // Обещание подписи должно совпадать с действием.
+        for (const state of ['stopped', 'running', 'starting', 'stopping', 'error']) {
+          for (const canStart of [true, false, undefined]) {
+            const v = workerView(state, 'HH', canStart);
+            check(state + '/' + canStart + ': есть действие',
+                  ['start', 'stop', 'none'].includes(v.action));
+            if (/Остановить/.test(v.label)) check(state + ': «Остановить» = stop', v.action === 'stop');
+            if (/^Запустить/.test(v.label)) check(state + ': «Запустить» = start', v.action === 'start');
+            if (/Остановка/.test(v.label)) check(state + ': «Остановка…» ничего не делает', v.action === 'none');
+            if (/запустить снова/.test(v.label)) check(state + ': «снова» = start', v.action === 'start');
+            if (/перезапуск приложения/.test(v.label))
+              check(state + ': «перезапуск» ничего не делает', v.action === 'none');
+          }
+        }
+        """,
+    ))
+    result = _run_node(script)
+    assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
+
+
+@skip_without_node
+def test_toggle_branches_on_state_not_on_the_running_boolean() -> None:
+    """Сценарий отказа целиком: пользователь жмёт «Остановить HH»,
+    `manager.stop()` ставит `stopping` и ждёт до 10 секунд, опрос через 3
+    секунды рисует «Остановка HH…», пользователь жмёт ещё раз — и получает
+    400 «HH монитор уже запущен», потому что ветка бралась из `running`.
+    То же в `error` с ещё живой таской: «запустить снова» всегда даёт 400.
+
+    Проверяется НЕ форма кода, а какие запросы уходят на каждый клик."""
+    sources = "\n".join(
+        _maybe_extract(name) for name in
+        ("workerView", "workerToggleAction", "setWorkerState", "toggleTG", "toggleHH")
+    )
+    harness = """
+    let posted = [];
+    async function apiPost(path) {
+      posted.push(path);
+      return path.endsWith('/stop') ? { status: 'stopped' } : { status: 'started' };
+    }
+    function updateTGButton() {}
+    function updateHHButton() {}
+    function showToast() {}
+    function hideRestartBanner() {}
+    const tgState = {};
+    const hhState = {};
+
+    const cases = [
+      ['stopped',  false, true,  ['/stop_or_start:start']],
+      ['running',  true,  true,  ['/stop_or_start:stop']],
+      ['starting', true,  true,  ['/stop_or_start:stop']],
+      ['stopping', false, true,  []],
+      ['error',    false, true,  ['/stop_or_start:start']],
+      ['error',    false, false, []],
+    ];
+
+    (async () => {
+      for (const [worker, state, toggle, prefix] of
+           [[tgState, null, toggleTG, '/tg'], [hhState, null, toggleHH, '/hh']]) {
+        for (const [st, running, canStart, want] of cases) {
+          posted = [];
+          worker.state = st; worker.running = running; worker.canStart = canStart;
+          await toggle();
+          const expected = want.map(w => prefix + (w.endsWith(':stop') ? '/stop' : '/start'));
+          same(prefix + ' ' + st + ' canStart=' + canStart, posted, expected);
+        }
+      }
+    })();
+    """
+    result = _run_node(f"{sources}\n{NODE_CHECK_HELPER}\n{harness}")
+    assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
+
+
+# ── Опрос не принимает тело ошибки за состояние ───────────────────────
+
+
+@skip_without_node
+def test_poll_ignores_a_json_error_body() -> None:
+    """`if (state)` истинно и для `{"detail": ...}`: `state.tg || {}` давало
+    пустой объект, работающий воркер рисовался остановленным, а счётчики
+    обнулялись. Проверяется поведение pollStatus, а не наличие проверки."""
+    sources = "\n".join(_maybe_extract(name) for name in ("isStatePayload", "pollStatus"))
+    harness = """
+    globalThis.setTimeout = () => {};
+    let applied = 0;
+    let rendered = 0;
+    function applyWorkerState() { applied++; }
+    function updateTGButton() {}
+    function updateHHButton() {}
+    function updateMetrics() {}
+    function renderRecent() { rendered++; }
+    const tgState = { state: 'running', running: true, canStart: true,
+                      sentToday: 7, foundToday: 3, sentTotal: 9, maxPerDay: 25 };
+    const hhState = { state: 'running', running: true, canStart: true,
+                      sentToday: 5, foundToday: 2, totalSent: 8, maxPerDay: 20 };
+    let reply = null;
+    async function apiGet() { return reply; }
+
+    (async () => {
+      for (const bad of [{ detail: 'HH монитор уже запущен' }, { tg: null, hh: null }, 'boom', null]) {
+        reply = bad;
+        await pollStatus();
+      }
+      same('applyWorkerState не вызывался', applied, 0);
+      same('счётчик TG не тронут', tgState.sentToday, 7);
+      same('счётчик HH не тронут', hhState.totalSent, 8);
+      same('состояние TG не тронуто', tgState.state, 'running');
+      same('лента не перерисована', rendered, 0);
+
+      reply = { tg: { state: 'stopped', running: false, sent_today: 1 },
+                hh: { state: 'running', running: true, total_sent: 2 }, recent: [] };
+      await pollStatus();
+      same('нормальный ответ применён', applied, 2);
+      same('счётчик HH обновлён', hhState.totalSent, 2);
+    })();
+    """
+    result = _run_node(f"{sources}\n{NODE_CHECK_HELPER}\n{harness}")
+    assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
+
+
+# ── Ровно один периодический таймер во всём app.js (L13) ──────────────
+
+
+FUNCTION_DEF = re.compile(r"^(?:async )?function ([A-Za-z_$][\w$]*)\(", re.MULTILINE)
+SET_TIMEOUT_CALL = re.compile(r"setTimeout\(([^;]*?),\s*[\d_]+\s*\)", re.DOTALL)
+
+
+def _self_rescheduling_functions() -> set[str]:
+    """Функции, которые перезапускают сами себя через setTimeout.
+
+    Такая пара — это периодический таймер, просто записанный не через
+    setInterval.
+    """
+    found = set()
+    for name in set(FUNCTION_DEF.findall(_app_source())):
+        body = "\n".join(
+            re.sub(r"(^|\s)//.*$", "", line)
+            for line in _extract_function_source(name).splitlines()
+        )
+        for callback in SET_TIMEOUT_CALL.findall(body):
+            if re.search(rf"\b{re.escape(name)}\b", callback):
+                found.add(name)
+    return found
+
+
+def test_app_js_has_exactly_one_periodic_timer() -> None:
+    """Глобальный инвариант вместо пересказа текущего кода.
+
+    Прежние два пина смотрели только внутрь `pollStatus` и на четыре
+    конкретных пути, поэтому новый `setInterval(refreshLogs, 3000)` в любом
+    другом месте файла проходил мимо них — а именно возврат к нескольким
+    независимым опросам и есть дефект L13. Здесь считается ВЕСЬ файл:
+    периодических таймеров ровно один, и это опрос /api/state.
+    """
+    code = _app_code_without_comments()
+    intervals = re.findall(r"\bsetInterval\s*\(", code)
+    recurring = _self_rescheduling_functions()
+    assert not intervals, (
+        f"в app.js появился setInterval ({len(intervals)} шт.) — дашборд обновляется "
+        "единственным циклом pollStatus(), второй таймер вернёт L13"
+    )
+    assert recurring == {"pollStatus"}, (
+        f"периодические таймеры в app.js: {sorted(recurring) or 'ни одного'}; должен быть "
+        "ровно один — pollStatus(), пересоздающий себя после каждого GET /api/state"
+    )
+
+
+# ── Доступность ───────────────────────────────────────────────────────
+
+
+def test_file_zone_is_operable_from_the_keyboard() -> None:
+    zone = re.search(r"<div class=\"file-zone\"[^>]*>", _index_source(), re.DOTALL)
+    assert zone, "#fileZone не найден"
+    markup = zone.group(0)
+    assert 'tabindex="0"' in markup, "в зону выбора файла нельзя попасть табом"
+    assert 'role="button"' in markup, "скринридер не объявит зону кнопкой"
+    assert 'data-enter-action="pickFile"' in markup, (
+        "Enter на зоне ничего не делает — механизм data-enter-action уже есть в проекте"
+    )
+
+
+def test_space_activation_is_limited_to_role_button() -> None:
+    """Пробел не должен активировать `#chatInput`, у которого тоже есть
+    data-enter-action, — иначе в поле чата нельзя набрать пробел."""
+    source = _app_source()
+    assert "role" in source and "event.key === ' '" in source
+    assert re.search(r"event\.key === ' '.*?role.*?===\s*'button'", source, re.DOTALL), (
+        "активация пробелом должна быть ограничена элементами с role=\"button\""
+    )
+
+
+def test_file_zone_has_a_visible_focus_ring() -> None:
+    assert ".file-zone:focus-visible" in STYLE_CSS.read_text(encoding="utf-8")
+
+
+# ── Контраст текста предупреждения (WCAG AA) ──────────────────────────
+
+
+def _css_var(name: str) -> str:
+    match = re.search(rf"{re.escape(name)}:\s*(#[0-9a-fA-F]{{6}})", STYLE_CSS.read_text(encoding="utf-8"))
+    assert match, f"переменная {name} не найдена в style.css"
+    return match.group(1)
+
+
+def _relative_luminance(hex_colour: str) -> float:
+    channels = [int(hex_colour[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def _contrast(foreground: str, background: str) -> float:
+    a, b = _relative_luminance(foreground), _relative_luminance(background)
+    lighter, darker = max(a, b), min(a, b)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def test_worker_alert_text_meets_wcag_aa() -> None:
+    """`.worker-alert` — единственное место, где показывается `last_error`
+    воркера, и он был `--yellow` (#ca8a04) на `--yellow-light` (#fefce8):
+    2.84:1 при 12px, норма AA — 4.5:1."""
+    css = STYLE_CSS.read_text(encoding="utf-8")
+    rule = re.search(r"\.worker-alert \{[^}]*\}", css, re.DOTALL)
+    assert rule, ".worker-alert не найден"
+    colour = re.search(r"color:\s*var\((--[\w-]+)\)", rule.group(0))
+    assert colour, ".worker-alert должен брать цвет текста из переменной"
+    ratio = _contrast(_css_var(colour.group(1)), _css_var("--yellow-light"))
+    assert ratio >= 4.5, f"контраст текста предупреждения {ratio:.2f}:1 — ниже WCAG AA 4.5:1"
+
+
+def test_the_old_low_contrast_yellow_is_not_used_for_warning_text() -> None:
+    assert _contrast("#ca8a04", "#fefce8") < 4.5, "исходное значение перестало быть проблемой?"
+
+
+# ── Отмена входа в hh.ru доступна из UI ───────────────────────────────
+
+
+def test_login_cancel_control_exists_and_is_delegated() -> None:
+    """Брошенное окно Chrome закрывается только успешным confirm(); из UI
+    нужен способ закрыть его, не подтверждая вход."""
+    assert 'data-action="hhLoginCancel"' in _index_source()
+    assert "hhLoginCancel" in _action_map_keys()
+    assert "/hh/login/cancel" in _app_source()

@@ -44,6 +44,15 @@ def test_worker_state_is_reported(client):
     assert body["tg"]["state"] == "stopped"
 
 
+def test_worker_state_says_whether_start_can_succeed(client):
+    """Фронтенду мало `state`: в `error` он не отличает упавший сам воркер
+    (start сработает) от зависшего при остановке (start всегда даст 400).
+    `can_start` — этот признак, и без него кнопка обещает невыполнимое."""
+    body = client.get("/api/state", headers=AUTH).json()
+    assert body["tg"]["can_start"] is True
+    assert body["hh"]["can_start"] is True
+
+
 def test_recent_events_are_returned(client):
     EventsRepo(connection.get_connection()).add("tg", "sent", "@hr_anna", datetime.now())
     body = client.get("/api/state", headers=AUTH).json()
