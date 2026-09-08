@@ -296,19 +296,6 @@ async function saveApiKeys() {
   if (tgState.running) showRestartBanner();
 }
 
-async function toggleApiHash() {
-  const inp = document.getElementById('apiHash');
-  const btn = document.querySelector('[onclick="toggleApiHash()"]');
-  if (inp.value.startsWith('••')) {
-    const r = await apiGet('/config/reveal-hash');
-    if (r && r.api_hash) { inp.value = r.api_hash; inp.type = 'text'; if (btn) btn.textContent = '🙈 Скрыть hash'; }
-  } else if (inp.type === 'text') {
-    inp.type = 'password'; if (btn) btn.textContent = '👁 Показать hash';
-  } else {
-    inp.type = 'text'; if (btn) btn.textContent = '🙈 Скрыть hash';
-  }
-}
-
 // ── Web Auth ──────────────────────────────────────────────────────────
 let _phoneHash = '';
 

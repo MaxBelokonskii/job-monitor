@@ -1,15 +1,13 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import Optional, List
-import os
 import json
 
-from job_monitor import paths
+from job_monitor import paths, envfile
 
 router = APIRouter(prefix="/api/config", tags=["config"])
 
 CONFIG_PATH = paths.config_file()
-ENV_PATH = paths.env_file()
 
 DEFAULT_CONFIG = {
     # TG
@@ -49,51 +47,34 @@ DEFAULT_CONFIG = {
 
 def load_config() -> dict:
     cfg = DEFAULT_CONFIG.copy()
-    if os.path.exists(CONFIG_PATH):
+    if CONFIG_PATH.exists():
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             try:
                 cfg.update(json.load(f))
             except Exception:
                 pass
     # Подтягиваем API ключи из .env
-    if os.path.exists(ENV_PATH):
-        with open(ENV_PATH, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    if k.strip() == "TG_API_ID" and not cfg.get("api_id"):
-                        cfg["api_id"] = v.strip()
-                    if k.strip() == "TG_API_HASH" and not cfg.get("api_hash"):
-                        cfg["api_hash"] = v.strip()
+    env_vars = envfile.read_env()
+    if env_vars.get("TG_API_ID") and not cfg.get("api_id"):
+        cfg["api_id"] = env_vars["TG_API_ID"]
+    if env_vars.get("TG_API_HASH") and not cfg.get("api_hash"):
+        cfg["api_hash"] = env_vars["TG_API_HASH"]
     return cfg
 
-def save_config(cfg: dict):
-    # Не сохраняем API ключи в config.json
+def save_config(cfg: dict) -> None:
     safe_cfg = {k: v for k, v in cfg.items() if k not in ("api_id", "api_hash")}
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(safe_cfg, f, ensure_ascii=False, indent=2)
-    _sync_env(cfg)
-
-def _sync_env(cfg: dict):
-    env_vars = {}
-    if os.path.exists(ENV_PATH):
-        with open(ENV_PATH, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    env_vars[k.strip()] = v.strip()
+    paths.config_file().write_text(
+        json.dumps(safe_cfg, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    secrets_to_write = {}
     if cfg.get("api_id"):
-        env_vars["TG_API_ID"] = str(cfg["api_id"])
+        secrets_to_write["TG_API_ID"] = str(cfg["api_id"])
     if cfg.get("api_hash"):
-        env_vars["TG_API_HASH"] = str(cfg["api_hash"])
-    env_vars["SAFE_MODE"] = "true" if cfg.get("safe_mode") else "false"
-    env_vars["PARSE_HISTORY"] = "true" if cfg.get("parse_history") else "false"
-    env_vars["HISTORY_LIMIT"] = str(cfg.get("history_limit", 50))
-    with open(ENV_PATH, "w", encoding="utf-8") as f:
-        for k, v in env_vars.items():
-            f.write(f"{k}={v}\n")
+        secrets_to_write["TG_API_HASH"] = str(cfg["api_hash"])
+    secrets_to_write["SAFE_MODE"] = "true" if cfg.get("safe_mode") else "false"
+    secrets_to_write["PARSE_HISTORY"] = "true" if cfg.get("parse_history") else "false"
+    secrets_to_write["HISTORY_LIMIT"] = str(cfg.get("history_limit", 50))
+    envfile.write_env(secrets_to_write)
 
 # ── Models ────────────────────────────────────────────────────────────
 
@@ -134,11 +115,8 @@ class ConfigUpdate(BaseModel):
 @router.get("")
 async def get_config():
     cfg = load_config()
-    if cfg.get("api_hash"):
-        cfg["api_hash_set"] = True
-        cfg["api_hash"] = "••••••••••••••••"
-    else:
-        cfg["api_hash_set"] = False
+    cfg.pop("api_hash", None)
+    cfg["api_hash_set"] = bool(envfile.read_env().get("TG_API_HASH"))
     return cfg
 
 @router.patch("")
@@ -154,8 +132,3 @@ async def update_config(update: ConfigUpdate):
         cfg["api_hash"] = api_hash
     save_config(cfg)
     return {"status": "saved"}
-
-@router.get("/reveal-hash")
-async def reveal_hash():
-    cfg = load_config()
-    return {"api_hash": cfg.get("api_hash", "")}
