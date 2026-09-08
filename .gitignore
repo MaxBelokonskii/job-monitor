@@ -36,3 +36,15 @@ desktop.ini
 .vscode/
 .idea/
 *.swp
+
+# Архивы: .gitignore не видит их содержимое
+*.rar
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+# Состояние приложения (дублирует $JOB_MONITOR_DATA_DIR на случай локального оверрайда)
+*.sqlite
+*.db
+.secrets.baseline.local
