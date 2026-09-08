@@ -162,3 +162,61 @@ def test_unparseable_found_at_is_reported_with_vacancy_id(conn, legacy):
     report = import_legacy(conn, legacy)
     assert any("222" in note and "found_at" in note for note in report.skipped)
     assert HhRepo(conn).exists("222") is True
+
+
+# ── Одно значение вне границ не должно стоить всей миграции ────────────
+
+
+def test_out_of_range_setting_is_reported_and_the_rest_is_imported(conn, legacy):
+    """У старой версии границ у настроек не было; `AppSettings` их ввела.
+
+    `{"max_per_day": 500}` (потолок теперь 100) роняло `save_settings` с
+    `ValidationError`, которую `_import_settings` не ловил: сырая
+    трассировка pydantic и `exit=1`. `_import_settings` вызывается первым,
+    поэтому вместе с настройками терялись контакты и вакансии — в базе
+    после прогона было по нулям.
+    """
+    (legacy / "config.json").write_text(json.dumps({
+        "channels": ["itvacancykz"], "max_per_day": 500, "history_limit": 42,
+    }), encoding="utf-8")
+
+    report = import_legacy(conn, legacy)
+
+    assert any("max_per_day" in note for note in report.skipped), report.skipped
+    current = load_settings(conn)
+    assert current.max_per_day == 25, "отвергнутое поле должно остаться значением по умолчанию"
+    assert current.history_limit == 42, "валидные поля обязаны доехать"
+    assert current.channels == ["itvacancykz"]
+    assert report.settings_keys == 2
+    # Главное: следующие два блока не должны зависеть от исхода первого.
+    assert TgRepo(conn).contacts_total() == 2
+    assert HhRepo(conn).exists("111") is True
+
+
+def test_several_out_of_range_settings_are_all_named(conn, legacy):
+    (legacy / "config.json").write_text(json.dumps({
+        "max_per_day": 500, "delay_min": 0, "hh_max_per_day": 999, "channels": ["a"],
+    }), encoding="utf-8")
+
+    report = import_legacy(conn, legacy)
+
+    notes = " ".join(report.skipped)
+    for field in ("max_per_day", "delay_min", "hh_max_per_day"):
+        assert field in notes, f"{field} отвергнут молча: {report.skipped}"
+    assert load_settings(conn).channels == ["a"]
+
+
+def test_a_broken_settings_block_does_not_cost_contacts_and_vacancies(conn, legacy, monkeypatch):
+    """Инвариант структурный, а не про конкретный тип исключения: любой отказ
+    блока настроек оставляет два остальных блока в живых."""
+    import job_monitor.legacy_import as module
+
+    def boom(*_args, **_kwargs):
+        raise MemoryError("что угодно неожиданное")
+
+    monkeypatch.setattr(module, "_import_settings", boom)
+    report = import_legacy(conn, legacy)
+
+    assert any("настройки" in note for note in report.skipped), report.skipped
+    assert TgRepo(conn).contacts_total() == 2
+    assert HhRepo(conn).exists("111") is True

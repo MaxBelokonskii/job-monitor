@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from job_monitor.db.repositories import HhRepo, SettingsRepo, TgRepo
 from job_monitor.settings import AppSettings, save_settings
 
@@ -64,8 +66,53 @@ def _import_settings(conn: sqlite3.Connection, source: Path, report: ImportRepor
     patch = {key: value for key, value in raw.items() if key in known}
     for key in set(raw) - known:
         report.skipped.append(f"config.json: неизвестный ключ {key}")
-    save_settings(conn, patch)
-    report.settings_keys = len(patch)
+    report.settings_keys = _save_valid_fields(conn, patch, report)
+
+
+def _save_valid_fields(conn: sqlite3.Connection, patch: dict, report: ImportReport) -> int:
+    """Сохранить то, что проходит валидацию; отвергнутые поля — в отчёт.
+
+    У старой версии границ у настроек не было, а `AppSettings` их ввела
+    (`max_per_day: ge=1, le=100` и подобные). Одно значение вне границ —
+    например `{"max_per_day": 500}` — роняло `save_settings` с
+    `ValidationError`, которую здесь никто не ловил: сырая трассировка
+    pydantic и `exit=1`. А поскольку `_import_settings` идёт первым, вместе с
+    настройками терялись контакты и вакансии: в базе после прогона всё по
+    нулям.
+
+    Выброшено ровно отвергнутое поле, а не весь блок настроек: миграция
+    одноразовая, и «перенесли 11 полей из 12, двенадцатое вот» полезнее
+    пользователю, чем «настройки не перенесены» без указания, какое именно
+    значение мешает. Каждое отвергнутое поле названо в отчёте с его
+    причиной, так что молчаливой потери нет.
+    """
+    remaining = dict(patch)
+    # Pydantic сообщает обо всех полях сразу, так что одной итерации обычно
+    # хватает; цикл ограничен на случай ошибок, всплывающих по очереди.
+    for _attempt in range(len(patch) + 1):
+        if not remaining:
+            return 0
+        try:
+            save_settings(conn, remaining)
+        except ValidationError as error:
+            rejected = False
+            for detail in error.errors(include_url=False):
+                field = str(detail["loc"][0]) if detail["loc"] else ""
+                if field in remaining:
+                    report.skipped.append(
+                        f"config.json: {field}={remaining.pop(field)!r} отвергнуто"
+                        f" ({detail['msg']}) — оставлено значение по умолчанию"
+                    )
+                    rejected = True
+            if not rejected:
+                # Ошибка не привязана ни к одному полю патча (например,
+                # испорченная строка настроек в самой базе). Дальше
+                # пробовать нечего — сообщаем и не теряем остальной импорт.
+                report.skipped.append(f"config.json: настройки не перенесены ({error.error_count()} ошибок)")
+                return 0
+        else:
+            return len(remaining)
+    return 0
 
 
 def _import_contacts(conn: sqlite3.Connection, source: Path, report: ImportReport) -> None:
@@ -153,7 +200,20 @@ def import_legacy(conn: sqlite3.Connection, source: Path) -> ImportReport:
     if not source.is_dir():
         report.skipped.append(f"каталог {source} не найден")
         return report
-    _import_settings(conn, source, report)
-    _import_contacts(conn, source, report)
-    _import_vacancies(conn, source, report)
+    # Три независимых блока, и они действительно независимы: пока это была
+    # просто последовательность вызовов, любое исключение в первом уносило с
+    # собой два остальных — на одном значении вне границ в config.json база
+    # после `migrate-legacy` оставалась пустой целиком. Миграция одноразовая
+    # и запускается на данных неизвестного возраста, поэтому «блок не
+    # перенёсся и сказал почему» здесь строго лучше, чем «не перенеслось
+    # ничего».
+    for step, label in (
+        (_import_settings, "настройки"),
+        (_import_contacts, "контакты"),
+        (_import_vacancies, "вакансии"),
+    ):
+        try:
+            step(conn, source, report)
+        except Exception as error:  # noqa: BLE001 — один блок не должен уносить остальные
+            report.skipped.append(f"{label}: не перенесены ({type(error).__name__}: {error})")
     return report
