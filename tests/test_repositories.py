@@ -69,6 +69,37 @@ def test_hh_found_counts_all_statuses(conn):
     assert repo.applied_on(DAY) == 1
 
 
+def test_hh_upsert_status_only_update_keeps_title(conn):
+    repo = HhRepo(conn)
+    repo.upsert({"vacancy_id": "1", "title": "QA", "found_at": NOW.isoformat(), "status": "найдено"})
+    repo.upsert({"vacancy_id": "1", "status": "отклик отправлен", "applied_at": NOW.isoformat()})
+    rows = repo.recent(10)
+    assert len(rows) == 1
+    assert rows[0]["title"] == "QA"
+    assert rows[0]["status"] == "отклик отправлен"
+    assert repo.applied_on(DAY) == 1
+
+
+def test_hh_upsert_partial_update_keeps_previous_values(conn):
+    repo = HhRepo(conn)
+    repo.upsert({
+        "vacancy_id": "1", "title": "QA", "company": "Acme", "salary": "100k",
+        "city": "Almaty", "url": "https://hh.ru/vacancy/1",
+        "found_at": NOW.isoformat(), "status": "найдено",
+    })
+    repo.upsert({
+        "vacancy_id": "1", "title": "QA",
+        "found_at": NOW.isoformat(), "status": "отклик отправлен",
+        "applied_at": NOW.isoformat(),
+    })
+    rows = repo.recent(10)
+    assert len(rows) == 1
+    assert rows[0]["company"] == "Acme"
+    assert rows[0]["salary"] == "100k"
+    assert rows[0]["city"] == "Almaty"
+    assert rows[0]["url"] == "https://hh.ru/vacancy/1"
+
+
 def test_events_are_ordered_newest_first(conn):
     repo = EventsRepo(conn)
     repo.add("tg", "started", None, datetime(2026, 9, 8, 10, 0))

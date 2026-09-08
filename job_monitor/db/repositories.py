@@ -93,16 +93,30 @@ class HhRepo:
         return row is not None
 
     def upsert(self, vacancy: dict) -> None:
-        values = {field: vacancy.get(field) for field in self.FIELDS}
+        """Merge-upsert: fields the caller omits keep their previously stored
+        value instead of being overwritten with NULL. Only fields present as
+        keys in `vacancy` (even if their value is None) are treated as supplied."""
         updates = ", ".join(
             f"{field} = excluded.{field}" for field in self.FIELDS if field != "vacancy_id"
         )
         with transaction(self._conn):
+            existing = self._conn.execute(
+                "SELECT * FROM hh_applications WHERE vacancy_id = ?",
+                (vacancy["vacancy_id"],),
+            ).fetchone()
+            merged = {
+                field: (
+                    vacancy[field]
+                    if field in vacancy
+                    else (existing[field] if existing is not None else None)
+                )
+                for field in self.FIELDS
+            }
             self._conn.execute(
                 f"INSERT INTO hh_applications ({', '.join(self.FIELDS)})"
                 f" VALUES ({', '.join('?' * len(self.FIELDS))})"
                 f" ON CONFLICT(vacancy_id) DO UPDATE SET {updates}",
-                tuple(values[field] for field in self.FIELDS),
+                tuple(merged[field] for field in self.FIELDS),
             )
 
     def applied_on(self, day: date) -> int:
