@@ -47,9 +47,9 @@
 
 | Технология | Применение |
 |---|---|
-| Python 3.10+ | Основной язык |
+| Python 3.11+ | Основной язык |
 | Telethon | Telegram MTProto API — мониторинг и отправка |
-| Selenium + WebDriver Manager | Автоматизация браузера для HH.ru |
+| Selenium | Автоматизация браузера для HH.ru (сам находит chromedriver, начиная с 4.6) |
 | FastAPI | REST API бэкенд |
 | Uvicorn | ASGI сервер |
 | asyncio | Асинхронная обработка событий Telegram |
@@ -75,9 +75,12 @@ JobMonitor/
 │   └── app.js                  # Вся логика фронтенда
 ├── monitor.py                  # TG скрипт мониторинга
 ├── hh_monitor.py               # HH скрипт (Selenium)
+├── job_monitor/                # Пути к данным, работа с .env, security-мидлвары
 ├── start_web.bat               # Запуск одной кнопкой (Windows)
-├── requirements.txt
+├── pyproject.toml              # Зависимости (диапазоны версий)
+├── requirements.lock           # Зависимости (точные пины)
 ├── .env.example                # Шаблон переменных окружения
+├── SECURITY.md                 # Модель угроз, секреты, действия при утечке
 └── README.md
 ```
 
@@ -91,36 +94,50 @@ git clone https://github.com/Scr00ge90/QA-Vacancy-Monitor.git
 cd QA-Vacancy-Monitor
 ```
 
-### 2. Установить зависимости
+Сборка pre-commit хука (`detect-secrets`) при первом коммите скачивает свою
+среду, так что первому клону нужен доступ в сеть один раз — даже если
+`make install` уже отработал офлайн из `requirements.lock`.
+
+### 2. Установить и запустить
+
+**macOS/Linux:**
 ```bash
-pip install -r requirements.txt
+make install   # создаёт .venv, ставит зависимости из pyproject.toml + requirements.lock
+make run       # uvicorn api.main:app --host 127.0.0.1 --port 8000
 ```
+
+**Windows** — двойной клик по `start_web.bat`: он сам создаёт `.venv` рядом с
+проектом (если его ещё нет), ставит зависимости внутрь него и поднимает
+сервер — ни системный Python, ни абсолютные пути интерпретатора не
+используются.
+
+В обоих случаях сервер поднимется на `http://127.0.0.1:8000`, и это
+единственный адрес, который он слушает.
 
 ### 3. Настроить окружение
+
+При первом запуске приложение создаёт каталог данных `~/.job-monitor` (права
+`0700`) и файл `.env` в нём (права `0600`) — задавать `TG_API_ID` и
+`TG_API_HASH` можно прямо через веб-интерфейс, без ручного редактирования
+файлов. Файл `.env.example` в репозитории — только справочный шаблон того,
+какие переменные существуют.
+
+Каталог данных переопределяется переменной окружения
+`JOB_MONITOR_DATA_DIR` — например, чтобы держать несколько независимых
+профилей или вынести состояние на другой диск:
 ```bash
-cp .env.example .env
+# macOS/Linux
+export JOB_MONITOR_DATA_DIR=/path/to/data
 ```
+```bat
+:: Windows
+set "JOB_MONITOR_DATA_DIR=D:\job-monitor-data"
+```
+Если переменная не задана, используется `~/.job-monitor`. Единственное
+место, где вычисляется этот путь — `job_monitor/paths.py`.
 
-Заполнить `.env`:
-```
-TG_API_ID=ВАШ_ID        # с https://my.telegram.org/apps
-TG_API_HASH=ВАШ_HASH
-SAFE_MODE=true           # true = тест, false = боевой режим
-```
-
-### 4. Запустить
-
-**Windows** — двойной клик:
-```
-start_web.bat
-```
-
-**Linux/Mac:**
-```bash
-uvicorn api.main:app --host 127.0.0.1 --port 8000
-```
-
-Откроется браузер на `http://127.0.0.1:8000`
+Подробно о том, что где хранится, какими механизмами это защищено и что
+делать при утечке секрета — в [`SECURITY.md`](SECURITY.md).
 
 ---
 
