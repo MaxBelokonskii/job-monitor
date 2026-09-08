@@ -7,9 +7,42 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+# Секреты Telegram. `job_monitor/settings.py::load_secrets` предпочитает
+# os.getenv временному `.env`, поэтому переменные окружения разработчика
+# видны тестам насквозь, каким бы ни был JOB_MONITOR_DATA_DIR.
+TELEGRAM_SECRET_VARS = ("TG_API_ID", "TG_API_HASH")
+
 
 @pytest.fixture(scope="session", autouse=True)
-def _job_monitor_data_dir(tmp_path_factory):
+def _no_real_telegram_credentials():
+    """Ни один тест не должен видеть настоящие ключи Telegram.
+
+    SECURITY.md и решение D5 предписывают держать `TG_API_ID`/`TG_API_HASH`
+    в окружении. У разработчика, который так и сделал, они видны и pytest:
+    достаточно одного теста, который входит в настоящий `lifespan` с
+    включённым `tg_autostart`, чтобы `run_tg_worker()` собрал живой
+    `TelegramClient` и **соединился с Telegram** его реальным `api_id` —
+    проверено инструментированием Telethon. Исключение при этом глотает
+    `WorkerManager._supervise`, так что suite остаётся зелёным и в выводе
+    нет ничего.
+
+    Снимать переменные в каждой фикстуре по отдельности (как делают
+    test_config_api, test_auth_routes, test_telegram_client) — это защита,
+    которую следующий новый тест-файл забудет применить: ровно так дефект и
+    возник в test_lifespan_autostart.py. Здесь она одна на весь прогон, а
+    tests/test_secrets_handling.py сторожит, что она работает.
+    """
+    saved = {name: os.environ.pop(name, None) for name in TELEGRAM_SECRET_VARS}
+    try:
+        yield
+    finally:
+        for name, value in saved.items():
+            if value is not None:
+                os.environ[name] = value
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _job_monitor_data_dir(tmp_path_factory, _no_real_telegram_credentials):
     """Keep the test suite hermetic.
 
     Importing api.main (which the client fixture below does) reaches
