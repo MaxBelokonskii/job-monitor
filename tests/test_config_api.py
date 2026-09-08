@@ -45,3 +45,43 @@ def test_patch_stores_secrets_in_env_not_db(client, tmp_path):
 def test_config_json_is_not_created(client, tmp_path):
     client.patch("/api/config", json={"max_per_day": 9}, headers=AUTH)
     assert not (tmp_path / "config.json").exists()
+
+
+# ── В .env живут только секреты ────────────────────────────────────────
+
+ALLOWED_ENV_KEYS = {"TG_API_ID", "TG_API_HASH"}
+
+
+def _env_keys(tmp_path) -> set[str]:
+    target = tmp_path / ".env"
+    if not target.exists():
+        return set()
+    return {
+        line.split("=", 1)[0].strip()
+        for line in target.read_text(encoding="utf-8").splitlines()
+        if "=" in line and not line.strip().startswith("#")
+    }
+
+
+def test_env_never_gets_application_settings(client, tmp_path):
+    """`.env` не должен получать копию прикладных настроек.
+
+    PATCH дописывал туда SAFE_MODE / PARSE_HISTORY / HISTORY_LIMIT, которых
+    никто не читает: единственный читатель `.env` — `load_secrets()` в
+    job_monitor/settings.py, и он берёт оттуда только два ключа. Копия к
+    тому же устаревала по построению — она обновлялась лишь тогда, когда
+    было что писать из секретов. Пользователь, открывший
+    `~/.job-monitor/.env` и поправивший `SAFE_MODE=false` на `true`, считал
+    себя в безопасном режиме, пока воркер читал `safe_mode` из SQLite и
+    продолжал реально писать людям.
+    """
+    client.patch("/api/config", json={"api_id": "42", "api_hash": "abc"}, headers=AUTH)
+    client.patch("/api/config", json={"safe_mode": False}, headers=AUTH)
+    client.patch("/api/config", json={"api_hash": "def", "safe_mode": True,
+                                      "parse_history": True, "history_limit": 7}, headers=AUTH)
+
+    keys = _env_keys(tmp_path)
+    assert keys <= ALLOWED_ENV_KEYS, f"в .env попали лишние ключи: {sorted(keys - ALLOWED_ENV_KEYS)}"
+    assert "TG_API_HASH" in keys, "секреты писаться перестали — проверка стала вакуумной"
+    # А настройки при этом сохранены — просто в базе, единственном их месте.
+    assert client.get("/api/config", headers=AUTH).json()["history_limit"] == 7

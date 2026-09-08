@@ -39,9 +39,16 @@ async def update_config(patch: dict) -> dict:
         raise HTTPException(status_code=422, detail=error.errors(include_url=False)) from error
 
     if secrets_to_write:
-        secrets_to_write["SAFE_MODE"] = "true" if updated.safe_mode else "false"
-        secrets_to_write["PARSE_HISTORY"] = "true" if updated.parse_history else "false"
-        secrets_to_write["HISTORY_LIMIT"] = str(updated.history_limit)
+        # В `.env` живут ТОЛЬКО секреты. Раньше сюда же дописывались
+        # SAFE_MODE / PARSE_HISTORY / HISTORY_LIMIT — копия без единого
+        # читателя: `.env` читает только `job_monitor/settings.py::
+        # load_secrets`, и берёт он оттуда исключительно TG_API_ID и
+        # TG_API_HASH. Прикладные настройки живут в SQLite. Копия к тому же
+        # устаревала по построению — она обновлялась лишь тогда, когда было
+        # что писать из секретов, — так что пользователь, открывший
+        # `~/.job-monitor/.env`, видел `SAFE_MODE=false`, правил на `true`,
+        # перезапускал приложение и считал себя в безопасном режиме, пока
+        # воркер читал `safe_mode` из базы и продолжал реально писать людям.
         envfile.write_env(secrets_to_write)
         reset_client()  # L11: ключи сменились — следующий get_client() соберёт клиента заново
     return {"status": "saved"}
