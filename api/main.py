@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,9 +8,10 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 import os
 
 from .config_routes import router as config_router
-from .tg_routes import router as tg_router, is_running as tg_is_running
-from .hh_routes import router as hh_router, hh_is_running
+from .tg_routes import router as tg_router
+from .hh_routes import router as hh_router
 from .auth_routes import router as auth_router
+from job_monitor.db.connection import get_connection
 from job_monitor.security import (
     ALLOWED_HOSTS,
     APP_TOKEN,
@@ -16,9 +19,34 @@ from job_monitor.security import (
     app_token_middleware,
     security_headers_middleware,
 )
+from job_monitor.settings import load_settings
+from job_monitor.workers.manager import manager
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
+
+
+def register_workers() -> None:
+    """Register worker factories with the module-level manager.
+
+    Intentionally empty here: the Telegram worker is registered by task 2
+    and the hh.ru worker by task 3. Without this call the lifespan below
+    would not run at all, since `app = FastAPI(..., lifespan=lifespan)`
+    needs the function to exist even before there is anything to register.
+    """
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    register_workers()
+    settings = load_settings(get_connection())
+    if settings.tg_autostart:
+        await manager.start("tg")
+    if settings.hh_autostart:
+        await manager.start("hh")
+    yield
+    await manager.stop_all()
+
 
 app = FastAPI(
     title="QA Monitor API",
@@ -30,6 +58,7 @@ app = FastAPI(
     docs_url=None,
     redoc_url=None,
     openapi_url=None,
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -60,26 +89,6 @@ async def serve_ui():
         return "<h1>index.html not found in frontend/</h1>"
     with open(html_path, "r", encoding="utf-8") as f:
         return f.read().replace(TOKEN_PLACEHOLDER, APP_TOKEN)
-
-@app.on_event("startup")
-async def on_startup():
-    """Автозапуск скриптов если включено в настройках"""
-    from .config_routes import load_config
-    from .tg_routes import tg_start
-    from .hh_routes import hh_start
-    cfg = load_config()
-    if cfg.get("tg_autostart") and not tg_is_running():
-        try:
-            await tg_start()
-            print("[AUTOSTART] TG монитор запущен")
-        except Exception as e:
-            print(f"[AUTOSTART] Ошибка запуска TG: {e}")
-    if cfg.get("hh_autostart") and not hh_is_running():
-        try:
-            await hh_start()
-            print("[AUTOSTART] HH монитор запущен")
-        except Exception as e:
-            print(f"[AUTOSTART] Ошибка запуска HH: {e}")
 
 if __name__ == "__main__":
     import uvicorn
