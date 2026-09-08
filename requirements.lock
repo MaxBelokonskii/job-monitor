@@ -1,3 +1,13 @@
+# Лок собран на macOS. Он применяется и на Windows (start_web.bat), поэтому
+# пин, который на Windows не ставится, обязан нести маркер окружения, иначе
+# `pip install -r requirements.lock` падает целиком и не ставится НИЧЕГО.
+# Инвариант закреплён тестом tests/test_dependencies.py: если апстрим
+# объявляет зависимость с маркером платформы, лок не имеет права его потерять.
+#
+# Известное неполное место: на Windows `click`/`pytest` тянут `colorama`, а
+# `uvicorn[standard]` — её же; в локе, снятом на macOS, её нет и появиться
+# оффлайн неоткуда. Установка от этого не падает — pip доставит colorama как
+# транзитивную, просто незакреплённой версии.
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anyio==4.15.1
@@ -47,7 +57,11 @@ typing-inspection==0.4.4
 typing_extensions==4.16.0
 urllib3==2.7.0
 uvicorn==0.52.4
-uvloop==0.22.1
+# Колёс под Windows у uvloop нет и не было (его setup.py прямо бросает
+# RuntimeError('uvloop does not support Windows at the moment')), а сам
+# uvicorn объявляет его как `sys_platform != 'win32'`. Без маркера
+# `pip install -r requirements.lock` на Windows падает на этой строке.
+uvloop==0.22.1 ; sys_platform != "win32"
 virtualenv==21.7.8
 watchfiles==1.2.0
 websocket-client==1.9.2
