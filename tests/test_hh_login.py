@@ -1,4 +1,6 @@
 import json
+import threading
+import time
 
 import pytest
 
@@ -243,3 +245,79 @@ def test_lifespan_shutdown_closes_an_abandoned_login_window():
     finally:
         app_login._driver = None
         app_login.state = HhLoginState.logged_out
+
+
+# ── Выход приложения не может зависнуть на driver.quit() ───────────────
+
+
+class HangingDriver(FakeDriver):
+    """chromedriver, который перестал отвечать: `quit()` не возвращается.
+
+    Именно этот отказ — причина, по которой `HhLogin.close()` глотает
+    исключения из `quit()`. Но зависание не исключение, и `except` от него
+    не спасает: нужен бюджет времени.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def quit(self) -> None:
+        self.entered.set()
+        self.quit_called = True
+        self.release.wait(60)
+
+
+def test_lifespan_shutdown_is_not_held_hostage_by_a_wedged_quit(monkeypatch, caplog):
+    """Ctrl+C при неотвечающем chromedriver должен завершать приложение.
+
+    Раньше здесь стоял `await asyncio.to_thread(login.close)` без бюджета —
+    рядом с `manager.stop(timeout=10.0)`, у которого развёрнуто объяснено,
+    почему бюджет обязателен. Воспроизведение: `quit()`, который не
+    возвращается, → выход из lifespan не наступал никогда.
+    """
+    from fastapi.testclient import TestClient
+
+    from api import main
+    from job_monitor.workers.hh import login as app_login
+
+    monkeypatch.setattr(main, "LOGIN_CLOSE_TIMEOUT", 0.2)
+    driver = HangingDriver()
+    try:
+        with caplog.at_level("ERROR"):
+            started = time.monotonic()
+            with TestClient(main.app, base_url="http://127.0.0.1:8000"):
+                app_login._driver = driver
+                app_login.state = HhLoginState.browser_open
+            elapsed = time.monotonic() - started
+        assert driver.entered.wait(5), "close() даже не дошёл до quit()"
+        assert elapsed < 5, f"выход из lifespan занял {elapsed:.1f}s — бюджет не сработал"
+        assert any("не закрылось" in record.message for record in caplog.records), (
+            "оставшийся живым Chrome должен быть назван в логе, а не проглочен"
+        )
+    finally:
+        driver.release.set()
+        app_login._driver = None
+        app_login.state = HhLoginState.logged_out
+
+
+def test_the_close_thread_is_a_daemon(monkeypatch):
+    """Бюджета мало: поток отменить нельзя, и non-daemon поток удержал бы
+    процесс на выходе интерпретатора, даже если lifespan перестал его ждать.
+    `asyncio.to_thread` даёт ровно такой поток (общий ThreadPoolExecutor,
+    threads=non-daemon, джойнятся atexit), поэтому close идёт своим потоком.
+    """
+    import asyncio
+
+    from api import main
+    from job_monitor.workers.hh import login as app_login
+
+    seen: list[bool] = []
+
+    def spying_close() -> None:
+        seen.append(threading.current_thread().daemon)
+
+    monkeypatch.setattr(app_login, "close", spying_close)
+    asyncio.run(main.close_login_window(timeout=5))
+    assert seen == [True], f"close() выполнился в потоке daemon={seen}"

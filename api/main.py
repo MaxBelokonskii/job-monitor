@@ -1,4 +1,5 @@
 import asyncio
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -37,6 +38,54 @@ def register_workers() -> None:
     manager.register("hh", run_hh_worker)
 
 
+# Бюджет на закрытие окна входа hh.ru при остановке приложения — тот же
+# аргумент, что и у `manager.stop(timeout=10.0)`.
+LOGIN_CLOSE_TIMEOUT = 10.0
+
+
+async def close_login_window(timeout: float | None = None) -> None:
+    """Погасить окно входа hh.ru, но не дольше `timeout` секунд.
+
+    `login.close()` вызывает `driver.quit()`, который ходит по HTTP в
+    chromedriver и может не ответить НИКОГДА — ровно тот отказ, ради которого
+    `HhLogin.close()` вообще глотает исключения из `quit()`. Но зависание не
+    исключение: `except` от него не спасает. Без бюджета времени Ctrl+C
+    оставлял uvicorn висеть в `to_thread(login.close)` навсегда.
+
+    Поток нельзя отменить, поэтому одного бюджета мало: `asyncio.to_thread`
+    исполняется в общем ThreadPoolExecutor, чьи потоки не daemon, и
+    интерпретатор джойнит их на выходе — процесс всё равно не завершился бы,
+    даже если бы `lifespan` перестал ждать. Здесь поэтому свой daemon-поток:
+    бюджет ограничивает ожидание, а daemon гарантирует, что застрявший
+    `quit()` не удержит процесс.
+    """
+    budget = LOGIN_CLOSE_TIMEOUT if timeout is None else timeout
+    loop = asyncio.get_running_loop()
+    finished = asyncio.Event()
+
+    def close_in_thread() -> None:
+        try:
+            login.close()
+        finally:
+            try:
+                loop.call_soon_threadsafe(finished.set)
+            except RuntimeError:
+                # Бюджет уже истёк, приложение ушло дальше и закрыло цикл:
+                # будить некого. Это нормальный исход зависшего `quit()`,
+                # который всё-таки вернулся, а не ошибка потока.
+                pass
+
+    threading.Thread(target=close_in_thread, name="hh-login-close", daemon=True).start()
+    try:
+        await asyncio.wait_for(finished.wait(), budget)
+    except (asyncio.TimeoutError, TimeoutError):
+        worker_logger("hh").error(
+            "окно входа hh.ru не закрылось за %ss — chromedriver не отвечает;"
+            " приложение завершается, процесс Chrome может остаться живым",
+            budget,
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Логирование настраивается здесь, а не на импорте: импорт модуля не
@@ -72,10 +121,10 @@ async def lifespan(app: FastAPI):
         # confirm(). Незавершённый вход поэтому переживал остановку
         # приложения живым процессом Chrome — тот самый брошенный браузер,
         # ради которого существует супервизор. `quit()` блокирующий, так что
-        # здесь он идёт через to_thread, как и `login.start` в
-        # api/hh_routes.py. В `finally`, чтобы падение stop_all() не съело
-        # закрытие окна.
-        await asyncio.to_thread(login.close)
+        # здесь он идёт в отдельном потоке — и с бюджетом времени, см.
+        # close_login_window(). В `finally`, чтобы падение stop_all() не
+        # съело закрытие окна.
+        await close_login_window()
 
 
 app = FastAPI(
