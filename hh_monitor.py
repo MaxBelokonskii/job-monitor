@@ -15,6 +15,7 @@ from selenium.common.exceptions import (
 
 from job_monitor import paths
 from job_monitor.db.connection import get_connection
+from job_monitor.db.repositories import HH_STATUS_APPLIED
 from job_monitor.settings import load_settings
 
 HH_SENT_PATH = paths.path("hh_sent.json")
@@ -412,7 +413,6 @@ class HHMonitor:
     def _run_loop(self):
         cfg = load_config()
         log.info(f"[HH] Старт мониторинга. Ключевые слова: {cfg.get('hh_keywords')}")
-        log.info(f"[HH] Регионы: {cfg.get('hh_regions')}")
         log.info(f"[HH] Макс. откликов в день: {cfg.get('hh_max_per_day', 20)}")
 
         while self.running:
@@ -465,7 +465,7 @@ class HHMonitor:
                                 self.sent[vacancy["id"]] = {
                                     **vacancy,
                                     "applied_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                                    "status": "отклик отправлен",
+                                    "status": HH_STATUS_APPLIED,
                                     "cover_letter": cfg.get("hh_cover_letter", "")[:100],
                                 }
                                 save_sent(self.sent)

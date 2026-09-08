@@ -51,7 +51,11 @@ CREATE TABLE IF NOT EXISTS worker_events (
 CREATE INDEX IF NOT EXISTS idx_worker_events ON worker_events(worker, at);
 """
 
-MIGRATIONS: list[tuple[int, str]] = [(1, MIGRATION_001)]
+MIGRATION_002 = """
+CREATE INDEX IF NOT EXISTS idx_hh_found_at ON hh_applications(found_at);
+"""
+
+MIGRATIONS: list[tuple[int, str]] = [(1, MIGRATION_001), (2, MIGRATION_002)]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
 

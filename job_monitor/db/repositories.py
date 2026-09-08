@@ -4,11 +4,34 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import date, datetime
+from collections.abc import Callable
+from datetime import date, datetime, timedelta
 
 from job_monitor.db.connection import transaction
 
 SETTINGS_KEY = "app"
+
+# Status string a completed hh.ru application is stamped with. Hoisted here
+# so the daily/total counters below and the hh_monitor.py writer can never
+# drift apart — a reworded status in only one of the two places would
+# silently zero the counters instead of raising anywhere.
+HH_STATUS_APPLIED = "отклик отправлен"
+
+
+def _day_bounds(day: date) -> tuple[str, str]:
+    """Half-open [start, end) bounds for `day`, in the same
+    isoformat(timespec="seconds") shape the *_at columns are stored in.
+
+    A `col LIKE 'YYYY-MM-DD%'` filter reads like the obvious way to match
+    "this calendar day", but measured with EXPLAIN QUERY PLAN it forces a
+    full SCAN even when an index exists on the column — while the
+    equivalent half-open range gets a SEARCH using the index. The range
+    form also stops depending on the stored string having exactly this
+    prefix shape.
+    """
+    start = datetime.combine(day, datetime.min.time())
+    end = start + timedelta(days=1)
+    return start.isoformat(timespec="seconds"), end.isoformat(timespec="seconds")
 
 
 class SettingsRepo:
@@ -30,6 +53,31 @@ class SettingsRepo:
                 (SETTINGS_KEY, payload),
             )
 
+    def update(self, mutator: Callable[[dict], dict]) -> dict:
+        """Atomic load -> mutator -> save, all inside one BEGIN IMMEDIATE
+        transaction (see `transaction()` in db/connection.py).
+
+        `save_settings()`'s old read-modify-write ran the read in autocommit
+        and the write in its own separate transaction, so a concurrent
+        writer could complete a full save in between: the second writer's
+        change would be silently overwritten by the first writer's stale
+        snapshot, with no exception anywhere. Holding one transaction across
+        both the read and the write closes that window — a concurrent
+        `update()`/`save()` on the same connection-pair now serializes
+        (blocked by the write lock, absorbed by `busy_timeout`) instead of
+        racing.
+        """
+        with transaction(self._conn):
+            current = self.load()
+            new_values = mutator(current)
+            payload = json.dumps(new_values, ensure_ascii=False)
+            self._conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?, ?)"
+                " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (SETTINGS_KEY, payload),
+            )
+        return new_values
+
 
 class TgRepo:
     def __init__(self, conn: sqlite3.Connection) -> None:
@@ -44,6 +92,13 @@ class TgRepo:
     def record_send(
         self, username: str, channel: str | None, preview: str | None, now: datetime
     ) -> None:
+        """Record a send: upsert the contact, insert a history row, atomically.
+
+        `source_channel` is deliberately never updated on conflict — only
+        the first channel a contact was ever reached through is kept. This
+        is the intended "first-touch channel" semantic, not an oversight:
+        do not change the ON CONFLICT clause to update it on later sends.
+        """
         stamp = now.isoformat(timespec="seconds")
         with transaction(self._conn):
             self._conn.execute(
@@ -60,10 +115,33 @@ class TgRepo:
                 (username, stamp, channel, preview),
             )
 
+    def ensure_contact(self, username: str, first_seen: datetime) -> None:
+        """Register a contact with a known first-seen date but *no* send
+        history, without fabricating a `tg_sends` row.
+
+        Used by the legacy importer for `all_sent_users.txt`: that file
+        proves the contact was reached at some point in the past, but its
+        own timestamp is the file's mtime (roughly "now" for an upgrading
+        user), not the actual send date. Recording that as a real
+        `tg_sends` row would stamp hundreds of historical contacts as sent
+        "today", inflating `sent_on(today)`. This only touches
+        `tg_contacts`, leaving daily-count queries over `tg_sends`
+        unaffected. A no-op if the contact already exists.
+        """
+        stamp = first_seen.isoformat(timespec="seconds")
+        with transaction(self._conn):
+            self._conn.execute(
+                "INSERT INTO tg_contacts (username, first_sent_at, last_sent_at,"
+                " send_count, source_channel) VALUES (?, ?, ?, 0, NULL)"
+                " ON CONFLICT(username) DO NOTHING",
+                (username, stamp, stamp),
+            )
+
     def sent_on(self, day: date) -> int:
+        start, end = _day_bounds(day)
         row = self._conn.execute(
-            "SELECT COUNT(*) AS n FROM tg_sends WHERE sent_at LIKE ?",
-            (f"{day.isoformat()}%",),
+            "SELECT COUNT(*) AS n FROM tg_sends WHERE sent_at >= ? AND sent_at < ?",
+            (start, end),
         ).fetchone()
         return int(row["n"])
 
@@ -120,23 +198,26 @@ class HhRepo:
             )
 
     def applied_on(self, day: date) -> int:
+        start, end = _day_bounds(day)
         row = self._conn.execute(
             "SELECT COUNT(*) AS n FROM hh_applications"
-            " WHERE applied_at LIKE ? AND status = 'отклик отправлен'",
-            (f"{day.isoformat()}%",),
+            " WHERE applied_at >= ? AND applied_at < ? AND status = ?",
+            (start, end, HH_STATUS_APPLIED),
         ).fetchone()
         return int(row["n"])
 
     def found_on(self, day: date) -> int:
+        start, end = _day_bounds(day)
         row = self._conn.execute(
-            "SELECT COUNT(*) AS n FROM hh_applications WHERE found_at LIKE ?",
-            (f"{day.isoformat()}%",),
+            "SELECT COUNT(*) AS n FROM hh_applications WHERE found_at >= ? AND found_at < ?",
+            (start, end),
         ).fetchone()
         return int(row["n"])
 
     def applied_total(self) -> int:
         row = self._conn.execute(
-            "SELECT COUNT(*) AS n FROM hh_applications WHERE status = 'отклик отправлен'"
+            "SELECT COUNT(*) AS n FROM hh_applications WHERE status = ?",
+            (HH_STATUS_APPLIED,),
         ).fetchone()
         return int(row["n"])
 

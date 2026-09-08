@@ -42,7 +42,15 @@ def reset_connection() -> None:
 
 @contextmanager
 def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
-    conn.execute("BEGIN")
+    # BEGIN IMMEDIATE (not the default deferred BEGIN) takes the write lock
+    # up front. In WAL mode, a deferred BEGIN lets two writers both start a
+    # read snapshot, so the second one to commit gets SQLITE_BUSY_SNAPSHOT —
+    # a conflict the busy handler does *not* retry, so busy_timeout is no
+    # help and the caller sees a raw exception. BEGIN IMMEDIATE instead
+    # serializes writers at BEGIN time, turning that into an ordinary lock
+    # wait that busy_timeout does absorb. With a single writer this changes
+    # nothing.
+    conn.execute("BEGIN IMMEDIATE")
     try:
         yield conn
     except BaseException:

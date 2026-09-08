@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 from dataclasses import dataclass
@@ -10,6 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from job_monitor import envfile
 from job_monitor.db.repositories import SettingsRepo
+
+logger = logging.getLogger(__name__)
 
 
 class AppSettings(BaseModel):
@@ -67,17 +70,54 @@ class Secrets:
         return self.api_id is not None and bool(self.api_hash)
 
 
+def _drop_unknown_fields(raw: dict) -> dict:
+    """Tolerant read-side filter: keep only keys AppSettings still knows
+    about. A stored row can outlive the schema (a field removed/renamed
+    after it was written, or hand-edited), and without this,
+    `AppSettings(**raw)` — extra="forbid" — raises for every reader with no
+    in-app way to recover: `GET /api/config` 500s, both workers die on
+    their first `load_config()`, and `save_settings()` can't PATCH past it
+    either, because its own read of the stored row hits the same error
+    first. Recovery would need manual sqlite3 surgery on the user's
+    database. Filtering here means one unknown key degrades to "ignored",
+    not "bricked"."""
+    known = set(AppSettings.model_fields)
+    dropped = set(raw) - known
+    if dropped:
+        logger.warning("settings: dropping unknown stored keys: %s", sorted(dropped))
+    return {key: value for key, value in raw.items() if key in known}
+
+
 def load_settings(conn: sqlite3.Connection) -> AppSettings:
-    return AppSettings(**SettingsRepo(conn).load())
+    return AppSettings(**_drop_unknown_fields(SettingsRepo(conn).load()))
 
 
 def save_settings(conn: sqlite3.Connection, patch: dict) -> AppSettings:
+    """Read-modify-write the settings row as one atomic unit.
+
+    The base read tolerates unknown keys already in the stored row (see
+    `_drop_unknown_fields`) — that is what keeps a stale/foreign key from
+    bricking recovery. The *merged* dict (stored fields + `patch`) is still
+    validated with `AppSettings`'s full `extra="forbid"` strictness: that is
+    what keeps `api_hash` (or any other unknown key) out of the database in
+    the first place, enforced right where the write happens, so this change
+    does not weaken the secret-exclusion property at all.
+
+    The whole read -> merge -> validate -> write sequence runs inside one
+    `SettingsRepo.update()` transaction (BEGIN IMMEDIATE), so a concurrent
+    writer on another connection can't complete a full save in the gap
+    between this read and this write and have its change silently
+    overwritten — see `SettingsRepo.update()`'s docstring.
+    """
     repo = SettingsRepo(conn)
-    merged = AppSettings(**repo.load()).model_dump()
-    merged.update(patch)
-    validated = AppSettings(**merged)          # extra="forbid" ловит лишние ключи
-    repo.save(validated.model_dump())
-    return validated
+
+    def mutate(current: dict) -> dict:
+        merged = _drop_unknown_fields(current)
+        merged.update(patch)
+        validated = AppSettings(**merged)      # extra="forbid" ловит лишние ключи патча
+        return validated.model_dump()
+
+    return AppSettings(**repo.update(mutate))
 
 
 def load_secrets() -> Secrets:
