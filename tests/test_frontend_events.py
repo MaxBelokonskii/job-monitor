@@ -813,6 +813,32 @@ def test_the_cascade_resolver_agrees_with_the_stylesheet() -> None:
     )
 
 
+# Множество состояний берётся из самого `workerView()`, а не перечисляется
+# здесь. Ревью показало, почему это не педантизм: пока список был захардкожен
+# в питоновском харнессе, новую ветку `case 'paused':` с контрастом 2.84:1
+# можно было добавить в app.js, и прогон оставался зелёным — докстринг ниже
+# обещал обратное. Реализацию (`updateWorkerButton`) тест и раньше брал
+# настоящую; теперь настоящий и перебор состояний.
+WORKER_VIEW_CASE = re.compile(r"case\s+'([a-z_]+)'\s*:")
+
+
+def _worker_view_states() -> list[str]:
+    source = _maybe_extract("workerView")
+    assert source, "workerView() не найдена в app.js"
+    states = WORKER_VIEW_CASE.findall(source)
+    assert states, "в workerView() не осталось ни одной ветки case — разбор сломался"
+    assert "default:" in source, (
+        "у workerView() нет ветки default — состояние `stopped` берётся именно из неё"
+    )
+    # `default:` отвечает за `stopped` (и за всё незнакомое) — своей `case` у
+    # него нет, поэтому имя добавляется явно.
+    return sorted({*states, "stopped"})
+
+
+def _worker_button_states_script() -> str:
+    return WORKER_BUTTON_STATES.replace("__STATES__", json.dumps(_worker_view_states()))
+
+
 WORKER_BUTTON_STATES = """
 const nodes = {};
 globalThis.document = { getElementById: (id) => nodes[id] || null };
@@ -820,7 +846,7 @@ function el() { return {}; }
 function fill() {}
 
 const rows = [];
-for (const state of ['stopped', 'starting', 'running', 'stopping', 'error']) {
+for (const state of __STATES__) {
   for (const canStart of [true, false]) {
     for (const [name, toggleClass] of [['TG', 'btn-toggle-tg'], ['HH', 'btn-toggle-hh']]) {
       const button = { className: '', disabled: false };
@@ -842,10 +868,10 @@ def _worker_button_states() -> list[dict]:
     sources = "\n".join(
         _maybe_extract(name) for name in ("workerView", "workerSignature", "updateWorkerButton")
     )
-    result = _run_node(f"{sources}\n{WORKER_BUTTON_STATES}")
+    result = _run_node(f"{sources}\n{_worker_button_states_script()}")
     assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
     rows = json.loads(result.stdout.strip().splitlines()[-1])
-    assert len(rows) == 20, rows
+    assert len(rows) == len(_worker_view_states()) * 4, rows   # × canStart × TG/HH
     assert any(row["disabled"] for row in rows), "ни одного disabled — состояния собраны неверно"
     return rows
 
@@ -858,8 +884,9 @@ def test_every_worker_button_label_meets_wcag_aa() -> None:
     `.worker-alert` показывается только при `error`. Сплошная
     `.btn-toggle:disabled { opacity: .65 }` роняла её до 1.86:1 («Остановка
     TG…»), 3.57:1 («Остановка HH…») и 1.87:1 («Ошибка HH — нужен перезапуск
-    приложения»). Состояния берутся из настоящего `updateWorkerButton()`,
-    поэтому новое состояние кнопки нельзя добавить в обход этой проверки.
+    приложения»). И реализация (`updateWorkerButton`), и сам перебор
+    состояний берутся из app.js — ветки `switch` в `workerView()`, — поэтому
+    новое состояние кнопки нельзя добавить в обход этой проверки.
     """
     failures = []
     for row in _worker_button_states():
