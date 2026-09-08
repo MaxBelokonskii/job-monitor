@@ -1,0 +1,435 @@
+"""Цикл HH-воркера и машина состояний входа.
+
+`HhLogin` заменяет блокирующий `input()` из старого `hh_monitor.py` (L4):
+вместо одного вызова, который ждёт Enter в терминале, который у воркера,
+запущенного из UI как процесс без stdin, никогда не придёт, вход разбит на
+два независимых HTTP-вызова — `start()` открывает окно браузера,
+`confirm()` проверяет, что пользователь там действительно вошёл, и
+сохраняет cookies. Ни один из них не блокирует event loop дольше времени
+одной Selenium-команды (оба вызываются через `asyncio.to_thread` в
+`api/hh_routes.py`).
+
+Цикл поиска и откликов (`_blocking_loop`) — синхронный и живёт в отдельном
+потоке, потому что Selenium сам по себе блокирующий. Поток нельзя отменить
+как asyncio-таску, поэтому кооперативная отмена — через `threading.Event`,
+проверяемый на каждом шаге, который может занять время (между вакансиями,
+внутри задержки после отклика, во время ожидания дневного лимита).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import random
+import threading
+import time
+from collections.abc import Callable
+from datetime import date, datetime
+from enum import Enum
+from pathlib import Path
+from typing import Any
+
+from selenium import webdriver
+from selenium.common.exceptions import (
+    ElementClickInterceptedException,
+    NoSuchElementException,
+    TimeoutException,
+    WebDriverException,
+)
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+
+from job_monitor import paths
+from job_monitor.db.repositories import EventsRepo, HH_STATUS_APPLIED, HhRepo
+from job_monitor.settings import AppSettings, load_settings
+
+log = logging.getLogger(__name__)
+
+LOGIN_URL = "https://hh.ru/account/login"
+HOME_URL = "https://hh.ru"
+SELENIUM_COOKIE_FIELDS = ("name", "value", "domain", "path", "secure", "httpOnly")
+
+
+# ── Вход без блокировки (L4) ────────────────────────────────────────────
+
+
+class HhLoginState(str, Enum):
+    logged_out = "logged_out"
+    browser_open = "browser_open"
+    logged_in = "logged_in"
+
+
+def save_cookies(driver: Any, target: Path) -> None:
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    target.write_text(json.dumps(driver.get_cookies()), encoding="utf-8")
+    target.chmod(0o600)
+
+
+def load_cookies(driver: Any, target: Path) -> bool:
+    if not target.exists():
+        return False
+    driver.get(HOME_URL)
+    for cookie in json.loads(target.read_text(encoding="utf-8")):
+        trimmed = {key: value for key, value in cookie.items() if key in SELENIUM_COOKIE_FIELDS}
+        try:
+            driver.add_cookie(trimmed)
+        except Exception as error:  # noqa: BLE001 — один плохой cookie не должен ронять вход
+            log.debug("cookie %s отклонён: %s", trimmed.get("name"), error)
+    driver.refresh()
+    return True
+
+
+class HhLogin:
+    """Ручной вход в hh.ru без блокировки процесса: два вызова вместо input()."""
+
+    def __init__(
+        self,
+        driver_factory: Callable[[], Any],
+        cookies_path: Path,
+        is_logged_in: Callable[[Any], bool],
+    ) -> None:
+        self._driver_factory = driver_factory
+        self._cookies_path = cookies_path
+        self._is_logged_in = is_logged_in
+        self._driver: Any | None = None
+        self.state = HhLoginState.logged_out
+
+    def start(self) -> HhLoginState:
+        if self._driver is None:
+            self._driver = self._driver_factory()
+        self._driver.get(LOGIN_URL)
+        self.state = HhLoginState.browser_open
+        return self.state
+
+    def confirm(self) -> HhLoginState:
+        if self._driver is None:
+            raise RuntimeError("сначала вызови start()")
+        if not self._is_logged_in(self._driver):
+            return self.state
+        save_cookies(self._driver, self._cookies_path)
+        self._driver.quit()
+        self._driver = None
+        self.state = HhLoginState.logged_in
+        return self.state
+
+
+# ── Selenium-функции, перенесённые из hh_monitor.py без изменения логики ──
+
+
+def is_logged_in(driver: Any) -> bool:
+    try:
+        driver.get("https://hh.ru")
+        time.sleep(3)
+        indicators = [
+            "//div[@data-qa='mainmenu-userBlock']",
+            "//a[@data-qa='account-personal-link']",
+            "//span[@data-qa='bloko-header-1']",
+        ]
+        for xpath in indicators:
+            try:
+                driver.find_element(By.XPATH, xpath)
+                return True
+            except NoSuchElementException:
+                continue
+        return False
+    except Exception:
+        return False
+
+
+def setup_driver(headless: bool = False) -> "webdriver.Chrome":
+    options = webdriver.ChromeOptions()
+    if headless:
+        options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    options.add_experimental_option("excludeSwitches", ["enable-automation"])
+    options.add_experimental_option("useAutomationExtension", False)
+    options.add_argument("--window-size=1280,900")
+    options.add_argument(
+        "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/122.0.0.0 Safari/537.36"
+    )
+    driver = webdriver.Chrome(options=options)
+    driver.execute_script(
+        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+    )
+    return driver
+
+
+def build_search_url(keyword: str, settings: AppSettings, area_id: int) -> str:
+    """Строим URL поиска с фильтрами."""
+    params = [
+        f"text={keyword.replace(' ', '+')}",
+        f"area={area_id}",
+        f"search_period={settings.hh_search_period}",
+        "per_page=20",
+        "order_by=publication_time",
+    ]
+    if settings.hh_experience:
+        params.append(f"experience={settings.hh_experience}")
+    if settings.hh_salary_from:
+        params.append(f"salary={settings.hh_salary_from}")
+        params.append("only_with_salary=true")
+    for emp in settings.hh_employment:
+        params.append(f"employment={emp}")
+    for sch in settings.hh_schedule:
+        params.append(f"schedule={sch}")
+    return "https://hh.ru/search/vacancy?" + "&".join(params)
+
+
+def get_vacancies_from_page(driver: Any, settings: AppSettings) -> list[dict]:
+    """Собираем вакансии со страницы поиска.
+
+    Ключ переименован с `id` на `vacancy_id` (перенос из hh_monitor.py):
+    `HhRepo.exists()`/`upsert()` ждут `vacancy_id`, иначе получат `None`
+    молча и приложение начнёт откликаться на одни и те же вакансии по кругу.
+    """
+    vacancies: list[dict] = []
+    wait = WebDriverWait(driver, 10)
+    try:
+        wait.until(EC.presence_of_element_located(
+            (By.XPATH, "//div[@data-qa='vacancy-serp__results']")
+        ))
+    except TimeoutException:
+        log.warning("[HH] Результаты поиска не загрузились")
+        return []
+
+    items = driver.find_elements(By.XPATH, "//div[@data-qa='vacancy-serp__vacancy']")
+    exclude = [w.lower() for w in settings.hh_exclude]
+
+    for item in items:
+        try:
+            title_el = item.find_element(By.XPATH, ".//a[@data-qa='serp-item__title']")
+            title = title_el.text.strip()
+            url = title_el.get_attribute("href").split("?")[0]
+            vacancy_id = url.split("/")[-1]
+
+            title_lower = title.lower()
+            if any(ex in title_lower for ex in exclude):
+                continue
+
+            try:
+                company = item.find_element(
+                    By.XPATH, ".//a[@data-qa='vacancy-serp__vacancy-employer']"
+                ).text.strip()
+            except NoSuchElementException:
+                company = "Не указана"
+
+            try:
+                salary = item.find_element(
+                    By.XPATH, ".//span[@data-qa='vacancy-serp__vacancy-compensation']"
+                ).text.strip()
+            except NoSuchElementException:
+                salary = "Не указана"
+
+            try:
+                city = item.find_element(
+                    By.XPATH, ".//div[@data-qa='vacancy-serp__vacancy-address']"
+                ).text.strip()
+            except NoSuchElementException:
+                city = ""
+
+            vacancies.append({
+                "vacancy_id": vacancy_id,
+                "title": title,
+                "company": company,
+                "salary": salary,
+                "city": city,
+                "url": url,
+                "found_at": datetime.now().isoformat(timespec="seconds"),
+            })
+        except Exception as error:
+            log.debug("[HH] Ошибка парсинга вакансии: %s", error)
+            continue
+
+    return vacancies
+
+
+def apply_to_vacancy(driver: Any, vacancy: dict, settings: AppSettings) -> bool:
+    """Откликаемся на вакансию."""
+    wait = WebDriverWait(driver, 15)
+    cover_letter = settings.hh_cover_letter
+    resume_id = settings.hh_resume_id
+
+    try:
+        driver.get(vacancy["url"])
+        time.sleep(random.uniform(2, 4))
+
+        apply_btn = None
+        selectors = [
+            "//a[@data-qa='vacancy-response-link-top']",
+            "//button[@data-qa='vacancy-response-link-top']",
+            "//a[@data-qa='vacancy-response-link-bottom']",
+            "//button[contains(@class, 'vacancy-response')]",
+        ]
+        for sel in selectors:
+            try:
+                apply_btn = wait.until(EC.element_to_be_clickable((By.XPATH, sel)))
+                break
+            except TimeoutException:
+                continue
+
+        if not apply_btn:
+            log.warning("[HH] Кнопка отклика не найдена: %s", vacancy["title"])
+            return False
+
+        btn_text = apply_btn.text.lower()
+        if "откликнулись" in btn_text or "отклик отправлен" in btn_text:
+            log.info("[HH][SKIP] Уже откликались: %s", vacancy["title"])
+            return False
+
+        apply_btn.click()
+        time.sleep(random.uniform(1.5, 3))
+
+        if resume_id:
+            try:
+                resume_items = driver.find_elements(
+                    By.XPATH, "//div[@data-qa='resume-negotiations-list__resume']"
+                )
+                for item in resume_items:
+                    if resume_id in item.get_attribute("innerHTML"):
+                        item.click()
+                        time.sleep(1)
+                        break
+            except Exception:
+                pass
+
+        if cover_letter:
+            try:
+                letter_area = driver.find_element(
+                    By.XPATH,
+                    "//textarea[@data-qa='vacancy-response-letter-textarea'] | "
+                    "//textarea[@placeholder]"
+                )
+                letter_area.clear()
+                for char in cover_letter[:500]:
+                    letter_area.send_keys(char)
+                    if random.random() < 0.05:
+                        time.sleep(random.uniform(0.05, 0.15))
+                time.sleep(1)
+            except NoSuchElementException:
+                log.warning("[HH] Поле письма не найдено для: %s", vacancy["title"])
+
+        submit_selectors = [
+            "//button[@data-qa='vacancy-response-letter-submit']",
+            "//button[@data-qa='vacancy-response-submit-popup']",
+            "//button[contains(text(), 'Откликнуться')]",
+            "//button[contains(text(), 'Отправить')]",
+        ]
+        submitted = False
+        for sel in submit_selectors:
+            try:
+                submit_btn = wait.until(EC.element_to_be_clickable((By.XPATH, sel)))
+                submit_btn.click()
+                submitted = True
+                break
+            except (TimeoutException, ElementClickInterceptedException):
+                continue
+
+        if not submitted:
+            log.warning("[HH] Не удалось отправить отклик: %s", vacancy["title"])
+            return False
+
+        time.sleep(random.uniform(2, 4))
+        log.info("[HH][OK] Отклик отправлен: %s — %s", vacancy["title"], vacancy["company"])
+        return True
+
+    except WebDriverException as error:
+        log.error("[HH][ERROR] %s: %s", vacancy["title"], error)
+        return False
+
+
+# ── Цикл воркера в отдельном потоке ─────────────────────────────────────
+
+_stop_event = threading.Event()
+login = HhLogin(
+    driver_factory=lambda: setup_driver(headless=False),
+    cookies_path=paths.hh_cookies(),
+    is_logged_in=is_logged_in,
+)
+
+
+def _interruptible_sleep(seconds: float) -> bool:
+    """Спит по секунде. Возвращает False, если попросили остановиться."""
+    for _ in range(int(seconds)):
+        if _stop_event.is_set():
+            return False
+        time.sleep(1)
+    return True
+
+
+def _process_one(
+    driver: Any,
+    vacancy: dict,
+    settings: AppSettings,
+    repo: HhRepo,
+    events: EventsRepo,
+) -> bool:
+    """Откликается на одну вакансию и записывает результат. True — отклик отправлен."""
+    applied = apply_to_vacancy(driver, vacancy, settings)
+    repo.upsert({
+        **vacancy,
+        "status": HH_STATUS_APPLIED if applied else "пропущено",
+        "applied_at": datetime.now().isoformat(timespec="seconds") if applied else None,
+    })
+    events.add("hh", "applied" if applied else "skipped", vacancy["title"], datetime.now())
+    return applied
+
+
+def _blocking_loop() -> None:
+    # R4: open a connection dedicated to this thread rather than sharing the
+    # request-handling event loop's get_connection() singleton. sqlite3
+    # connections are not meant for concurrent use from two threads even
+    # with check_same_thread=False — with an explicit BEGIN issued from both
+    # this thread and a request handler at the same time, the second would
+    # hit "OperationalError: cannot start a transaction within a
+    # transaction" instead of simply waiting its turn.
+    from job_monitor.db.connection import connect
+
+    conn = connect()
+    repo = HhRepo(conn)
+    events = EventsRepo(conn)
+    driver = setup_driver(headless=False)
+    try:
+        load_cookies(driver, paths.hh_cookies())
+        if not is_logged_in(driver):
+            events.add("hh", "login_required", "нужен вход через настройки", datetime.now())
+            return
+        while not _stop_event.is_set():
+            settings = load_settings(conn)
+            if repo.applied_on(date.today()) >= settings.hh_max_per_day:
+                if not _interruptible_sleep(600):
+                    return
+                continue
+            for keyword in settings.hh_keywords:
+                for area_id in settings.hh_area_ids:
+                    if _stop_event.is_set():
+                        return
+                    driver.get(build_search_url(keyword, settings, area_id))
+                    for vacancy in get_vacancies_from_page(driver, settings):
+                        if _stop_event.is_set():
+                            return
+                        if repo.exists(vacancy["vacancy_id"]):
+                            continue
+                        _process_one(driver, vacancy, settings, repo, events)
+                        if not _interruptible_sleep(
+                            random.randint(settings.hh_delay_min, settings.hh_delay_max)
+                        ):
+                            return
+            if not _interruptible_sleep(settings.hh_check_interval):
+                return
+    finally:
+        driver.quit()
+
+
+async def run_worker() -> None:
+    _stop_event.clear()
+    try:
+        await asyncio.to_thread(_blocking_loop)
+    except asyncio.CancelledError:
+        _stop_event.set()      # поток увидит флаг и выйдет сам
+        raise

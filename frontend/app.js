@@ -349,6 +349,8 @@ async function loadSettings() {
   if (cfg.hh_cover_letter) document.getElementById('hhCoverLetter').value = cfg.hh_cover_letter;
   if (cfg.hh_autostart !== undefined) document.getElementById('toggleHHAutostart').checked = cfg.hh_autostart;
   if (cfg.hh_selenium_steps) { hhState.seleniumSteps = cfg.hh_selenium_steps; renderSeleniumSteps(); }
+  renderHHLoginControls();
+  await refreshHHLoginStatus();
 
   await checkWebAuth();
 }
@@ -468,6 +470,50 @@ async function saveHHSettings() {
   const r = await apiPatch('/config', data);
   if (!configPatchOk(r)) { showToast(configErrorDetail(r)); return; }
   showToast('HH настройки сохранены');
+}
+
+// ── HH Login (L4: два вызова вместо блокирующего input()) ──────────────
+const HH_LOGIN_LABELS = {
+  logged_out: 'Вход не выполнен',
+  browser_open: 'Окно открыто — войдите в hh.ru и нажмите «Я вошёл»',
+  logged_in: 'Вход выполнен, сессия сохранена',
+};
+
+function renderHHLoginControls() {
+  const box = document.getElementById('hhLoginButtons');
+  if (!box) return;
+  fill(box, [
+    el('button', { class: 'btn btn-secondary', text: 'Открыть вход в hh.ru', onclick: hhLoginStart }),
+    el('button', {
+      class: 'btn btn-primary', style: 'background:var(--hh)',
+      text: 'Я вошёл, сохранить сессию', onclick: hhLoginConfirm,
+    }),
+  ]);
+}
+
+function renderHHLoginStatus(state) {
+  const statusEl = document.getElementById('hhLoginStatus');
+  if (!statusEl) return;
+  fill(statusEl, el('span', { text: HH_LOGIN_LABELS[state] || state }));
+}
+
+async function refreshHHLoginStatus() {
+  const r = await apiGet('/hh/login/status');
+  if (r && r.state) renderHHLoginStatus(r.state);
+}
+
+async function hhLoginStart() {
+  const r = await apiPost('/hh/login/start');
+  if (r && r.state) { renderHHLoginStatus(r.state); showToast('Открываю окно входа в hh.ru'); }
+  else showToast(r?.detail || 'Не удалось открыть окно входа');
+}
+
+async function hhLoginConfirm() {
+  const r = await apiPost('/hh/login/confirm');
+  if (!r || !r.state) { showToast(r?.detail || 'Ошибка проверки входа'); return; }
+  renderHHLoginStatus(r.state);
+  if (r.state === 'logged_in') showToast('Сессия сохранена');
+  else showToast('Вход ещё не подтверждён — войдите в открывшемся окне');
 }
 
 // ── Selenium Steps Editor ─────────────────────────────────────────────

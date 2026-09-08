@@ -21,6 +21,7 @@ from job_monitor.security import (
     security_headers_middleware,
 )
 from job_monitor.settings import load_settings
+from job_monitor.workers.hh import run_worker as run_hh_worker
 from job_monitor.workers.manager import manager
 from job_monitor.workers.telegram import run_worker as run_tg_worker
 
@@ -31,12 +32,9 @@ FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
 
 
 def register_workers() -> None:
-    """Register worker factories with the module-level manager.
-
-    The Telegram worker is registered here (task 2); the hh.ru worker is
-    registered by task 3.
-    """
+    """Register worker factories with the module-level manager."""
     manager.register("tg", run_tg_worker)
+    manager.register("hh", run_hh_worker)
 
 
 @asynccontextmanager
