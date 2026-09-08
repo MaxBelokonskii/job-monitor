@@ -2,6 +2,26 @@
 const API = '/api';
 const APP_TOKEN = document.querySelector('meta[name="app-token"]').content;
 
+function el(tag, props = {}, children = []) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(props)) {
+    if (key === 'class') node.className = value;
+    else if (key === 'text') node.textContent = value;
+    else if (key === 'style') node.style.cssText = value;
+    else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
+    else node.setAttribute(key, value);
+  }
+  for (const child of [].concat(children)) {
+    if (child == null) continue;
+    node.append(typeof child === 'string' ? document.createTextNode(child) : child);
+  }
+  return node;
+}
+
+function fill(target, children) {
+  target.replaceChildren(...[].concat(children).filter(Boolean));
+}
+
 function headers(extra = {}) {
   return { 'X-App-Token': APP_TOKEN, ...extra };
 }
@@ -64,10 +84,10 @@ function updateTGButton() {
   if (!btn || !dot) return;
   if (tgState.running) {
     btn.className = 'btn-toggle btn-toggle-tg active';
-    btn.innerHTML = `<span class="status-dot running" id="dotTG"></span> Остановить TG`;
+    fill(btn, [el('span', { class: 'status-dot running', id: 'dotTG' }), ' Остановить TG']);
   } else {
     btn.className = 'btn-toggle btn-toggle-tg';
-    btn.innerHTML = `<span class="status-dot stopped" id="dotTG"></span> Запустить TG`;
+    fill(btn, [el('span', { class: 'status-dot stopped', id: 'dotTG' }), ' Запустить TG']);
   }
 }
 
@@ -76,10 +96,10 @@ function updateHHButton() {
   if (!btn) return;
   if (hhState.running) {
     btn.className = 'btn-toggle btn-toggle-hh active';
-    btn.innerHTML = `<span class="status-dot running" id="dotHH"></span> Остановить HH`;
+    fill(btn, [el('span', { class: 'status-dot running', id: 'dotHH' }), ' Остановить HH']);
   } else {
     btn.className = 'btn-toggle btn-toggle-hh';
-    btn.innerHTML = `<span class="status-dot stopped" id="dotHH"></span> Запустить HH`;
+    fill(btn, [el('span', { class: 'status-dot stopped', id: 'dotHH' }), ' Запустить HH']);
   }
 }
 
@@ -114,14 +134,17 @@ function updateMetrics() {
 function updateDashboard() {
   const chanList = document.getElementById('dashChannelList');
   const chanCount = document.getElementById('dashChannelCount');
-  if (chanList) chanList.innerHTML = tgState.channels.map(ch =>
-    `<div class="channel-row" style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:12px"><span style="font-family:'JetBrains Mono',monospace;font-weight:500">@${ch}</span></div>`
-  ).join('');
+  if (chanList) fill(chanList, tgState.channels.map(ch => el('div', {
+    class: 'channel-row',
+    style: 'display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:12px',
+  }, [
+    el('span', { style: "font-family:'JetBrains Mono',monospace;font-weight:500", text: '@' + ch }),
+  ])));
   if (chanCount) chanCount.textContent = tgState.channels.length;
   const kwTags = document.getElementById('kwTags');
   const exTags = document.getElementById('exTags');
-  if (kwTags) kwTags.innerHTML = tgState.keywords.map(k => `<span class="tag tag-blue">${k}</span>`).join('');
-  if (exTags) exTags.innerHTML = tgState.exclude.map(k => `<span class="tag tag-red">${k}</span>`).join('');
+  if (kwTags) fill(kwTags, tgState.keywords.map(k => el('span', { class: 'tag tag-blue', text: k })));
+  if (exTags) fill(exTags, tgState.exclude.map(k => el('span', { class: 'tag tag-red', text: k })));
 }
 
 // ── TG Script control ─────────────────────────────────────────────────
@@ -161,9 +184,10 @@ async function toggleHH() {
 
 // ── Channels ──────────────────────────────────────────────────────────
 function renderChannelEdit() {
-  document.getElementById('channelEditList').innerHTML = tgState.channels.map((ch, i) =>
-    `<div class="list-item"><span>@${ch}</span><button class="btn-del" onclick="removeChannel(${i})">×</button></div>`
-  ).join('');
+  fill(document.getElementById('channelEditList'), tgState.channels.map((ch, i) => el('div', { class: 'list-item' }, [
+    el('span', { text: '@' + ch }),
+    el('button', { class: 'btn-del', text: '×', onclick: () => removeChannel(i) }),
+  ])));
 }
 function addChannel() {
   const inp = document.getElementById('newChannel');
@@ -182,10 +206,14 @@ async function saveChannels() {
 
 // ── Keywords ──────────────────────────────────────────────────────────
 function renderKeywords() {
-  document.getElementById('kwList').innerHTML = tgState.keywords.map((k, i) =>
-    `<div class="list-item"><span>${k}</span><button class="btn-del" onclick="removeKw(${i})">×</button></div>`).join('');
-  document.getElementById('exList').innerHTML = tgState.exclude.map((k, i) =>
-    `<div class="list-item"><span>${k}</span><button class="btn-del" onclick="removeEx(${i})">×</button></div>`).join('');
+  fill(document.getElementById('kwList'), tgState.keywords.map((k, i) => el('div', { class: 'list-item' }, [
+    el('span', { text: k }),
+    el('button', { class: 'btn-del', text: '×', onclick: () => removeKw(i) }),
+  ])));
+  fill(document.getElementById('exList'), tgState.exclude.map((k, i) => el('div', { class: 'list-item' }, [
+    el('span', { text: k }),
+    el('button', { class: 'btn-del', text: '×', onclick: () => removeEx(i) }),
+  ])));
   updateDashboard();
 }
 function addKw() { const v = document.getElementById('newKw').value.trim().toLowerCase(); if (!v) return; if (tgState.keywords.includes(v)) { showToast('Уже есть'); return; } tgState.keywords.push(v); document.getElementById('newKw').value = ''; renderKeywords(); }
@@ -302,14 +330,14 @@ let _phoneHash = '';
 
 async function checkWebAuth() {
   const r = await apiGet('/auth/status');
-  const el = document.getElementById('authStatus');
+  const statusEl = document.getElementById('authStatus');
   const form = document.getElementById('authForm');
-  if (!el) return;
+  if (!statusEl) return;
   if (r && r.authorized) {
-    el.innerHTML = '<span style="color:var(--green);font-weight:600">✓ Авторизован — чаты доступны</span>';
+    fill(statusEl, el('span', { style: 'color:var(--green);font-weight:600', text: '✓ Авторизован — чаты доступны' }));
     if (form) form.style.display = 'none';
   } else {
-    el.innerHTML = '<span style="color:var(--red)">✗ Не авторизован</span>';
+    fill(statusEl, el('span', { style: 'color:var(--red)', text: '✗ Не авторизован' }));
     if (form) form.style.display = 'block';
   }
 }
@@ -346,9 +374,15 @@ async function verifyAuthCode() {
 // ── HH Settings ───────────────────────────────────────────────────────
 function renderHHKeywords() {
   const kl = document.getElementById('hhKwList');
-  const el = document.getElementById('hhExList');
-  if (kl) kl.innerHTML = hhState.keywords.map((k, i) => `<div class="list-item"><span>${k}</span><button class="btn-del" onclick="removeHHKw(${i})">×</button></div>`).join('');
-  if (el) el.innerHTML = hhState.exclude.map((k, i) => `<div class="list-item"><span>${k}</span><button class="btn-del" onclick="removeHHEx(${i})">×</button></div>`).join('');
+  const exListEl = document.getElementById('hhExList');
+  if (kl) fill(kl, hhState.keywords.map((k, i) => el('div', { class: 'list-item' }, [
+    el('span', { text: k }),
+    el('button', { class: 'btn-del', text: '×', onclick: () => removeHHKw(i) }),
+  ])));
+  if (exListEl) fill(exListEl, hhState.exclude.map((k, i) => el('div', { class: 'list-item' }, [
+    el('span', { text: k }),
+    el('button', { class: 'btn-del', text: '×', onclick: () => removeHHEx(i) }),
+  ])));
 }
 function addHHKw() { const v = document.getElementById('newHHKw').value.trim(); if (!v || hhState.keywords.includes(v)) { if (v) showToast('Уже есть'); return; } hhState.keywords.push(v); document.getElementById('newHHKw').value = ''; renderHHKeywords(); }
 function removeHHKw(i) { hhState.keywords.splice(i, 1); renderHHKeywords(); }
@@ -388,22 +422,24 @@ const STEP_TYPES = {
 };
 
 function renderSeleniumSteps() {
-  const el = document.getElementById('seleniumStepsList');
-  if (!el) return;
+  const listEl = document.getElementById('seleniumStepsList');
+  if (!listEl) return;
   if (!hhState.seleniumSteps.length) {
-    el.innerHTML = '<div style="text-align:center;padding:16px;color:var(--muted);font-size:13px">Нет шагов — нажмите + чтобы добавить</div>';
+    fill(listEl, el('div', {
+      style: 'text-align:center;padding:16px;color:var(--muted);font-size:13px',
+      text: 'Нет шагов — нажмите + чтобы добавить',
+    }));
     return;
   }
-  el.innerHTML = hhState.seleniumSteps.map((step, i) => `
-    <div class="step-item">
-      <span class="step-num">${i + 1}.</span>
-      <span class="step-type">${STEP_TYPES[step.type] || step.type}</span>
-      <span class="step-desc">${step.selector || step.value || step.seconds || ''}</span>
-      <button class="btn-del" onclick="moveStep(${i}, -1)" title="Вверх">↑</button>
-      <button class="btn-del" onclick="moveStep(${i}, 1)" title="Вниз">↓</button>
-      <button class="btn-del" onclick="editStep(${i})" title="Изменить">✎</button>
-      <button class="btn-del" onclick="removeStep(${i})" title="Удалить">×</button>
-    </div>`).join('');
+  fill(listEl, hhState.seleniumSteps.map((step, i) => el('div', { class: 'step-item' }, [
+    el('span', { class: 'step-num', text: (i + 1) + '.' }),
+    el('span', { class: 'step-type', text: STEP_TYPES[step.type] || step.type }),
+    el('span', { class: 'step-desc', text: step.selector || step.value || step.seconds || '' }),
+    el('button', { class: 'btn-del', title: 'Вверх', text: '↑', onclick: () => moveStep(i, -1) }),
+    el('button', { class: 'btn-del', title: 'Вниз', text: '↓', onclick: () => moveStep(i, 1) }),
+    el('button', { class: 'btn-del', title: 'Изменить', text: '✎', onclick: () => editStep(i) }),
+    el('button', { class: 'btn-del', title: 'Удалить', text: '×', onclick: () => removeStep(i) }),
+  ])));
 }
 
 function moveStep(i, dir) {
@@ -443,23 +479,32 @@ let currentChat = null;
 
 async function renderChats() {
   const chats = await apiGet('/tg/chats');
-  const el = document.getElementById('chatList');
+  const listEl = document.getElementById('chatList');
   const count = document.getElementById('chatCount');
   if (chats) {
     if (count) count.textContent = chats.length;
-    if (!chats.length) { el.innerHTML = '<div style="text-align:center;padding:32px;color:var(--muted);font-size:13px">Список пуст</div>'; return; }
-    el.innerHTML = chats.map(c => {
+    if (!chats.length) {
+      fill(listEl, el('div', {
+        style: 'text-align:center;padding:32px;color:var(--muted);font-size:13px',
+        text: 'Список пуст',
+      }));
+      return;
+    }
+    fill(listEl, chats.map(c => {
       const name = c.username || '';
-      const initials = name.replace('@', '').slice(0, 2).toUpperCase();
-      return `<div class="chat-contact" id="contact-${name.replace('@', '')}" onclick="openChat('${name}')">
-        <div style="width:34px;height:34px;border-radius:50%;background:var(--tg-light);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--tg);flex-shrink:0;font-family:'JetBrains Mono',monospace">${initials}</div>
-        <div style="flex:1;min-width:0">
-          <div style="font-size:12.5px;font-weight:600;font-family:'JetBrains Mono',monospace">${name}</div>
-          <div style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.preview || ''}</div>
-        </div>
-        <div style="font-size:10px;color:var(--muted);flex-shrink:0">${c.time || ''}</div>
-      </div>`;
-    }).join('');
+      return el('div', {
+        class: 'chat-contact',
+        id: 'contact-' + name.replace('@', ''),
+        onclick: () => openChat(name),
+      }, [
+        el('div', { class: 'chat-avatar', text: name.replace('@', '').slice(0, 2).toUpperCase() }),
+        el('div', { style: 'flex:1;min-width:0' }, [
+          el('div', { class: 'chat-name', text: name }),
+          el('div', { class: 'chat-preview', text: c.preview || '' }),
+        ]),
+        el('div', { class: 'chat-time', text: c.time || '' }),
+      ]);
+    }));
   }
 }
 
@@ -478,17 +523,25 @@ async function openChat(username) {
 
 async function loadChatMessages(username) {
   if (!username) return;
-  const el = document.getElementById('chatMessages');
-  el.innerHTML = '<div style="text-align:center;color:var(--muted);font-size:13px;padding:20px">Загрузка...</div>';
+  const msgsEl = document.getElementById('chatMessages');
+  fill(msgsEl, el('div', { style: 'text-align:center;color:var(--muted);font-size:13px;padding:20px', text: 'Загрузка...' }));
   const msgs = await apiGet('/auth/messages/' + encodeURIComponent(username.replace('@', '')));
-  if (!msgs) { el.innerHTML = '<div style="text-align:center;color:var(--red);font-size:13px;padding:20px">Ошибка. Проверьте авторизацию.</div>'; return; }
-  if (!msgs.length) { el.innerHTML = '<div style="text-align:center;color:var(--muted);font-size:13px;padding:20px">Сообщений нет</div>'; return; }
-  el.innerHTML = msgs.map(m => `
-    <div class="msg-wrap ${m.out ? 'out' : 'in'}">
-      <div class="msg-bubble ${m.out ? 'msg-out' : 'msg-in'}">${m.text.replace(/\n/g, '<br>')}</div>
-      <div style="font-size:10px;opacity:.6;margin-top:2px;text-align:${m.out ? 'right' : 'left'}">${m.date}</div>
-    </div>`).join('');
-  el.scrollTop = el.scrollHeight;
+  if (!msgs) {
+    fill(msgsEl, el('div', { style: 'text-align:center;color:var(--red);font-size:13px;padding:20px', text: 'Ошибка. Проверьте авторизацию.' }));
+    return;
+  }
+  if (!msgs.length) {
+    fill(msgsEl, el('div', { style: 'text-align:center;color:var(--muted);font-size:13px;padding:20px', text: 'Сообщений нет' }));
+    return;
+  }
+  fill(msgsEl, msgs.map(m => el('div', { class: `msg-wrap ${m.out ? 'out' : 'in'}` }, [
+    el('div', { class: `msg-bubble ${m.out ? 'msg-out' : 'msg-in'}`, text: m.text }),
+    el('div', {
+      style: `font-size:10px;opacity:.6;margin-top:2px;text-align:${m.out ? 'right' : 'left'}`,
+      text: m.date,
+    }),
+  ])));
+  msgsEl.scrollTop = msgsEl.scrollHeight;
 }
 
 async function sendChatMessage() {
@@ -507,27 +560,32 @@ async function sendChatMessage() {
 // ── HH Vacancies ──────────────────────────────────────────────────────
 async function loadHHVacancies() {
   const vacs = await apiGet('/hh/vacancies');
-  const el = document.getElementById('hhRecentVacancies');
-  if (!el) return;
+  const vacEl = document.getElementById('hhRecentVacancies');
+  if (!vacEl) return;
   if (!vacs || !vacs.length) {
-    el.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--muted);font-size:13px">Вакансий пока нет</div>';
+    fill(vacEl, el('div', {
+      style: 'grid-column:1/-1;text-align:center;padding:16px;color:var(--muted);font-size:13px',
+      text: 'Вакансий пока нет',
+    }));
     return;
   }
-  el.innerHTML = vacs.slice(0, 4).map(v => {
+  fill(vacEl, vacs.slice(0, 4).map(v => {
     let cls = 'status-wait'; const st = v.status || '';
     if (st.includes('отправлен')) cls = 'status-sent';
     else if (st.includes('пропущено')) cls = 'status-skip';
-    return `<div class="vac-card">
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px">
-        <div>
-          <div style="font-size:13px;font-weight:600">${v.title || ''}</div>
-          <div style="font-size:11px;color:var(--muted);margin-top:2px">${v.company || ''} · ${v.salary || 'з/п не указана'}</div>
-        </div>
-        <span class="status-badge ${cls}" style="flex-shrink:0">${st || 'ожидание'}</span>
-      </div>
-      ${v.url ? `<div style="margin-top:8px"><a href="${v.url}" target="_blank" style="font-size:11px;color:var(--hh);text-decoration:none">Открыть на HH →</a></div>` : ''}
-    </div>`;
-  }).join('');
+    return el('div', { class: 'vac-card' }, [
+      el('div', { style: 'display:flex;align-items:flex-start;justify-content:space-between;gap:8px' }, [
+        el('div', {}, [
+          el('div', { style: 'font-size:13px;font-weight:600', text: v.title || '' }),
+          el('div', { style: 'font-size:11px;color:var(--muted);margin-top:2px', text: `${v.company || ''} · ${v.salary || 'з/п не указана'}` }),
+        ]),
+        el('span', { class: `status-badge ${cls}`, style: 'flex-shrink:0', text: st || 'ожидание' }),
+      ]),
+      v.url ? el('div', { style: 'margin-top:8px' }, [
+        el('a', { href: v.url, target: '_blank', style: 'font-size:11px;color:var(--hh);text-decoration:none', text: 'Открыть на HH →' }),
+      ]) : null,
+    ]);
+  }));
 }
 
 // ── Logs ──────────────────────────────────────────────────────────────
@@ -544,22 +602,25 @@ function showLog(type) {
 async function refreshLogs() {
   const path = currentLogType === 'hh' ? '/hh/logs?lines=150' : '/tg/logs?lines=150';
   const r = await apiGet(path);
-  const el = document.getElementById('logConsole');
-  if (!r || !r.log) { el.innerHTML = '<span class="info">// Лог пуст</span>'; return; }
+  const logEl = document.getElementById('logConsole');
+  if (!r || !r.log) { fill(logEl, el('span', { class: 'info', text: '// Лог пуст' })); return; }
   const lines = r.log.trim().split('\n').filter(Boolean);
-  el.innerHTML = lines.map(line => {
+  const nodes = [];
+  lines.forEach((line, i) => {
     let cls = 'info';
     if (line.includes('[OK]') || line.includes('Отправлено')) cls = 'ok';
     else if (line.includes('[ERROR]')) cls = 'err';
     else if (line.includes('[WARNING]') || line.includes('RESET')) cls = 'warn';
     else if (line.includes('[HISTORY]')) cls = 'hist';
     else if (line.includes('[HH]')) cls = 'hh';
-    return `<span class="${cls}">${line}</span>`;
-  }).join('\n');
-  el.scrollTop = el.scrollHeight;
+    if (i > 0) nodes.push('\n');
+    nodes.push(el('span', { class: cls, text: line }));
+  });
+  fill(logEl, nodes);
+  logEl.scrollTop = logEl.scrollHeight;
 }
 
-function clearConsole() { document.getElementById('logConsole').innerHTML = '<span class="info">// Очищено</span>'; }
+function clearConsole() { fill(document.getElementById('logConsole'), el('span', { class: 'info', text: '// Очищено' })); }
 
 // ── Recent log parser ─────────────────────────────────────────────────
 function parseLogLine(line, source) {
@@ -600,9 +661,21 @@ function parseLogLine(line, source) {
 // ── Restart banner ────────────────────────────────────────────────────
 function showRestartBanner() {
   if (document.getElementById('restartBanner')) return;
-  const b = document.createElement('div');
-  b.id = 'restartBanner'; b.className = 'restart-banner';
-  b.innerHTML = '<span>⚠️ Настройки изменены — перезапустите TG скрипт</span><div style="display:flex;gap:8px"><button onclick="toggleTG();hideRestartBanner()" style="padding:4px 12px;background:var(--tg);color:#fff;border:none;border-radius:5px;cursor:pointer;font-size:12px;font-weight:600">Перезапустить</button><button onclick="hideRestartBanner()" style="padding:4px 8px;background:none;border:none;cursor:pointer;color:#92400e;font-size:16px">×</button></div>';
+  const b = el('div', { id: 'restartBanner', class: 'restart-banner' }, [
+    el('span', { text: '⚠️ Настройки изменены — перезапустите TG скрипт' }),
+    el('div', { style: 'display:flex;gap:8px' }, [
+      el('button', {
+        style: 'padding:4px 12px;background:var(--tg);color:#fff;border:none;border-radius:5px;cursor:pointer;font-size:12px;font-weight:600',
+        text: 'Перезапустить',
+        onclick: () => { toggleTG(); hideRestartBanner(); },
+      }),
+      el('button', {
+        style: 'padding:4px 8px;background:none;border:none;cursor:pointer;color:#92400e;font-size:16px',
+        text: '×',
+        onclick: () => hideRestartBanner(),
+      }),
+    ]),
+  ]);
   document.body.appendChild(b);
 }
 function hideRestartBanner() { const b = document.getElementById('restartBanner'); if (b) b.remove(); }
@@ -670,15 +743,14 @@ async function pollStatus() {
       entries.sort((a, b) => b.time.localeCompare(a.time));
     }
 
-    const el = document.getElementById('recentLog');
-    if (entries.length && el) {
-      el.innerHTML = entries.slice(0, 6).map(e => `
-        <div class="log-row">
-          <span class="log-time">${e.time}</span>
-          <span class="log-source ${e.source}">${e.source.toUpperCase()}</span>
-          <span class="log-badge ${e.cls}">${e.badge}</span>
-          <span style="font-size:12px">${e.text}</span>
-        </div>`).join('');
+    const recentEl = document.getElementById('recentLog');
+    if (entries.length && recentEl) {
+      fill(recentEl, entries.slice(0, 6).map(e => el('div', { class: 'log-row' }, [
+        el('span', { class: 'log-time', text: e.time }),
+        el('span', { class: `log-source ${e.source}`, text: e.source.toUpperCase() }),
+        el('span', { class: `log-badge ${e.cls}`, text: e.badge }),
+        el('span', { style: 'font-size:12px', text: e.text }),
+      ])));
     }
   }
 

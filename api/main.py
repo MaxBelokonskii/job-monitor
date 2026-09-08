@@ -14,6 +14,7 @@ from job_monitor.security import (
     APP_TOKEN,
     TOKEN_PLACEHOLDER,
     app_token_middleware,
+    security_headers_middleware,
 )
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -30,6 +31,7 @@ app.add_middleware(
 
 app.middleware("http")(app_token_middleware)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
+app.middleware("http")(security_headers_middleware)
 
 # Подключаем роутеры
 app.include_router(config_router)
