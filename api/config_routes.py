@@ -41,7 +41,14 @@ async def update_config(patch: dict) -> dict:
     try:
         updated = save_settings(get_connection(), patch)
     except ValidationError as error:
-        raise HTTPException(status_code=422, detail=error.errors(include_url=False)) from error
+        # `include_context=False` — та же защита, что в api/presets_routes.py:
+        # пользовательский валидатор кладёт объект `ValueError` в контекст
+        # ошибки, и попытка отдать его в JSON превращает 422 в 500. Сейчас у
+        # `GlobalSettings` таких валидаторов нет, но первый же добавленный
+        # ломал бы ответ молча.
+        raise HTTPException(
+            status_code=422, detail=error.errors(include_url=False, include_context=False)
+        ) from error
 
     if secrets_to_write:
         # В `.env` живут ТОЛЬКО секреты. Раньше сюда же дописывались

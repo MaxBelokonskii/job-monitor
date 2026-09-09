@@ -13,6 +13,8 @@ from .config_routes import router as config_router
 from .tg_routes import router as tg_router
 from .hh_routes import router as hh_router
 from .auth_routes import router as auth_router
+from .dictionaries_routes import router as dictionaries_router
+from .presets_routes import router as presets_router
 from .routes_state import router as state_router
 from job_monitor.db.connection import get_connection
 from job_monitor.security import (
@@ -162,6 +164,8 @@ app.include_router(tg_router)
 app.include_router(hh_router)
 app.include_router(auth_router)
 app.include_router(state_router)
+app.include_router(presets_router)
+app.include_router(dictionaries_router)
 
 # Статика (JS, CSS)
 if os.path.exists(FRONTEND_DIR):

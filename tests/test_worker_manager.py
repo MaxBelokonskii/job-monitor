@@ -3,7 +3,7 @@ import asyncio
 import pytest
 
 from job_monitor.workers.manager import (
-    WorkerAlreadyRunning, WorkerManager, WorkerNotRunning, WorkerState,
+    WorkerAlreadyRunning, WorkerManager, WorkerNotRunning, WorkerState, WorkerStatus,
 )
 
 
@@ -462,3 +462,30 @@ async def test_a_stop_that_actually_stopped_is_not_marked_stale():
     assert answer is manager.status("idle"), (
         "в отсутствие гонки stop() возвращает сам статус из реестра, без копии"
     )
+
+
+def test_running_includes_a_worker_that_is_only_starting() -> None:
+    """`starting` — тоже «работает» для целей переключения пресета.
+
+    Воркер в этом состоянии уже держит таску, и смена критериев под ним даёт
+    ровно то, от чего защищает решение D9: сообщение от одного пресета с
+    резюме от другого. Без этой проверки сужение `running()` до одного лишь
+    `running` проходило зелёным.
+    """
+    manager = WorkerManager()
+
+    async def never_ending() -> None:
+        await asyncio.Event().wait()
+
+    manager.register("tg", never_ending)
+    manager._statuses["tg"] = WorkerStatus(name="tg", state=WorkerState.starting)
+    assert manager.running() == ["tg"]
+
+    manager._statuses["tg"] = WorkerStatus(name="tg", state=WorkerState.running)
+    assert manager.running() == ["tg"]
+
+    manager._statuses["tg"] = WorkerStatus(name="tg", state=WorkerState.stopping)
+    assert manager.running() == [], "останавливающийся воркер повторно не гасят"
+
+    manager._statuses["tg"] = WorkerStatus(name="tg", state=WorkerState.stopped)
+    assert manager.running() == []

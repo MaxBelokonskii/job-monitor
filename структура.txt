@@ -6,7 +6,9 @@ JobMonitor/
 │   ├── tg_routes.py            /api/tg/*
 │   ├── hh_routes.py            /api/hh/*
 │   ├── auth_routes.py          /api/auth/*
-│   └── routes_state.py         /api/state — агрегированное состояние дашборда
+│   ├── routes_state.py         /api/state — агрегированное состояние дашборда
+│   ├── presets_routes.py       /api/presets — пресеты поиска
+│   └── dictionaries_routes.py  /api/dictionaries — справочники hh.ru
 ├── frontend/
 │   ├── index.html              только разметка
 │   ├── style.css               все стили

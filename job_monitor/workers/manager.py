@@ -86,6 +86,20 @@ class WorkerManager:
         self._factories[name] = factory
         self._statuses.setdefault(name, WorkerStatus(name=name))
 
+    def running(self) -> list[str]:
+        """Имена воркеров, которых имеет смысл останавливать.
+
+        `starting` включён намеренно: воркер в этом состоянии уже держит
+        таску, и переключение пресета под ним — ровно тот случай, от которого
+        защищает решение D9 (сообщение от одного пресета с резюме от
+        другого).
+        """
+        return [
+            name
+            for name in self._factories
+            if self.status(name).state in (WorkerState.starting, WorkerState.running)
+        ]
+
     def _epoch(self, name: str) -> int:
         """Номер текущего (последнего) запуска воркера `name`.
 

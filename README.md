@@ -75,7 +75,9 @@ JobMonitor/
 │   ├── tg_routes.py            # /api/tg/* — управление TG
 │   ├── hh_routes.py            # /api/hh/* — управление HH и вход в hh.ru
 │   ├── auth_routes.py          # /api/auth/* — вход в Telegram и чаты
-│   └── routes_state.py         # /api/state — агрегированное состояние дашборда
+│   ├── routes_state.py         # /api/state — агрегированное состояние дашборда
+│   ├── presets_routes.py       # /api/presets — пресеты поиска
+│   └── dictionaries_routes.py  # /api/dictionaries — справочники hh.ru
 ├── job_monitor/                # Пакет приложения
 │   ├── paths.py                # Каталог данных, все пути к состоянию
 │   ├── security.py             # Токен приложения, проверка Host, CSP
