@@ -81,6 +81,16 @@ def test_start_still_answers_started_and_names_the_run(client, monkeypatch):
 
     monkeypatch.setattr(manager, "start", fake_start)
 
+    # Пресет должен быть непустым: `POST /api/tg/start` теперь отказывает
+    # при пустых критериях (иначе воркер молча крутился бы впустую).
+    active = next(
+        p for p in client.get("/api/presets").json() if p["is_active"]
+    )["id"]
+    client.patch(
+        f"/api/presets/{active}",
+        json={"channels": ["qajobs"], "tg_keywords": ["qa"]},
+    )
+
     body = client.post("/api/tg/start").json()
 
     assert body == {"status": "started", "epoch": 7}

@@ -67,6 +67,13 @@ def test_start_answers_started_and_names_the_run(client, monkeypatch):
 
     monkeypatch.setattr(manager, "start", fake_start)
 
+    # Пресет должен быть непустым: `POST /api/hh/start` теперь отказывает
+    # при пустых критериях.
+    active = next(
+        p for p in client.get("/api/presets").json() if p["is_active"]
+    )["id"]
+    client.patch(f"/api/presets/{active}", json={"professions": ["QA"]})
+
     body = client.post("/api/hh/start").json()
 
     assert body == {"status": "started", "epoch": 9}

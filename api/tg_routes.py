@@ -7,7 +7,7 @@ from .config_routes import load_config
 from job_monitor.db.connection import get_connection
 from job_monitor.db.repositories import EventsRepo, TgRepo
 from job_monitor.logging_setup import log_file
-from job_monitor.presets import active_criteria
+from job_monitor.presets import active_criteria, active_preset
 from job_monitor.settings import load_secrets
 from job_monitor.workers.manager import WorkerAlreadyRunning, WorkerNotRunning, manager
 
@@ -52,6 +52,23 @@ async def tg_status() -> dict[str, Any]:
 
 @router.post("/start")
 async def tg_start() -> dict[str, str | int]:
+    # Пустой пресет — не повод молча крутиться впустую: раньше воркер
+    # запускался, ничего не находил, и понять почему было нельзя ни по
+    # логам, ни по интерфейсу.
+    conn = get_connection()
+    criteria = active_criteria(conn)
+    preset_name = active_preset(conn)["name"]
+    if not criteria.channels:
+        raise HTTPException(
+            status_code=400,
+            detail=f"в пресете «{preset_name}» нет каналов — добавьте хотя бы один",
+        )
+    if not criteria.tg_keywords:
+        raise HTTPException(
+            status_code=400,
+            detail=f"в пресете «{preset_name}» нет ключевых слов — иначе воркер "
+            "не поймёт, какие посты считать вакансиями",
+        )
     try:
         status = await manager.start("tg")
     except WorkerAlreadyRunning:
