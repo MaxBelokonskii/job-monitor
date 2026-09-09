@@ -143,7 +143,7 @@ job_monitor/            пакет приложения
 api/                    (пакет верхнего уровня, не подпакет job_monitor)
   main.py               сборка FastAPI, middleware, lifespan
   config_routes.py      tg_routes.py  hh_routes.py  auth_routes.py  routes_state.py
-  presets_routes.py     dictionaries_routes.py
+  presets_routes.py     dictionaries_routes.py  resumes_routes.py
 frontend/               index.html, app.js, style.css
 tests/                  pytest
 docs/superpowers/       specs/ и plans/

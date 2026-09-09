@@ -8,7 +8,8 @@ JobMonitor/
 │   ├── auth_routes.py          /api/auth/*
 │   ├── routes_state.py         /api/state — агрегированное состояние дашборда
 │   ├── presets_routes.py       /api/presets — пресеты поиска
-│   └── dictionaries_routes.py  /api/dictionaries — справочники hh.ru
+│   ├── dictionaries_routes.py  /api/dictionaries — справочники hh.ru
+│   └── resumes_routes.py       /api/resumes — библиотека резюме
 ├── frontend/
 │   ├── index.html              только разметка
 │   ├── style.css               все стили
