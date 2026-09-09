@@ -63,6 +63,10 @@ _MARKER = "_job_monitor_channel"
 # не попадёт вообще; ровно это и проверяет tests/test_logging_setup.py —
 # «модуль, который логирует, обязан быть виден на какой-то вкладке».
 #
+# `job_monitor.presets` — в ОБА канала: он предупреждает, что часть критериев
+# при чтении отброшена как непрошедшая проверку, а критерии в пресете общие
+# для обеих сторон, и приписать предупреждение одному воркеру неоткуда.
+#
 # `job_monitor.db.migrations` — тоже в ОБА канала, по той же причине. Он
 # предупреждает, что резервная копия БД перед миграцией не удалась: копия
 # best-effort и миграцию не отменяет, но пользователь обязан узнать, что
@@ -95,6 +99,7 @@ CHANNELS: dict[str, tuple[str, tuple[str, ...]]] = {
             "job_monitor.paths",
             "job_monitor.envfile",
             "job_monitor.db.migrations",
+            "job_monitor.presets",
         ),
     ),
     "hh": (
@@ -106,6 +111,7 @@ CHANNELS: dict[str, tuple[str, tuple[str, ...]]] = {
             "job_monitor.paths",
             "job_monitor.envfile",
             "job_monitor.db.migrations",
+            "job_monitor.presets",
         ),
     ),
 }

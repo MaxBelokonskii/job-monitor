@@ -123,6 +123,9 @@ job_monitor/            пакет приложения
   paths.py              каталог данных, все пути к состоянию
   security.py           токен приложения, проверка Host, CSP
   settings.py           модель настроек, секреты из окружения
+  criteria.py           критерии поиска в пресете и константы hh.ru
+  presets.py            активный пресет: чтение, переключение, перенос
+  resume_store.py       файлы библиотеки резюме в каталоге данных
   envfile.py            атомарная запись .env (0600)
   telegram_client.py    единственный Telethon-клиент приложения
   logging_setup.py      файлы логов: tg_system.log и hh.log
