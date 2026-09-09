@@ -85,3 +85,21 @@ def test_env_never_gets_application_settings(client, tmp_path):
     assert "TG_API_HASH" in keys, "секреты писаться перестали — проверка стала вакуумной"
     # А настройки при этом сохранены — просто в базе, единственном их месте.
     assert client.get("/api/config", headers=AUTH).json()["history_limit"] == 7
+
+
+# ── Битый руками `.env` не должен ронять сохранение настроек ───────────
+
+
+def test_patch_survives_a_hand_broken_env_file(client, tmp_path):
+    """Сквозной случай: строка `.env` без имени переменной (`=значение`)
+    доводила `_validate("")` до ValueError внутри `read_env()`, а тот
+    зовётся и из `GET /api/config`, и из `PATCH /api/config`. Пользователь
+    получал 500 и не мог сохранить НИЧЕГО, включая исправление, — только
+    правка файла руками, о которой ответ не сообщал."""
+    (tmp_path / ".env").write_text("TG_API_ID=123\n=забытое-имя\n", encoding="utf-8")
+
+    assert client.get("/api/config", headers=AUTH).status_code == 200
+    response = client.patch("/api/config", json={"max_per_day": 9}, headers=AUTH)
+
+    assert response.status_code == 200, response.text
+    assert client.get("/api/config", headers=AUTH).json()["max_per_day"] == 9

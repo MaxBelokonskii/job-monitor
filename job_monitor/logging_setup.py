@@ -75,6 +75,10 @@ _MARKER = "_job_monitor_channel"
 # после запуска под `sudo`, иммутабельный флаг), то есть заявленные `0700`/
 # `0600` на этом томе не действуют. Каталог данных общий на оба воркера, и
 # это сообщение о безопасности состояния, а не о работе одного из них.
+#
+# `job_monitor.envfile` — в оба по тому же основанию: он сообщает о строке
+# `.env`, которую не удалось разобрать, то есть о настройке, которая молча не
+# применилась. Разделить «телеграмная строка» и «hh-шная» неоткуда.
 CHANNELS: dict[str, tuple[str, tuple[str, ...]]] = {
     "tg": (
         "tg_system.log",
@@ -83,6 +87,7 @@ CHANNELS: dict[str, tuple[str, tuple[str, ...]]] = {
             "job_monitor.workers.manager.tg",
             "job_monitor.settings",
             "job_monitor.paths",
+            "job_monitor.envfile",
         ),
     ),
     "hh": (
@@ -92,6 +97,7 @@ CHANNELS: dict[str, tuple[str, tuple[str, ...]]] = {
             "job_monitor.workers.manager.hh",
             "job_monitor.settings",
             "job_monitor.paths",
+            "job_monitor.envfile",
         ),
     ),
 }

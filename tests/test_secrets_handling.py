@@ -145,3 +145,148 @@ def test_config_response_never_contains_hash(client):
     body = client.get("/api/config").json()
     assert "api_hash" not in body
     assert body["api_hash_set"] in (True, False)
+
+
+# ── Битая руками строка `.env` не должна ронять сохранение ────────────
+
+
+def test_a_line_without_a_name_is_skipped_instead_of_breaking_the_read(tmp_path, monkeypatch):
+    """`=значение` доводило `_validate("")` до ValueError, `read_env()`
+    бросал, и PATCH /api/config отвечал 500: пользователь не мог сохранить
+    НИЧЕГО, пока не починит файл руками, — и узнавал об этом из «ошибка
+    сервера». Строка без имени переменной не задаёт настройки; правильно её
+    пропустить, сказав об этом в лог."""
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
+    (tmp_path / ".env").write_text(
+        "TG_API_ID=123\n=забытое-имя\nTG_API_HASH\nTG_API_HASH=abc\n", encoding="utf-8"
+    )
+
+    assert envfile.read_env() == {"TG_API_ID": "123", "TG_API_HASH": "abc"}
+
+
+def test_saving_settings_works_over_a_hand_broken_env(tmp_path, monkeypatch):
+    """Сквозная проверка того же: сохранение должно проходить."""
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
+    (tmp_path / ".env").write_text("=забытое-имя\nTG_API_ID=123\n", encoding="utf-8")
+
+    envfile.write_env({"TG_API_HASH": "abc"})
+
+    assert envfile.read_env() == {"TG_API_ID": "123", "TG_API_HASH": "abc"}
+
+
+def test_the_broken_line_is_named_once_not_on_every_poll(tmp_path, monkeypatch, caplog):
+    """`read_env()` зовётся из `load_secrets()`, а его дёргает
+    `GET /api/state` — раз в три секунды на каждый открытый дашборд. Без
+    дедупликации одна битая строка дописывала бы предупреждение в оба файла
+    логов при каждом опросе, а логи отдаются в UI.
+
+    В сообщении — номер строки, но не её содержимое: в `.env` лежат секреты.
+    """
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
+    (tmp_path / ".env").write_text("=oops-secret-looking-value\n", encoding="utf-8")
+    monkeypatch.setattr(envfile, "_REPORTED_BAD_LINES", set())
+
+    with caplog.at_level("WARNING", logger="job_monitor.envfile"):
+        for _poll in range(5):
+            envfile.read_env()
+
+    warnings = [record for record in caplog.records if record.name == "job_monitor.envfile"]
+    assert len(warnings) == 1, f"предупреждений {len(warnings)}, а опросов было 5"
+    message = warnings[0].getMessage()
+    assert "1" in message, message
+    assert "oops-secret-looking-value" not in message, (
+        f"содержимое строки .env попало в лог: {message}"
+    )
+
+
+def test_a_forbidden_character_still_stops_the_read(tmp_path, monkeypatch):
+    """Граница снисходительности. Пропускается СТРУКТУРНО битая строка —
+    опечатка. Запрещённый символ (`\\n`, `\\r`, `\\x00`) опечаткой не бывает:
+    это признак того, что файл писали не руками, и это первопричина S7.
+    Свойство «значение с таким символом не порождает переменной ни на
+    чтении, ни на записи» сохраняется в самой строгой форме — чтение
+    останавливается."""
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
+    (tmp_path / ".env").write_text("TG_API_HASH=abc\x00def\n", encoding="utf-8")
+    with pytest.raises(ValueError):
+        envfile.read_env()
+
+
+# ── write_env() не наводит порядок в чужом файле ──────────────────────
+
+
+def test_write_env_keeps_the_users_comments_and_line_order(tmp_path, monkeypatch):
+    """`read_env()` выбрасывает `#`-строки, а `write_env()` писал файл заново
+    из словаря — то есть первое же сохранение съедало `# мой комментарий` и
+    перетасовывало строки. Это тот же класс сюрприза, от которого заведён
+    список RETIRED_KEYS: приложение убирает за собой, а не переписывает
+    чужой файл."""
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
+    (tmp_path / ".env").write_text(
+        "# ключи от my.telegram.org, не терять\n"
+        "TG_API_ID=123\n"
+        "\n"
+        "# прокси на работе\n"
+        "HTTPS_PROXY=http://127.0.0.1:3128\n",
+        encoding="utf-8",
+    )
+
+    envfile.write_env({"TG_API_HASH": "abc"})
+
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == (
+        "# ключи от my.telegram.org, не терять\n"
+        "TG_API_ID=123\n"
+        "\n"
+        "# прокси на работе\n"
+        "HTTPS_PROXY=http://127.0.0.1:3128\n"
+        "TG_API_HASH=abc\n"
+    )
+
+
+def test_write_env_updates_a_key_in_place(tmp_path, monkeypatch):
+    """Новое значение встаёт на место старого, а не уезжает в конец файла:
+    иначе комментарий над ключом переставал относиться к тому, что под ним."""
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
+    (tmp_path / ".env").write_text(
+        "# идентификатор приложения\nTG_API_ID=123\nHTTPS_PROXY=http://127.0.0.1:3128\n",
+        encoding="utf-8",
+    )
+
+    envfile.write_env({"TG_API_ID": "456"})
+
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == (
+        "# идентификатор приложения\nTG_API_ID=456\nHTTPS_PROXY=http://127.0.0.1:3128\n"
+    )
+
+
+def test_write_env_collapses_a_duplicated_key(tmp_path, monkeypatch):
+    """Действующим `read_env()` считает ПОСЛЕДНЕЕ вхождение. Оставить рядом
+    строку с другим значением значило бы записать в файл неправду, поэтому
+    прежние вхождения выбрасываются."""
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
+    (tmp_path / ".env").write_text("TG_API_ID=old\nTG_API_ID=123\n", encoding="utf-8")
+
+    envfile.write_env({"TG_API_HASH": "abc"})
+
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == (
+        "TG_API_ID=123\nTG_API_HASH=abc\n"
+    )
+    assert envfile.read_env() == {"TG_API_ID": "123", "TG_API_HASH": "abc"}
+
+
+def test_a_retired_key_goes_away_but_its_neighbours_do_not(tmp_path, monkeypatch):
+    """Вычистка мёртвых ключей не должна унести с собой ни комментарий, ни
+    строку пользователя — проверка сохранения комментариев и вычистки в
+    одном файле, потому что ломаются они друг о друга."""
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
+    (tmp_path / ".env").write_text(
+        "TG_API_ID=123\n# безопасный режим\nSAFE_MODE=false\nHTTPS_PROXY=proxy\n",
+        encoding="utf-8",
+    )
+
+    envfile.write_env({"TG_API_HASH": "abc"})
+
+    text = (tmp_path / ".env").read_text(encoding="utf-8")
+    assert "SAFE_MODE" not in text
+    assert "# безопасный режим" in text, "комментарий пользователя пропал вместе с ключом"
+    assert "HTTPS_PROXY=proxy" in text
