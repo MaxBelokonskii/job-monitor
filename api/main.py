@@ -5,7 +5,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 import os
@@ -141,12 +140,17 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://127.0.0.1:8000", "http://localhost:8000"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Никакого CORSMiddleware здесь нет, и это осознанно. Страница отдаётся с
+# того же адреса, куда стучится относительными путями (`const API = '/api'`
+# в frontend/app.js), поэтому все её запросы однодоменные и разрешать
+# нечего. Allow-лист источников был не разрешением, а поверхностью для
+# ошибки: мутационный аудит показал, что расширение до `allow_origins=["*"]`
+# проходило при полностью зелёном наборе тестов, а цена этого — `GET /`
+# отдаёт APP_TOKEN внутри HTML первому же открытому в браузере сайту.
+# Без middleware `Access-Control-Allow-Origin` не отдаётся НИКОГДА, и
+# браузер не даёт чужому источнику прочитать ответ вообще — строго строже
+# любого allow-листа. Инвариант закреплён в
+# tests/test_no_cross_origin_permission.py.
 
 app.middleware("http")(app_token_middleware)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
