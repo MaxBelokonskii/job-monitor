@@ -11,8 +11,8 @@
 
 from __future__ import annotations
 
+import ast
 import logging
-import re
 import stat
 from pathlib import Path
 
@@ -104,7 +104,43 @@ def test_rotation_is_bounded(isolated_logging) -> None:
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCANNED_PACKAGES = ("api", "job_monitor")
-MODULE_LOGGER = re.compile(r"^\s*\w+\s*=\s*logging\.getLogger\(__name__\)", re.MULTILINE)
+
+# Прежняя версия требовала БУКВАЛЬНО `<имя> = logging.getLogger(__name__)` в
+# начале строки, и три формы того же самого проходили мимо неё, унося с собой
+# правило «модуль, который логирует, обязан быть виден на какой-то вкладке»:
+#
+#   * `logging.getLogger(__name__).warning(...)` — без присваивания
+#     (так пишет `job_monitor/paths.py`: логгер на самом нижнем слое берётся
+#     в момент использования, чтобы не завязывать порядок инициализации);
+#   * `log = logging.getLogger("job_monitor.x")` — имя литералом, а не
+#     `__name__`: логгер существует, но сканер его не видел, и в CHANNELS его
+#     никто бы не хватился;
+#   * `logging.warning(...)` — вызов на КОРНЕВОМ логгере. Этот случай хуже
+#     остальных: `configure_logging()` вешает обработчики на конкретные
+#     (листовые) логгеры и корня не касается вовсе, поэтому такая запись
+#     невидима принципиально, и вписать её в таблицу нельзя. У него свой
+#     тест ниже.
+# Разбор — по AST, а не регуляркой: `job_monitor/logging_setup.py` называет
+# `logging.getLogger(__name__)` в собственном докстринге, и грепающая версия
+# записала бы его в «модули, которые логируют» из-за строки документации.
+ROOT_WRITE_METHODS = frozenset(
+    {"debug", "info", "warning", "warn", "error", "exception", "critical", "log"}
+)
+
+
+def _logging_calls(source: str):
+    """Вызовы вида `logging.<что-то>(…)` в исходнике."""
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        function = node.func
+        if (
+            isinstance(function, ast.Attribute)
+            and isinstance(function.value, ast.Name)
+            and function.value.id == "logging"
+        ):
+            yield function.attr, node
+
 
 # Модули, которые логируют, но сознательно не подключены ни к одной вкладке.
 UNROUTED = {
@@ -116,19 +152,61 @@ UNROUTED = {
 }
 
 
-def _modules_that_log() -> set[str]:
-    """Имена логгеров всех модулей с `logging.getLogger(__name__)`."""
+def _logger_names(source: str, module: str) -> set[str]:
+    """Имена логгеров, которыми пользуется модуль `module`.
+
+    Имя, собранное на ходу (`getLogger(f"{__name__}.{name}")` в
+    `WorkerManager`), сюда не попадает: статически его не вычислить, а
+    дочерние логгеры супервизора и без того перечислены в CHANNELS.
+    """
     found: set[str] = set()
-    for package in SCANNED_PACKAGES:
-        for source in (REPO_ROOT / package).rglob("*.py"):
-            if "__pycache__" in source.parts:
-                continue
-            if not MODULE_LOGGER.search(source.read_text(encoding="utf-8")):
-                continue
-            relative = source.relative_to(REPO_ROOT).with_suffix("")
-            parts = [part for part in relative.parts if part != "__init__"]
-            found.add(".".join(parts))
-    assert found, "не найдено ни одного модуля с getLogger(__name__) — дерево переехало?"
+    for attribute, call in _logging_calls(source):
+        if attribute != "getLogger" or not call.args:
+            continue
+        argument = call.args[0]
+        if isinstance(argument, ast.Name) and argument.id == "__name__":
+            found.add(module)
+        elif isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+            found.add(argument.value)
+    return found
+
+
+def _root_logger_lines(source: str) -> list[int]:
+    """Строки, где запись уходит в КОРНЕВОЙ логгер."""
+    found: list[int] = []
+    for attribute, call in _logging_calls(source):
+        if attribute in ROOT_WRITE_METHODS:
+            found.append(call.lineno)
+        elif attribute == "getLogger" and (
+            not call.args
+            or (isinstance(call.args[0], ast.Constant) and call.args[0].value is None)
+        ):
+            found.append(call.lineno)
+    return found
+
+
+def _module_name(source_file: Path) -> str:
+    relative = source_file.relative_to(REPO_ROOT).with_suffix("")
+    return ".".join(part for part in relative.parts if part != "__init__")
+
+
+def _scanned_sources() -> list[Path]:
+    found = [
+        source
+        for package in SCANNED_PACKAGES
+        for source in (REPO_ROOT / package).rglob("*.py")
+        if "__pycache__" not in source.parts
+    ]
+    assert len(found) >= 15, f"просканировано всего {len(found)} файлов — дерево переехало?"
+    return found
+
+
+def _modules_that_log() -> set[str]:
+    """Имена логгеров, которые заводит хоть один модуль приложения."""
+    found: set[str] = set()
+    for source in _scanned_sources():
+        found |= _logger_names(source.read_text(encoding="utf-8"), _module_name(source))
+    assert found, "не найдено ни одного логгера в исходниках — дерево переехало?"
     return found
 
 
@@ -163,6 +241,107 @@ def test_no_channel_lists_a_module_that_never_logs() -> None:
         "канал перечисляет логгер, которого никто не заводит — таблица описывает "
         "намерение, а не устройство:\n" + "\n".join(dead)
     )
+
+
+def test_nobody_writes_to_the_root_logger() -> None:
+    """`logging.warning(...)` вместо `log.warning(...)` — запись в пустоту.
+
+    `configure_logging()` вешает обработчики на конкретные (листовые)
+    логгеры и корня не касается вовсе: у корневого логгера в этом приложении
+    обработчиков нет, значит запись не попадёт ни в один файл и ни на одну
+    вкладку. Вписать корень в CHANNELS нельзя — это утащило бы туда и чужие
+    записи из библиотек, — поэтому единственный выход в том, чтобы так не
+    писать.
+    """
+    offenders = [
+        f"{_module_name(source)}:{line}"
+        for source in _scanned_sources()
+        for line in _root_logger_lines(source.read_text(encoding="utf-8"))
+    ]
+    assert not offenders, (
+        "запись идёт в корневой логгер, у которого нет ни одного обработчика — "
+        "её не будет ни в файле, ни на вкладке логов:\n" + "\n".join(offenders)
+    )
+
+
+LOGGER_SCAN_MUTATIONS = {
+    "логгер без присваивания": (
+        "import logging\ndef f():\n    logging.getLogger(__name__).warning('x')\n",
+        {"job_monitor.probe"},
+    ),
+    "имя логгера литералом": (
+        "import logging\nlog = logging.getLogger('job_monitor.somewhere')\n",
+        {"job_monitor.somewhere"},
+    ),
+    "и то и другое в одном модуле": (
+        "import logging\nlog = logging.getLogger(__name__)\n"
+        "other = logging.getLogger('job_monitor.other')\n",
+        {"job_monitor.probe", "job_monitor.other"},
+    ),
+}
+
+LOGGER_SCAN_ALLOWED = {
+    # Ровно тот случай, из-за которого разбор пришлось делать по AST.
+    "упоминание в докстринге": '"""Модуль логирует через logging.getLogger(__name__)."""\n',
+    "имя, собранное на ходу": (
+        "import logging\ndef child(name):\n"
+        "    return logging.getLogger(f'{__name__}.{name}')\n"
+    ),
+    "логгер по переменной": (
+        "import logging\ndef get(name):\n    return logging.getLogger(name)\n"
+    ),
+    "чужой объект с методом warning": (
+        "def f(reporter):\n    reporter.warning('logging.warning(\"x\")')\n"
+    ),
+}
+
+
+def test_the_logger_scan_is_not_vacuous() -> None:
+    """Доказательство мутациями: правило «кто логирует, тот виден на вкладке»
+    стоит ровно столько, сколько сканер видит форм записи."""
+    for name, (snippet, expected) in LOGGER_SCAN_MUTATIONS.items():
+        assert _logger_names(snippet, "job_monitor.probe") == expected, (
+            f"сканер не разобрал форму «{name}» — правило её не покрывает"
+        )
+    for name, snippet in LOGGER_SCAN_ALLOWED.items():
+        assert not _logger_names(snippet, "job_monitor.probe"), f"ложное срабатывание: {name}"
+        assert not _root_logger_lines(snippet), f"ложное срабатывание (корень): {name}"
+    for snippet in ("import logging\nlogging.warning('x')\n",
+                    "import logging\nlogging.getLogger().info('x')\n",
+                    "import logging\nlogging.getLogger(None).info('x')\n"):
+        assert _root_logger_lines(snippet), f"запись в корень не замечена: {snippet!r}"
+
+
+def test_the_data_directory_warning_is_visible_on_both_tabs(isolated_logging) -> None:
+    """`job_monitor/paths.py` сообщает об одном: `chmod` на каталоге данных
+    запрещён (exFAT/SMB/NFS, чужой владелец после `sudo`, иммутабельный
+    флаг), то есть заявленные `0700`/`0600` на этом томе не действуют. Это
+    сообщение о состоянии, общем для обоих воркеров, поэтому оно идёт на обе
+    вкладки — как и предупреждение о выброшенном ключе настроек."""
+    from job_monitor import paths
+
+    configure_logging()
+    target = paths.data_dir() / "job_monitor.db"
+    target.write_text("", encoding="utf-8")
+    target.chmod(0o644)
+
+    def refuse(*_args, **_kwargs):
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        monkeypatch.setattr(paths.os, "chmod", refuse)
+        monkeypatch.setattr(paths, "_CHMOD_REFUSED", set())
+        paths.secure_file(target)
+    finally:
+        monkeypatch.undo()
+
+    for handler in logging.getLogger("job_monitor.paths").handlers:
+        handler.flush()
+    for channel in CHANNELS:
+        assert "job_monitor.db" in log_file(channel).read_text(encoding="utf-8"), (
+            f"отказ chmod не виден на вкладке {channel}"
+        )
 
 
 @pytest.mark.parametrize("logger_name, channel", sorted(_routed().items()))

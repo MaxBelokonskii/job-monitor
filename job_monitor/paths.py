@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import stat
 from pathlib import Path
@@ -12,6 +13,33 @@ DEFAULT_DIR = Path.home() / ".job-monitor"
 DIR_MODE = 0o700
 FILE_MODE = 0o600
 
+# Цели, про которые уже сказано, что chmod им запрещён. `tighten()` зовётся на
+# КАЖДОМ обращении к пути (`log_file()` → `logs_dir()` → `path()`, то есть на
+# каждый запрос к `/api/*/logs`), поэтому предупреждение выдаётся один раз на
+# цель за процесс: иначе оно само раздувало бы файл лога, который отдаётся в
+# UI.
+_CHMOD_REFUSED: set[tuple[str, int]] = set()
+
+
+def _report_refusal(target: Path, mode: int, error: OSError) -> None:
+    key = (str(target), mode)
+    if key in _CHMOD_REFUSED:
+        return
+    _CHMOD_REFUSED.add(key)
+    # Логгер берётся здесь, а не на импорте модуля: `paths` — самый нижний
+    # слой, его импортирует и `logging_setup`, и порядок инициализации не
+    # должен зависеть от того, кто у кого лежит в атрибутах. Само сообщение
+    # до `configure_logging()` уйдёт в `logging.lastResort`, то есть в stderr
+    # консоли, а после — на обе вкладки логов (`CHANNELS`).
+    #
+    # В сообщении только имя файла: полный путь — это домашний каталог
+    # пользователя, а лог отдаётся через HTTP в UI.
+    logging.getLogger(__name__).warning(
+        "не удалось сузить права %s до %o (%s): на этом томе права доступа не "
+        "действуют — состояние приложения не защищено режимом файла",
+        target.name, mode, error.strerror or error,
+    )
+
 
 def tighten(target: Path, mode: int) -> None:
     """Снимает лишние биты доступа. Никогда не добавляет новых.
@@ -19,14 +47,27 @@ def tighten(target: Path, mode: int) -> None:
     Именно `&`, а не присваивание режима: пользователь, у которого каталог
     данных строже нашего (`0500`), должен остаться при своём — мы вправе
     только убрать чужой доступ, но не выдать его.
+
+    Best-effort по построению: отказ `chmod` — не повод не работать.
+    Каталог данных живёт там, куда его поставил пользователь
+    (`$JOB_MONITOR_DATA_DIR`), и на exFAT/SMB/NFS, у файла с чужим владельцем
+    (однократный запуск под `sudo`) или под иммутабельным флагом `chmod`
+    запрещён. Раньше `os.chmod` стоял ВНЕ `try`, и такой отказ ронял
+    `data_dir()` → `configure_logging()` → `lifespan`: сервер не поднимался
+    вообще и печатал голый `PermissionError`. Права на чужом томе мы всё
+    равно выставить не можем, поэтому отказ только фиксируется в логе.
     """
     try:
         current = stat.S_IMODE(target.stat().st_mode)
     except OSError:
         return                      # файла нет или он недоступен — не наше дело
     tightened = current & mode
-    if tightened != current:
+    if tightened == current:
+        return
+    try:
         os.chmod(target, tightened)
+    except OSError as error:
+        _report_refusal(target, tightened, error)
 
 
 def secure_file(target: Path) -> None:

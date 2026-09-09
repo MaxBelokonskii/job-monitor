@@ -557,6 +557,106 @@ def test_tighten_is_silent_about_what_is_not_there(tmp_path):
     paths.tighten(tmp_path / "нет-такого", 0o600)      # не должно бросать
 
 
+# ── Ужесточение прав — best-effort, а не условие запуска ──────────────
+#
+# `os.chmod` стоял ВНЕ `try`, который ловил `stat()`, поэтому отказ chmod
+# ничем не перехватывался. Файловых систем, где chmod запрещён, три вида, и
+# все три достижимы штатным использованием: `JOB_MONITOR_DATA_DIR` на
+# exFAT/SMB/NFS (README документирует эту переменную как ручку для нескольких
+# профилей — «флешка с профилем» ровно такой случай); каталог или файл базы,
+# доставшиеся другому владельцу после однократного запуска под `sudo` или в
+# докере от root; иммутабельный флаг.
+#
+# Цена была не «права не ужесточились», а «приложение не работает»:
+# `tighten()` зовут `data_dir()`, `path()` и `logs_dir()`, а `data_dir()`
+# дёргает `configure_logging()` из `lifespan`, — то есть сервер не поднимался
+# вообще и отдавал голый `PermissionError`. Права на чужом томе мы всё равно
+# выставить не можем; отказаться от работы из-за этого — не защита.
+
+
+def _chmod_is_refused(monkeypatch) -> list[tuple]:
+    """Подменяет `os.chmod` отказом. Возвращает журнал попыток."""
+    attempts: list[tuple] = []
+
+    def refuse(target, mode, *args, **kwargs):
+        attempts.append((str(target), mode))
+        raise PermissionError(1, "Operation not permitted")
+
+    monkeypatch.setattr(paths.os, "chmod", refuse)
+    return attempts
+
+
+def test_tighten_survives_a_filesystem_that_refuses_chmod(tmp_path, monkeypatch):
+    target = tmp_path / "state"
+    target.mkdir()
+    target.chmod(0o777)
+    attempts = _chmod_is_refused(monkeypatch)
+
+    paths.tighten(target, 0o700)               # не должно бросать
+
+    assert attempts, "chmod даже не пробовали — тест ничего не проверил"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o777, "права всё-таки поменялись"
+
+
+def test_the_data_directory_still_works_when_chmod_is_refused(tmp_path, monkeypatch):
+    """Все три входа в `tighten()` из этого модуля."""
+    base = tmp_path / "state"
+    base.mkdir(mode=0o777)
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(base))
+    _chmod_is_refused(monkeypatch)
+
+    assert paths.data_dir() == base
+    assert paths.path("logs", "hh.log").parent.is_dir()
+    assert paths.logs_dir().is_dir()
+    probe = base / "probe"
+    probe.write_text("", encoding="utf-8")
+    paths.secure_file(probe)                   # тоже не должно бросать
+
+
+def test_the_database_opens_on_a_filesystem_that_refuses_chmod(tmp_path, monkeypatch):
+    """Сквозной случай, с которого находка началась: `connect()` ставит
+    `0600` базе и её WAL-спутникам, и отказ chmod ронял открытие базы —
+    `PermissionError [Errno 1] Operation not permitted: …/job_monitor.db`."""
+    from job_monitor.db.connection import connect
+
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path / "state"))
+    _chmod_is_refused(monkeypatch)
+
+    conn = connect()
+    try:
+        assert conn.execute("SELECT 1").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_the_refusal_is_reported_once_and_without_the_full_path(tmp_path, monkeypatch, caplog):
+    """Отказ стоит назвать: на таком томе `0700`/`0600` не действуют, и
+    пользователь вправе об этом знать.
+
+    Два ограничения. Во-первых, `tighten()` зовётся на КАЖДОМ обращении к
+    пути (`log_file()` → `logs_dir()` → `path()`), то есть на каждый запрос
+    к `/api/tg/logs`, — поэтому сообщение выдаётся один раз на цель за
+    процесс, иначе оно само раздувало бы файл лога, который отдаётся в UI.
+    Во-вторых, в сообщении только имя файла: полный путь — это домашний
+    каталог пользователя, а лог виден через HTTP.
+    """
+    target = tmp_path / "job_monitor.db"
+    target.write_text("", encoding="utf-8")
+    target.chmod(0o644)
+    _chmod_is_refused(monkeypatch)
+    monkeypatch.setattr(paths, "_CHMOD_REFUSED", set())
+
+    with caplog.at_level("WARNING", logger="job_monitor.paths"):
+        paths.secure_file(target)
+        paths.secure_file(target)
+
+    warnings = [r for r in caplog.records if r.name == "job_monitor.paths"]
+    assert len(warnings) == 1, f"ожидалось одно предупреждение, получено {len(warnings)}"
+    message = warnings[0].getMessage()
+    assert "job_monitor.db" in message
+    assert str(tmp_path) not in message, f"в лог попал полный путь: {message}"
+
+
 def test_data_dir_fixes_an_existing_loose_directory(tmp_path, monkeypatch):
     """Раньше режим ставился только в момент создания (`mkdir(mode=0o700)`),
     поэтому каталог, доставшийся от версии до 2.1.0 или распакованный из

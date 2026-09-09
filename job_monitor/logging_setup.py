@@ -69,6 +69,12 @@ _MARKER = "_job_monitor_channel"
 # телеграмный, и hh-шный, разделить их источник неоткуда, а невидимое
 # предупреждение бесполезно — пусть лучше строчка продублируется на обеих
 # вкладках, чем не появится ни на одной.
+#
+# `job_monitor.paths` — тоже в оба, и по той же причине. Он говорит ровно об
+# одном: `chmod` на каталоге данных запрещён (exFAT/SMB/NFS, чужой владелец
+# после запуска под `sudo`, иммутабельный флаг), то есть заявленные `0700`/
+# `0600` на этом томе не действуют. Каталог данных общий на оба воркера, и
+# это сообщение о безопасности состояния, а не о работе одного из них.
 CHANNELS: dict[str, tuple[str, tuple[str, ...]]] = {
     "tg": (
         "tg_system.log",
@@ -76,6 +82,7 @@ CHANNELS: dict[str, tuple[str, tuple[str, ...]]] = {
             "job_monitor.workers.telegram",
             "job_monitor.workers.manager.tg",
             "job_monitor.settings",
+            "job_monitor.paths",
         ),
     ),
     "hh": (
@@ -84,6 +91,7 @@ CHANNELS: dict[str, tuple[str, tuple[str, ...]]] = {
             "job_monitor.workers.hh",
             "job_monitor.workers.manager.hh",
             "job_monitor.settings",
+            "job_monitor.paths",
         ),
     ),
 }
