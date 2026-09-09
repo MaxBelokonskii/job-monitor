@@ -4,10 +4,21 @@
 # Инвариант закреплён тестом tests/test_dependencies.py: если апстрим
 # объявляет зависимость с маркером платформы, лок не имеет права его потерять.
 #
-# Известное неполное место: на Windows `click`/`pytest` тянут `colorama`, а
-# `uvicorn[standard]` — её же; в локе, снятом на macOS, её нет и появиться
-# оффлайн неоткуда. Установка от этого не падает — pip доставит colorama как
-# транзитивную, просто незакреплённой версии.
+# Известные неполные места — три пакета, и все три приезжают на Windows
+# НЕзакреплёнными. В локе, снятом на macOS, их нет и появиться оффлайн
+# неоткуда; установка от этого не падает — pip доставит их как транзитивные,
+# просто версии выберет «на сегодня».
+#
+#   * colorama — `pytest` объявляет `colorama>=0.4; sys_platform == "win32"`.
+#     (Проверено по метаданным окружения: закреплённые здесь `click 8.5.0` и
+#     `uvicorn 0.52.4` её НЕ объявляют, хотя более старые версии объявляли.)
+#   * cffi — `trio 0.34.0`, которую тянет `selenium`, объявляет
+#     `cffi>=1.14; os_name == "nt" and implementation_name != "pypy"`.
+#   * pycparser — собственная зависимость cffi, приезжает вместе с ней.
+#
+# Колёса под cp313/win_amd64 у всех трёх есть, так что установка проходит;
+# незакреплённой остаётся именно воспроизводимость лока на Windows, и
+# заявлять её шире, чем она есть, нельзя.
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anyio==4.15.1
@@ -58,10 +69,16 @@ typing_extensions==4.16.0
 urllib3==2.7.0
 uvicorn==0.52.4
 # Колёс под Windows у uvloop нет и не было (его setup.py прямо бросает
-# RuntimeError('uvloop does not support Windows at the moment')), а сам
-# uvicorn объявляет его как `sys_platform != 'win32'`. Без маркера
+# RuntimeError('uvloop does not support Windows at the moment')). Без маркера
 # `pip install -r requirements.lock` на Windows падает на этой строке.
-uvloop==0.22.1 ; sys_platform != "win32"
+#
+# Маркер — дословно апстримный (uvicorn 0.52.4, минус часть про экстру):
+# Windows тут не единственная площадка без uvloop, и «отсекает ли Windows» —
+# слишком слабое требование. Прежний `sys_platform != "win32"` на Cygwin и на
+# PyPy всё ещё пробовал его поставить, то есть ронял установку целиком тем же
+# способом, от которого маркер и заводили. Закреплено
+# tests/test_dependencies.py::test_a_lock_marker_is_never_wider_than_upstream_allows.
+uvloop==0.22.1 ; sys_platform != "win32" and sys_platform != "cygwin" and platform_python_implementation != "PyPy"
 virtualenv==21.7.8
 watchfiles==1.2.0
 websocket-client==1.9.2

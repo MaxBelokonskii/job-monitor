@@ -189,3 +189,126 @@ def test_the_marker_check_is_not_vacuous() -> None:
         "проверка маркеров осталась без источника истины, перепроверьте её вручную"
     )
     assert "uvloop" in _lock_requirements(), "uvloop пропал из лока"
+
+
+# ── ...и не шире, чем апстрим разрешает ───────────────────────────────
+#
+# Обратная сторона проверки выше. `uvloop==0.22.1 ; sys_platform != "win32"`
+# отсекал Windows и на этом останавливался, а сам uvicorn объявляет
+# `sys_platform != 'win32' and sys_platform != 'cygwin' and
+# platform_python_implementation != 'PyPy'`. То есть на Cygwin и на PyPy лок
+# всё ещё пробовал поставить uvloop, у которого там нет ни колеса, ни
+# поддержки (его setup.py прямо бросает RuntimeError), — и `pip install -r
+# requirements.lock` падал бы ЦЕЛИКОМ, ровно тем же отказом, от которого
+# маркер и заводили.
+#
+# Проверяется свойство: не бывает окружения, в котором лок ставит пакет, а
+# ни один апстрим его туда не просит. Источник истины — метаданные в
+# окружении, проверка работает оффлайн.
+#
+# `python_version` по осям не варьируется намеренно: лок снят под конкретный
+# интерпретатор, и маркеры вида `python_version < "3.11"` к нему
+# неприменимы по построению — варьирование дало бы ложные срабатывания на
+# `exceptiongroup`/`tomli`, которых в локе и нет.
+MARKER_ENVIRONMENTS = [
+    {
+        "sys_platform": platform,
+        "platform_system": system,
+        "os_name": os_name,
+        "implementation_name": implementation_name,
+        "platform_python_implementation": implementation,
+    }
+    for platform, system, os_name in (
+        ("win32", "Windows", "nt"),
+        ("cygwin", "CYGWIN_NT-10.0", "posix"),
+        ("linux", "Linux", "posix"),
+        ("darwin", "Darwin", "posix"),
+    )
+    for implementation, implementation_name in (("CPython", "cpython"), ("PyPy", "pypy"))
+]
+
+
+def _upstream_requirements() -> dict[str, list[tuple[str, object, list[str]]]]:
+    """{дистрибутив: [(откуда, требование, экстры источника)]}."""
+    import importlib.metadata as metadata
+
+    from packaging.requirements import Requirement
+
+    found: dict[str, list[tuple[str, object, list[str]]]] = {}
+    for distribution in metadata.distributions():
+        # Экстры перебираются все: `uvicorn[standard]` тянет uvloop под
+        # `extra == 'standard'`, и платформенная часть маркера живёт внутри
+        # того же выражения. Перебор ВСЕХ экстр делает проверку мягче
+        # (апстрим выглядит шире, чем при конкретном наборе экстр), то есть
+        # ошибается в сторону молчания, а не ложной тревоги.
+        extras = [""] + list(distribution.metadata.get_all("Provides-Extra") or [])
+        for raw in distribution.metadata.get_all("Requires-Dist") or []:
+            try:
+                requirement = Requirement(raw)
+            except Exception:                     # noqa: BLE001 — чужие метаданные
+                continue
+            name = requirement.name.lower().replace("_", "-")
+            label = f"{distribution.metadata['Name']}: {raw}"
+            found.setdefault(name, []).append((label, requirement, extras))
+    assert found, "в окружении не нашлось ни одного требования — метаданные не читаются?"
+    return found
+
+
+def _installs(marker, environment: dict, extras: list[str]) -> bool:
+    if marker is None:
+        return True
+    for extra in extras:
+        try:
+            if marker.evaluate({**environment, "extra": extra}):
+                return True
+        except Exception:                         # noqa: BLE001 — неполный контекст
+            continue
+    return False
+
+
+def test_a_lock_marker_is_never_wider_than_upstream_allows() -> None:
+    pinned = _lock_requirements()
+    upstream = _upstream_requirements()
+    offenders: list[str] = []
+    for name, requirement in sorted(pinned.items()):
+        sources = upstream.get(name)
+        if not sources:
+            continue                              # прямая зависимость проекта
+        for environment in MARKER_ENVIRONMENTS:
+            if not _installs(requirement.marker, environment, [""]):
+                continue
+            if any(_installs(r.marker, environment, extras) for _label, r, extras in sources):
+                continue
+            offenders.append(
+                f"{requirement} ставится при {environment['sys_platform']}/"
+                f"{environment['platform_python_implementation']}, хотя апстрим этого не"
+                f" просит: {'; '.join(label for label, _r, _e in sources)}"
+            )
+    assert not offenders, (
+        "маркер в requirements.lock шире апстримного: pip попробует поставить пакет "
+        "там, где апстрим его не объявляет, и `pip install -r requirements.lock` "
+        "в start_web.bat упадёт целиком:\n" + "\n".join(offenders)
+    )
+
+
+def test_the_width_check_is_not_vacuous() -> None:
+    """У проверки выше должен быть хотя бы один живой источник: маркер, чью
+    платформенную часть можно потерять. Если такого не осталось, проверка
+    молчит навсегда, и потерянную часть маркера снова заметит только
+    пользователь Windows."""
+    from packaging.requirements import Requirement
+
+    upstream = _upstream_requirements()
+    assert "uvloop" in upstream, "uvicorn больше не объявляет uvloop — перепроверьте вручную"
+    narrow = Requirement('uvloop==0.22.1 ; sys_platform != "win32"')
+    sources = upstream["uvloop"]
+    missed = [
+        environment
+        for environment in MARKER_ENVIRONMENTS
+        if _installs(narrow.marker, environment, [""])
+        and not any(_installs(r.marker, environment, extras) for _label, r, extras in sources)
+    ]
+    assert missed, (
+        "прежний, слишком широкий маркер uvloop проверка больше не отличает от "
+        "апстримного — она стала вакуумной"
+    )
