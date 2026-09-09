@@ -11,7 +11,8 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from job_monitor.db.repositories import HhRepo, SettingsRepo, TgRepo
-from job_monitor.settings import AppSettings, save_settings
+from job_monitor.presets import LEGACY_CRITERIA_FIELDS, LEGACY_DROPPED_FIELDS
+from job_monitor.settings import GlobalSettings, save_settings
 
 SECRET_KEYS = ("api_id", "api_hash")
 LEGACY_STAMP = "%Y-%m-%d %H:%M"
@@ -20,6 +21,7 @@ LEGACY_STAMP = "%Y-%m-%d %H:%M"
 @dataclass
 class ImportReport:
     settings_keys: int = 0
+    criteria_keys: int = 0
     contacts: int = 0
     sends: int = 0
     vacancies: int = 0
@@ -35,8 +37,16 @@ def _parse_stamp(raw: str) -> datetime | None:
     return None
 
 
+# Ключи, которые кладёт бутстрап (`db/connection.py::_bootstrap`), а не
+# пользователь. Строка настроек перестала быть пустой у любой свежей базы, и
+# без этого исключения защита «уже импортировано» срабатывала бы всегда,
+# молча превращая `migrate-legacy` в пустую операцию.
+BOOTSTRAP_KEYS = frozenset({"active_preset_id"})
+
+
 def _import_settings(conn: sqlite3.Connection, source: Path, report: ImportReport) -> None:
-    if SettingsRepo(conn).load():
+    stored = SettingsRepo(conn).load()
+    if set(stored) - BOOTSTRAP_KEYS:
         # `_import_settings` calls `save_settings` unconditionally; without
         # this guard a second `migrate-legacy` run (the documented recovery
         # step, re-run by mistake or on purpose) silently overwrites
@@ -62,17 +72,69 @@ def _import_settings(conn: sqlite3.Connection, source: Path, report: ImportRepor
         if key in raw:
             raw.pop(key)
             report.skipped.append(f"config.json: {key} не переносится — секреты живут в .env")
-    known = set(AppSettings.model_fields)
+    # Старый `config.json` не знал разделения на глобальное и критерии — там
+    # всё лежало вперемешку. Раскладываем по двум адресатам: лимиты и режимы
+    # в строку настроек, критерии поиска в пресет. Без этого критерии просто
+    # исчезали бы как «неизвестные ключи» — молча и безвозвратно.
+    known = set(GlobalSettings.model_fields)
+    criteria_keys = set(LEGACY_CRITERIA_FIELDS)
     patch = {key: value for key, value in raw.items() if key in known}
-    for key in set(raw) - known:
+    criteria_raw = {
+        LEGACY_CRITERIA_FIELDS[key]: value
+        for key, value in raw.items()
+        if key in criteria_keys
+    }
+    for key in set(raw) - known - criteria_keys - set(LEGACY_DROPPED_FIELDS):
         report.skipped.append(f"config.json: неизвестный ключ {key}")
+    for key in set(raw) & set(LEGACY_DROPPED_FIELDS):
+        report.skipped.append(
+            f"config.json: {key} больше не настройка "
+            "(регион — константа, резюме — библиотека)"
+        )
     report.settings_keys = _save_valid_fields(conn, patch, report)
+    if criteria_raw:
+        report.criteria_keys = _save_criteria(conn, criteria_raw, report)
+
+
+def _save_criteria(
+    conn: sqlite3.Connection, criteria_raw: dict, report: ImportReport
+) -> int:
+    """Кладёт перенесённые критерии в активный пресет.
+
+    Отвергнутые моделью поля отбрасываются поимённо, как и в настройках:
+    одно значение вне границ не должно стоить всего блока критериев.
+    """
+    from job_monitor.criteria import SearchCriteria
+    from job_monitor.presets import ensure_default, save_criteria
+
+    preset_id = ensure_default(conn, datetime.now())
+    accepted = dict(criteria_raw)
+    for _attempt in range(len(criteria_raw) + 1):
+        if not accepted:
+            return 0
+        try:
+            save_criteria(conn, preset_id, accepted)
+            return len(accepted)
+        except ValidationError as error:
+            rejected = False
+            for detail in error.errors(include_url=False):
+                field = str(detail["loc"][0]) if detail["loc"] else ""
+                if field in accepted:
+                    report.skipped.append(
+                        f"config.json: {field} отвергнуто ({detail['msg']})"
+                    )
+                    accepted.pop(field)
+                    rejected = True
+            if not rejected:
+                raise
+    _ = SearchCriteria  # ссылка для читателя: валидирует именно она
+    return 0
 
 
 def _save_valid_fields(conn: sqlite3.Connection, patch: dict, report: ImportReport) -> int:
     """Сохранить то, что проходит валидацию; отвергнутые поля — в отчёт.
 
-    У старой версии границ у настроек не было, а `AppSettings` их ввела
+    У старой версии границ у настроек не было, а `GlobalSettings` их ввела
     (`max_per_day: ge=1, le=100` и подобные). Одно значение вне границ —
     например `{"max_per_day": 500}` — роняло `save_settings` с
     `ValidationError`, которую здесь никто не ловил: сырая трассировка

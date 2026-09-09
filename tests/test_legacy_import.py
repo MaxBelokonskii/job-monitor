@@ -6,6 +6,7 @@ import pytest
 from job_monitor.db import connection
 from job_monitor.db.repositories import HhRepo, TgRepo
 from job_monitor.legacy_import import import_legacy
+from job_monitor.presets import active_criteria
 from job_monitor.settings import load_settings
 
 
@@ -39,7 +40,8 @@ def test_imports_settings_without_secrets(conn, legacy):
     report = import_legacy(conn, legacy)
     current = load_settings(conn)
     assert current.max_per_day == 7
-    assert current.channels == ["itvacancykz"]
+    # Каналы — критерий: они уезжают в активный пресет, а не в настройки.
+    assert active_criteria(conn).channels == ["itvacancykz"]
     assert "api_hash" in " ".join(report.skipped)
 
 
@@ -186,8 +188,10 @@ def test_out_of_range_setting_is_reported_and_the_rest_is_imported(conn, legacy)
     current = load_settings(conn)
     assert current.max_per_day == 25, "отвергнутое поле должно остаться значением по умолчанию"
     assert current.history_limit == 42, "валидные поля обязаны доехать"
-    assert current.channels == ["itvacancykz"]
-    assert report.settings_keys == 2
+    # Каналы — критерий: они уезжают в активный пресет, а не в настройки.
+    assert active_criteria(conn).channels == ["itvacancykz"]
+    assert report.settings_keys == 1, "в настройках остался только history_limit"
+    assert report.criteria_keys == 1, "каналы посчитаны как критерий, а не потеряны"
     # Главное: следующие два блока не должны зависеть от исхода первого.
     assert TgRepo(conn).contacts_total() == 2
     assert HhRepo(conn).exists("111") is True
@@ -203,7 +207,7 @@ def test_several_out_of_range_settings_are_all_named(conn, legacy):
     notes = " ".join(report.skipped)
     for field in ("max_per_day", "delay_min", "hh_max_per_day"):
         assert field in notes, f"{field} отвергнут молча: {report.skipped}"
-    assert load_settings(conn).channels == ["a"]
+    assert active_criteria(conn).channels == ["a"]
 
 
 def test_a_broken_settings_block_does_not_cost_contacts_and_vacancies(conn, legacy, monkeypatch):

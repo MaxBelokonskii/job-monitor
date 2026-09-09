@@ -8,15 +8,16 @@ from pydantic import ValidationError
 
 from job_monitor import presets
 from job_monitor.criteria import SearchCriteria
-from job_monitor.db.connection import connect
 from job_monitor.db.repositories import PresetsRepo, SettingsRepo
 
 NOW = datetime(2026, 9, 9, 12, 0, 0)
 
 
 @pytest.fixture()
-def conn(tmp_path) -> sqlite3.Connection:
-    return connect(str(tmp_path / "t.db"))
+def conn(bare_conn) -> sqlite3.Connection:
+    """Схема без бутстрапа: эти тесты проверяют сам бутстрап, поэтому база
+    должна быть до него — см. `bare_conn` в conftest."""
+    return bare_conn
 
 
 def test_ensure_default_creates_one_empty_preset(conn) -> None:

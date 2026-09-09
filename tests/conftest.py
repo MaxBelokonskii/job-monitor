@@ -145,3 +145,28 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:
         "поведенческие пины XSS и CSP (S5/S6): без node защита фронтенда держится "
         "только грепом по исходнику. Полный прогон требует Node.js — см. README."
     )
+
+
+@pytest.fixture()
+def bare_conn(tmp_path):
+    """Соединение со схемой, но БЕЗ бутстрапа данных.
+
+    `connect()` после миграций создаёт пресет по умолчанию и переносит старые
+    критерии (`_bootstrap`). Это правильно для приложения и мешает тестам,
+    которые проверяют сам бутстрап: им нужна база до него. Соединение
+    настраивается так же, как приложение — `isolation_level=None`, иначе
+    явный `BEGIN IMMEDIATE` из `transaction()` падает с «cannot start a
+    transaction within a transaction».
+    """
+    import sqlite3
+
+    from job_monitor.db.migrations import migrate
+
+    conn = sqlite3.connect(
+        tmp_path / "t.db", isolation_level=None, check_same_thread=False
+    )
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    migrate(conn)
+    return conn

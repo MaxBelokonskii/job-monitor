@@ -61,7 +61,9 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 from job_monitor import paths
 from job_monitor.db.repositories import EventsRepo, HH_STATUS_APPLIED, HhRepo
-from job_monitor.settings import AppSettings, load_settings
+from job_monitor.criteria import HH_AREA_ID, SearchCriteria
+from job_monitor.presets import active_criteria
+from job_monitor.settings import GlobalSettings, load_settings
 from job_monitor.workers.hh_steps import parse_steps, run_steps
 
 log = logging.getLogger(__name__)
@@ -252,28 +254,33 @@ def setup_driver(headless: bool = False) -> "webdriver.Chrome":
     return driver
 
 
-def build_search_url(keyword: str, settings: AppSettings, area_id: int) -> str:
-    """Строим URL поиска с фильтрами."""
+def build_search_url(profession: str, criteria: SearchCriteria) -> str:
+    """URL поиска по одной профессии из пресета.
+
+    Регион не параметр, а константа `HH_AREA_ID` (решение D8): поиск ведётся
+    только по нему, подменить его через API нельзя, и справочник регионов
+    hh.ru приложению поэтому не нужен вовсе.
+    """
     params = [
-        f"text={keyword.replace(' ', '+')}",
-        f"area={area_id}",
-        f"search_period={settings.hh_search_period}",
+        f"text={profession.replace(' ', '+')}",
+        f"area={HH_AREA_ID}",
+        f"search_period={criteria.hh_search_period}",
         "per_page=20",
         "order_by=publication_time",
     ]
-    if settings.hh_experience:
-        params.append(f"experience={settings.hh_experience}")
-    if settings.hh_salary_from:
-        params.append(f"salary={settings.hh_salary_from}")
+    if criteria.hh_experience:
+        params.append(f"experience={criteria.hh_experience}")
+    if criteria.hh_salary_from:
+        params.append(f"salary={criteria.hh_salary_from}")
         params.append("only_with_salary=true")
-    for emp in settings.hh_employment:
+    for emp in criteria.hh_employment:
         params.append(f"employment={emp}")
-    for sch in settings.hh_schedule:
+    for sch in criteria.hh_schedule:
         params.append(f"schedule={sch}")
     return "https://hh.ru/search/vacancy?" + "&".join(params)
 
 
-def get_vacancies_from_page(driver: Any, settings: AppSettings) -> list[dict]:
+def get_vacancies_from_page(driver: Any, criteria: SearchCriteria) -> list[dict]:
     """Собираем вакансии со страницы поиска.
 
     Ключ переименован с `id` на `vacancy_id` (перенос из hh_monitor.py):
@@ -291,7 +298,7 @@ def get_vacancies_from_page(driver: Any, settings: AppSettings) -> list[dict]:
         return []
 
     items = driver.find_elements(By.XPATH, "//div[@data-qa='vacancy-serp__vacancy']")
-    exclude = [w.lower() for w in settings.hh_exclude]
+    exclude = [w.lower() for w in criteria.hh_exclude]
 
     for item in items:
         try:
@@ -341,11 +348,19 @@ def get_vacancies_from_page(driver: Any, settings: AppSettings) -> list[dict]:
     return vacancies
 
 
-def apply_to_vacancy(driver: Any, vacancy: dict, settings: AppSettings) -> bool:
-    """Откликаемся на вакансию."""
+def apply_to_vacancy(
+    driver: Any, vacancy: dict, criteria: SearchCriteria, settings: GlobalSettings
+) -> bool:
+    """Откликаемся на вакансию.
+
+    Критерии и глобальные настройки приходят раздельно: сопроводительное
+    письмо и резюме на стороне hh.ru принадлежат пресету, а сценарий
+    Selenium описывает, КАК управлять сайтом, и от смены профессии не
+    зависит.
+    """
     wait = WebDriverWait(driver, 15)
-    cover_letter = settings.hh_cover_letter
-    resume_id = settings.hh_resume_id
+    cover_letter = criteria.hh_cover_letter
+    resume_id = criteria.hh_resume_id
 
     try:
         driver.get(vacancy["url"])
@@ -472,13 +487,14 @@ def _interruptible_sleep(stop_event: threading.Event, seconds: float) -> bool:
 def _process_one(
     driver: Any,
     vacancy: dict,
-    settings: AppSettings,
+    criteria: SearchCriteria,
+    settings: GlobalSettings,
     repo: HhRepo,
     events: EventsRepo,
 ) -> bool:
     """Откликается на одну вакансию и записывает результат. True — отклик отправлен."""
     try:
-        applied = apply_to_vacancy(driver, vacancy, settings)
+        applied = apply_to_vacancy(driver, vacancy, criteria, settings)
     except ValueError as error:
         # L5: опечатка в сохранённом сценарии Selenium (hh_selenium_steps) не
         # должна ронять монитор. Кнопка «Откликнуться» к этому моменту уже
@@ -544,33 +560,35 @@ def _blocking_loop(stop_event: threading.Event) -> None:
             # программная ошибка была видна в журнале.
             try:
                 settings = load_settings(conn)
+                criteria = active_criteria(conn)
                 if repo.applied_on(date.today()) >= settings.hh_max_per_day:
                     if not _interruptible_sleep(stop_event, 600):
                         return
                     continue
-                for keyword in settings.hh_keywords:
-                    for area_id in settings.hh_area_ids:
+                for profession in criteria.professions:
+                    if stop_event.is_set():
+                        return
+                    driver.get(build_search_url(profession, criteria))
+                    for vacancy in get_vacancies_from_page(driver, criteria):
                         if stop_event.is_set():
                             return
-                        driver.get(build_search_url(keyword, settings, area_id))
-                        for vacancy in get_vacancies_from_page(driver, settings):
-                            if stop_event.is_set():
-                                return
-                            if repo.exists(vacancy["vacancy_id"]):
-                                continue
-                            _process_one(driver, vacancy, settings, repo, events)
-                            if not _interruptible_sleep(
-                                stop_event,
-                                # min/max, а не как есть: настройки не
-                                # запрещают hh_delay_min > hh_delay_max, а
-                                # random.randint на пустом диапазоне бросает
-                                # ValueError и обрывал бы цикл.
-                                random.randint(
-                                    min(settings.hh_delay_min, settings.hh_delay_max),
-                                    max(settings.hh_delay_min, settings.hh_delay_max),
-                                ),
-                            ):
-                                return
+                        if repo.exists(vacancy["vacancy_id"]):
+                            continue
+                        _process_one(
+                            driver, vacancy, criteria, settings, repo, events
+                        )
+                        if not _interruptible_sleep(
+                            stop_event,
+                            # min/max, а не как есть: настройки не запрещают
+                            # hh_delay_min > hh_delay_max, а random.randint
+                            # на пустом диапазоне бросает ValueError и
+                            # обрывал бы цикл.
+                            random.randint(
+                                min(settings.hh_delay_min, settings.hh_delay_max),
+                                max(settings.hh_delay_min, settings.hh_delay_max),
+                            ),
+                        ):
+                            return
             except Exception as error:  # noqa: BLE001 — см. комментарий выше
                 # Перенос из hh_monitor.py: браузер/сеть иногда моргают
                 # (таймаут, потеря соединения, временно упавшая страница

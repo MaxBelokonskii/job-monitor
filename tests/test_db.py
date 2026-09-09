@@ -36,7 +36,13 @@ def test_transaction_rolls_back(conn):
         with connection.transaction(conn):
             conn.execute("INSERT INTO settings (key, value) VALUES ('x', '1')")
             raise RuntimeError("boom")
-    assert conn.execute("SELECT COUNT(*) FROM settings").fetchone()[0] == 0
+    # Считаем строки с ключом 'x', а не все: бутстрап (`connect._bootstrap`)
+    # кладёт в настройки `active_preset_id`, и «таблица пуста» перестало быть
+    # признаком отката — проверять надо отсутствие именно того, что писала
+    # откатившаяся транзакция.
+    assert conn.execute(
+        "SELECT COUNT(*) FROM settings WHERE key = 'x'"
+    ).fetchone()[0] == 0
 
 
 def test_unique_username_in_tg_contacts(conn):

@@ -22,7 +22,9 @@ import pytest
 import job_monitor.workers.hh as hh
 from job_monitor.db.connection import connect
 from job_monitor.db.repositories import HhRepo, SettingsRepo
-from job_monitor.settings import AppSettings
+from job_monitor import presets
+from job_monitor.criteria import SearchCriteria
+from job_monitor.settings import GlobalSettings
 
 
 class FakeRepo:
@@ -47,7 +49,7 @@ class FakeEvents:
 
 
 def test_process_one_survives_bad_scenario(monkeypatch):
-    def boom(_driver, _vacancy, _settings):
+    def boom(_driver, _vacancy, _criteria, _settings):
         raise ValueError("неизвестный тип шага: 'execute_script'")
 
     monkeypatch.setattr(hh, "apply_to_vacancy", boom)
@@ -56,7 +58,8 @@ def test_process_one_survives_bad_scenario(monkeypatch):
     events = FakeEvents()
     vacancy = {"vacancy_id": "1", "title": "QA", "url": "https://hh.ru/vacancy/1"}
 
-    result = hh._process_one(driver=object(), vacancy=vacancy, settings=AppSettings(),
+    result = hh._process_one(driver=object(), vacancy=vacancy,
+                              criteria=SearchCriteria(), settings=GlobalSettings(),
                               repo=repo, events=events)
 
     assert result is False
@@ -97,18 +100,20 @@ def broken_scenario_loop(monkeypatch):
     между вакансиями.
     """
     conn = connect(":memory:")
-    settings = AppSettings(
-        hh_keywords=["QA", "тестировщик"],   # два прохода по одной и той же вакансии
-        hh_area_ids=[113],
-        hh_delay_min=1,
-        hh_delay_max=1,
-    )
+    settings = GlobalSettings(hh_delay_min=1, hh_delay_max=1)
     SettingsRepo(conn).save(settings.model_dump())
+    # Профессии переехали в пресет: две — чтобы цикл прошёл по одной и той же
+    # вакансии дважды и дедуп было на чём проверить.
+    presets.save_criteria(
+        conn,
+        presets.ensure_default(conn, datetime(2026, 9, 9, 12, 0, 0)),
+        {"professions": ["QA", "тестировщик"]},
+    )
     monkeypatch.setattr("job_monitor.db.connection.connect", lambda *_a, **_k: conn)
 
     clicks: list[dict] = []
 
-    def boom(_driver, vacancy, _settings):
+    def boom(_driver, vacancy, _criteria, _settings):
         clicks.append(vacancy)
         raise ValueError("неизвестный тип шага: 'execute_script'")
 
@@ -132,8 +137,12 @@ def broken_scenario_loop(monkeypatch):
     monkeypatch.setattr(hh, "setup_driver", lambda headless=False: driver)
     monkeypatch.setattr(hh, "load_cookies", lambda _driver, _target: True)
     monkeypatch.setattr(hh, "is_logged_in", lambda _driver: True)
-    monkeypatch.setattr(hh, "build_search_url", lambda keyword, *_a, **_k: f"https://hh.ru/{keyword}")
-    monkeypatch.setattr(hh, "get_vacancies_from_page", lambda _driver, _settings: [dict(vacancy)])
+    monkeypatch.setattr(
+        hh, "build_search_url", lambda profession, *_a, **_k: f"https://hh.ru/{profession}"
+    )
+    monkeypatch.setattr(
+        hh, "get_vacancies_from_page", lambda _driver, _criteria: [dict(vacancy)]
+    )
 
     slept: list[float] = []
 
@@ -188,5 +197,5 @@ def test_the_loop_really_walked_both_keywords(broken_scenario_loop):
 def test_the_loop_pauses_only_after_a_vacancy_it_actually_touched(broken_scenario_loop):
     """Пропущенная по дедупу вакансия не должна стоить паузы между
     откликами: иначе воркер тратил бы минуты на уже обработанное."""
-    settings_interval = AppSettings().hh_check_interval
+    settings_interval = GlobalSettings().hh_check_interval
     assert broken_scenario_loop["slept"] == [1, settings_interval]

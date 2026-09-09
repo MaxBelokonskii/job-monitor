@@ -3,7 +3,12 @@ from pydantic import ValidationError
 
 from job_monitor import envfile
 from job_monitor.db.connection import get_connection
-from job_monitor.settings import AppSettings, load_secrets, load_settings, save_settings
+from job_monitor.settings import (
+    GlobalSettings,
+    load_secrets,
+    load_settings,
+    save_settings,
+)
 from job_monitor.telegram_client import reset_client
 
 router = APIRouter(prefix="/api/config", tags=["config"])

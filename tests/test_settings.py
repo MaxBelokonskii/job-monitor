@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from job_monitor import settings as settings_module
 from job_monitor.db import connection
+from job_monitor.presets import active_criteria
 from job_monitor.db.repositories import SettingsRepo
 
 
@@ -20,8 +21,10 @@ def conn(tmp_path, monkeypatch):
 def test_defaults_are_returned_for_empty_db(conn):
     current = settings_module.load_settings(conn)
     assert current.max_per_day == 25
-    assert "qa" in current.keywords
     assert current.safe_mode is True
+    # Ключевые слова сюда больше не входят: это критерий, он живёт в пресете —
+    # и у чистой установки он ПУСТ, чтобы приложение не искало чужую работу.
+    assert active_criteria(conn).tg_keywords == []
 
 
 def test_patch_updates_only_given_fields(conn):
@@ -190,11 +193,11 @@ def test_the_safe_default_is_pinned(conn, field, expected):
 
 def test_the_safe_defaults_are_the_model_defaults_too(conn):
     """Ассерты выше читают базу; тот же вопрос к самой модели — на случай,
-    если значение по умолчанию появится не в `AppSettings`, а в записи,
+    если значение по умолчанию появится не в `GlobalSettings`, а в записи,
     которую кто-нибудь заведёт при первом запуске."""
-    fresh = settings_module.AppSettings()
+    fresh = settings_module.GlobalSettings()
     for field, expected in SAFE_DEFAULTS.items():
-        assert getattr(fresh, field) is expected, f"AppSettings.{field}"
+        assert getattr(fresh, field) is expected, f"GlobalSettings.{field}"
 
 
 # ── `Secrets.is_complete` — половина ключей это не «готово» ───────────

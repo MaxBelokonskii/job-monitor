@@ -46,6 +46,7 @@ import asyncio
 import sqlite3
 import threading
 import time
+from datetime import datetime
 
 import pytest
 from selenium.common.exceptions import WebDriverException
@@ -53,6 +54,7 @@ from selenium.common.exceptions import WebDriverException
 import job_monitor.workers.hh as hh
 from job_monitor.db import connection as db_connection
 from job_monitor.db.repositories import EventsRepo
+from job_monitor.presets import ensure_default, save_criteria
 from job_monitor.settings import save_settings
 from job_monitor.workers.manager import WorkerAlreadyRunning, WorkerManager, WorkerState
 
@@ -169,10 +171,9 @@ def test_blocking_loop_survives_a_webdriver_exception(monkeypatch, tmp_path):
     monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
     db_connection.reset_connection()
     conn = db_connection.connect()
-    save_settings(conn, {
-        "hh_keywords": ["qa"], "hh_area_ids": [1],
-        "hh_max_per_day": 50, "hh_check_interval": 60,
-    })
+    save_settings(conn, {"hh_max_per_day": 50, "hh_check_interval": 60})
+    # Профессия — критерий, она в пресете; регион больше не настройка вовсе.
+    save_criteria(conn, ensure_default(conn, datetime.now()), {"professions": ["qa"]})
 
     # Make every _interruptible_sleep (including the 60s error-recovery
     # pause) resolve instantly; the test only cares that it happens and is
@@ -292,10 +293,11 @@ def _prepare_db(monkeypatch, tmp_path, **settings_overrides):
     db_connection.reset_connection()
     conn = db_connection.connect()
     save_settings(conn, {
-        "hh_keywords": ["qa"], "hh_area_ids": [1],
         "hh_max_per_day": 50, "hh_check_interval": 60,
         **settings_overrides,
     })
+    # Профессия — критерий, она в пресете; регион больше не настройка вовсе.
+    save_criteria(conn, ensure_default(conn, datetime.now()), {"professions": ["qa"]})
     # Skip the real waits without touching the global time module: the
     # cancellation semantics of _interruptible_sleep are pinned by the tests
     # above, here only the control flow around it matters.
@@ -361,7 +363,7 @@ def test_blocking_loop_survives_an_error_outside_the_selenium_calls(monkeypatch,
 
 def test_reversed_delay_bounds_do_not_break_the_cycle(monkeypatch, tmp_path):
     """Pins the round-2 fix: nothing forces hh_delay_min <= hh_delay_max
-    (AppSettings validates each field on its own), and
+    (GlobalSettings validates each field on its own), and
     random.randint(90, 30) raises ValueError — which used to escape the
     loop and kill the worker. min()/max() removes the crash path instead of
     merely logging it, so no error event may be recorded either.
@@ -386,7 +388,9 @@ def test_reversed_delay_bounds_do_not_break_the_cycle(monkeypatch, tmp_path):
     monkeypatch.setattr(hh, "get_vacancies_from_page", fake_get_vacancies)
     monkeypatch.setattr(
         hh, "_process_one",
-        lambda driver, vacancy, settings, repo, events: processed.append(vacancy) or True,
+        lambda driver, vacancy, criteria, settings, repo, events: (
+            processed.append(vacancy) or True
+        ),
     )
 
     try:

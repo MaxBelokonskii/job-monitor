@@ -15,13 +15,15 @@ import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 
-from job_monitor.db.repositories import EventsRepo, TgRepo
-from job_monitor.settings import AppSettings
+from job_monitor.criteria import SearchCriteria
+from job_monitor.db.repositories import EventsRepo, TgFoundRepo, TgRepo
+from job_monitor.settings import GlobalSettings
 
 log = logging.getLogger(__name__)
 USERNAME_RE = re.compile(r"@[A-Za-z0-9_]{4,32}")
-Sender = Callable[[str], Awaitable[None]]
+Sender = Callable[[str, str, "Path | None"], Awaitable[None]]
 Clock = Callable[[], datetime]
 
 
@@ -29,6 +31,7 @@ Clock = Callable[[], datetime]
 class IncomingPost:
     channel: str
     text: str
+    message_id: int
 
 
 def extract_usernames(text: str) -> list[str]:
@@ -39,35 +42,77 @@ def extract_usernames(text: str) -> list[str]:
     return seen
 
 
-def is_eligible(username: str, settings: AppSettings, own_username: str | None) -> bool:
+def is_eligible(
+    username: str, criteria: SearchCriteria, own_username: str | None
+) -> bool:
     handle = username.lstrip("@").lower()
     if handle.endswith("bot"):
         return False
     if own_username and handle == own_username.lstrip("@").lower():
         return False
-    if handle in {channel.lstrip("@").lower() for channel in settings.channels}:
+    if handle in {channel.lstrip("@").lower() for channel in criteria.channels}:
         return False
     return True
 
 
-def post_matches(post: IncomingPost, settings: AppSettings) -> bool:
-    """Пост из нужного канала, с ключевым словом и без стоп-слова."""
-    channels = {channel.lstrip("@").lower() for channel in settings.channels}
+def post_matches(post: IncomingPost, criteria: SearchCriteria) -> str | None:
+    """Совпавшее ключевое слово, либо `None`, если пост не подходит.
+
+    Возвращается именно слово, а не `bool`: оно нужно и для подстановки
+    `{ключевое_слово}` в шаблон, и для колонки `matched_keyword`. Вернуть
+    `bool` и искать слово второй раз — значит завести два места с одной
+    логикой, которые разойдутся при первой же правке.
+    """
+    channels = {channel.lstrip("@").lower() for channel in criteria.channels}
     if post.channel.lstrip("@").lower() not in channels:
-        return False
+        return None
     text = post.text.lower()
-    if not any(keyword.lower() in text for keyword in settings.keywords):
-        return False
-    return not any(bad.lower() in text for bad in settings.exclude)
+    matched = next(
+        (kw for kw in criteria.tg_keywords if kw.lower() in text), None
+    )
+    if matched is None:
+        return None
+    if any(bad.lower() in text for bad in criteria.tg_exclude):
+        return None
+    return matched
+
+
+PLACEHOLDERS = ("{канал}", "{ключевое_слово}", "{профессия}")
+
+
+def render_template(
+    template: str, channel: str, keyword: str, profession: str
+) -> str:
+    """Подставляет три надёжных значения в шаблон сообщения.
+
+    `str.replace`, а НЕ `str.format`: шаблон пишет пользователь, а в
+    пользовательском тексте фигурные скобки встречаются как обычные символы
+    («ставка {30000}»). `format` на таком тексте падает с `KeyError`, а на
+    конструкции `{x.__class__}` даёт доступ к атрибутам переданных объектов —
+    то есть форматная строка от пользователя это не только хрупкость, но и
+    уязвимость.
+
+    Заголовка вакансии среди подстановок нет намеренно (решение D12): пост в
+    канале — свободный текст без структуры, и любая эвристика по извлечению
+    заголовка иногда даёт мусор, а мусор уходит живому человеку в личку.
+    """
+    return (
+        template.replace("{канал}", channel)
+        .replace("{ключевое_слово}", keyword)
+        .replace("{профессия}", profession)
+    )
 
 
 async def process_post(
     post: IncomingPost,
-    settings: AppSettings,
+    criteria: SearchCriteria,
+    settings: GlobalSettings,
     repo: TgRepo,
+    found_repo: TgFoundRepo,
     sender: Sender,
     clock: Clock = datetime.now,
     own_username: str | None = None,
+    attachment: Path | None = None,
 ) -> list[str]:
     """Обрабатывает один пост. Возвращает список username, которым отправили.
 
@@ -83,15 +128,30 @@ async def process_post(
     `clock` параметром, а не прямым вызовом `datetime.now()`: без него
     проверить смену суток можно было бы только подменой системного времени.
     """
-    if not post_matches(post, settings):
+    keyword = post_matches(post, criteria)
+    if keyword is None:
         return []
+
+    # Дедупликация ПОСТОВ, которой не было вовсе: один и тот же пост,
+    # перечитанный на следующем круге или пришедший повторным событием,
+    # обрабатывался заново — и человек получал второе сообщение.
+    preview = post.text[:80].strip()
+    first_time = found_repo.record(
+        post.channel, post.message_id, None, preview, keyword, clock()
+    )
+    if not first_time:
+        return []
+
     if settings.safe_mode:
         for username in extract_usernames(post.text):
             log.info("[SAFE MODE] найден контакт: %s", username)
         return []
-    if not settings.template:
+    if not criteria.template:
         log.warning("шаблон сообщения пуст — отправка пропущена")
         return []
+
+    profession = criteria.professions[0] if criteria.professions else ""
+    text = render_template(criteria.template, post.channel, keyword, profession)
 
     sent: list[str] = []
     for username in extract_usernames(post.text):
@@ -100,11 +160,11 @@ async def process_post(
         if repo.sent_on(clock().date()) >= settings.max_per_day:
             log.warning("дневной лимит %s достигнут", settings.max_per_day)
             break
-        if not is_eligible(username, settings, own_username):
+        if not is_eligible(username, criteria, own_username):
             continue
         if repo.was_sent(username):
             continue
-        await sender(username)
+        await sender(username, text, attachment)
         repo.record_send(username, post.channel, post.text[:80].strip(), clock())
         sent.append(username)
         await asyncio.sleep(random.randint(settings.delay_min, settings.delay_max))
@@ -114,7 +174,10 @@ async def process_post(
 async def run_worker() -> None:
     from telethon import events
 
+    from job_monitor import resume_store
     from job_monitor.db.connection import get_connection
+    from job_monitor.db.repositories import ResumesRepo
+    from job_monitor.presets import active_criteria
     from job_monitor.settings import load_settings
     from job_monitor.telegram_client import get_client
 
@@ -124,12 +187,41 @@ async def run_worker() -> None:
     own_username = getattr(me, "username", None)
     conn = get_connection()
     repo = TgRepo(conn)
+    found_repo = TgFoundRepo(conn)
 
-    async def sender(username: str) -> None:
-        settings = load_settings(conn)
-        await client.send_message(username, settings.template)
-        if settings.file_path:
-            await client.send_file(username, settings.file_path)
+    def resolve_attachment(criteria: SearchCriteria) -> Path | None:
+        """Путь к резюме из библиотеки, либо `None`.
+
+        Отсутствие файла НЕ отменяет отправку: резюме — не обязательная часть
+        отклика, и человек вправе писать только текстом (спецификация, 4.2).
+        Пропавший файл — повод для строчки в логе, а не для молчания воркера.
+        """
+        if criteria.resume_id is None:
+            return None
+        row = ResumesRepo(conn).get(criteria.resume_id)
+        if row is None:
+            log.warning(
+                "резюме %s выбрано в пресете, но его нет в библиотеке — "
+                "отправляю без вложения", criteria.resume_id,
+            )
+            return None
+        try:
+            path = resume_store.path_of(row["stored_name"])
+        except resume_store.ResumeRejected as error:
+            log.warning("резюме недоступно (%s) — отправляю без вложения", error)
+            return None
+        if not path.exists():
+            log.warning(
+                "файл резюме «%s» пропал из каталога данных — отправляю без "
+                "вложения", row["original_name"],
+            )
+            return None
+        return path
+
+    async def sender(username: str, text: str, attachment: Path | None) -> None:
+        await client.send_message(username, text)
+        if attachment is not None:
+            await client.send_file(username, str(attachment))
 
     @client.on(events.NewMessage())
     async def handler(event) -> None:  # адаптер Telethon → чистая логика
@@ -137,12 +229,27 @@ async def run_worker() -> None:
         channel = getattr(chat, "username", None)
         if not channel or not event.message.message:
             return
-        post = IncomingPost(channel=channel, text=event.message.message)
+        post = IncomingPost(
+            channel=channel,
+            text=event.message.message,
+            message_id=event.message.id,
+        )
         settings = load_settings(conn)
-        if post_matches(post, settings):
+        criteria = active_criteria(conn)
+        if post_matches(post, criteria) is not None:
             # Метрика «вакансий найдено» берётся отсюда, а не из текста логов (L2).
             EventsRepo(conn).add("tg", "vacancy", post.text[:80].strip(), datetime.now())
-        for username in await process_post(post, settings, repo, sender, datetime.now, own_username):
+        for username in await process_post(
+            post,
+            criteria,
+            settings,
+            repo,
+            found_repo,
+            sender,
+            datetime.now,
+            own_username,
+            resolve_attachment(criteria),
+        ):
             # Тоже `datetime.now()`, а не время прихода поста: обработка
             # одного поста растягивается на паузы между отправками и может
             # перейти за полночь. Остаточная неточность в пределах одного

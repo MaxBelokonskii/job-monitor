@@ -26,7 +26,8 @@ import pytest
 from selenium.common.exceptions import NoSuchElementException
 
 import job_monitor.workers.hh as hh
-from job_monitor.settings import AppSettings
+from job_monitor.criteria import SearchCriteria
+from job_monitor.settings import GlobalSettings
 
 
 class FakeElement:
@@ -99,7 +100,7 @@ def _vacancy_card(title: str, vacancy_id: str = "1") -> FakeElement:
 
 
 def test_an_excluded_title_is_dropped_and_a_matching_one_is_kept():
-    settings = AppSettings(hh_exclude=["senior", "lead", "middle"])
+    settings = SearchCriteria(hh_exclude=["senior", "lead", "middle"])
     driver = FakeSearchDriver([
         _vacancy_card("Senior QA Engineer", "10"),
         _vacancy_card("QA инженер (junior)", "11"),
@@ -127,7 +128,7 @@ def test_the_exclusion_is_case_insensitive_from_both_sides(excluded, title):
     только заголовок, и список «исключить», набранный с большой буквы,
     молча перестанет действовать.
     """
-    settings = AppSettings(hh_exclude=[excluded])
+    settings = SearchCriteria(hh_exclude=[excluded])
     driver = FakeSearchDriver([_vacancy_card(title, "20")])
     assert hh.get_vacancies_from_page(driver, settings) == []
 
@@ -135,7 +136,7 @@ def test_the_exclusion_is_case_insensitive_from_both_sides(excluded, title):
 def test_an_empty_exclude_list_drops_nothing():
     """Обратная сторона: фильтр не должен выбрасывать всё подряд — иначе
     проверки выше остались бы зелёными и при пустом результате."""
-    settings = AppSettings(hh_exclude=[])
+    settings = SearchCriteria(hh_exclude=[])
     driver = FakeSearchDriver([
         _vacancy_card("Senior QA", "30"),
         _vacancy_card("QA", "31"),
@@ -151,7 +152,7 @@ def test_the_vacancy_id_comes_from_the_url_without_query(monkeypatch):
     приложение начнёт откликаться на одни и те же вакансии по кругу.
     """
     driver = FakeSearchDriver([_vacancy_card("QA", "987654")])
-    found = hh.get_vacancies_from_page(driver, AppSettings(hh_exclude=[]))
+    found = hh.get_vacancies_from_page(driver, SearchCriteria(hh_exclude=[]))
     assert found[0]["vacancy_id"] == "987654"
     assert found[0]["url"] == "https://hh.ru/vacancy/987654"
 
@@ -216,7 +217,7 @@ def test_a_vacancy_we_already_applied_to_is_not_clicked_again(button_text):
     vacancy = {"vacancy_id": "1", "title": "QA", "company": "ООО",
                "url": "https://hh.ru/vacancy/1"}
 
-    applied = hh.apply_to_vacancy(driver, vacancy, AppSettings())
+    applied = hh.apply_to_vacancy(driver, vacancy, SearchCriteria(), GlobalSettings())
 
     assert applied is False, "повторный отклик отмечен как отправленный"
     assert button.clicks == 0, (
@@ -233,7 +234,7 @@ def test_a_fresh_vacancy_is_applied_to():
     vacancy = {"vacancy_id": "2", "title": "QA инженер", "company": "ООО",
                "url": "https://hh.ru/vacancy/2"}
 
-    applied = hh.apply_to_vacancy(driver, vacancy, AppSettings())
+    applied = hh.apply_to_vacancy(driver, vacancy, SearchCriteria(), GlobalSettings())
 
     assert applied is True
     assert button.clicks >= 2, (
@@ -252,6 +253,7 @@ def test_a_vacancy_without_an_apply_button_is_not_counted_as_applied():
     applied = hh.apply_to_vacancy(
         driver, {"vacancy_id": "3", "title": "QA", "company": "ООО",
                  "url": "https://hh.ru/vacancy/3"},
-        AppSettings(),
+        SearchCriteria(),
+        GlobalSettings(),
     )
     assert applied is False

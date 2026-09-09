@@ -12,6 +12,7 @@ from fastapi import APIRouter
 
 from job_monitor.db.connection import get_connection
 from job_monitor.db.repositories import EventsRepo, HhRepo, TgRepo
+from job_monitor.presets import active_criteria
 from job_monitor.settings import load_secrets, load_settings
 from job_monitor.workers.hh import login
 from job_monitor.workers.manager import manager
@@ -24,6 +25,7 @@ async def get_state() -> dict:
     conn = get_connection()
     today = date.today()
     settings = load_settings(conn)
+    criteria = active_criteria(conn)
     tg_repo, hh_repo, events = TgRepo(conn), HhRepo(conn), EventsRepo(conn)
 
     recent = events.recent("tg", 8) + events.recent("hh", 8)
@@ -37,7 +39,7 @@ async def get_state() -> dict:
             "found_today": events.count_on("tg", "vacancy", today),
             "max_per_day": settings.max_per_day,
             "safe_mode": settings.safe_mode,
-            "channels_count": len(settings.channels),
+            "channels_count": len(criteria.channels),
             "api_hash_set": load_secrets().api_hash is not None,
         },
         "hh": {
