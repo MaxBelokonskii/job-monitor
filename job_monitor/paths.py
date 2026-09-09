@@ -111,6 +111,25 @@ def db_file() -> Path:
     return path("job_monitor.db")
 
 
+def resume_dir() -> Path:
+    """Каталог библиотеки резюме.
+
+    Внутри каталога данных, а НЕ каталога репозитория: резюме содержит ФИО,
+    телефон и почту, а каталог репозитория — это git. Ровно так утекло резюме
+    предыдущего автора: вместе с закоммиченным архивом (S1, решение D11).
+    """
+    directory = path("resume")
+    directory.mkdir(mode=DIR_MODE, parents=True, exist_ok=True)
+    tighten(directory, DIR_MODE)
+    return directory
+
+
+def db_backup_file(tag: str) -> Path:
+    """Путь резервной копии БД рядом с самой БД: `job_monitor.db.bak-<tag>`."""
+    db = db_file()
+    return db.with_name(f"{db.name}.bak-{tag}")
+
+
 def logs_dir() -> Path:
     directory = path("logs")
     directory.mkdir(mode=DIR_MODE, parents=True, exist_ok=True)

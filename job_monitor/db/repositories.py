@@ -274,3 +274,209 @@ class EventsRepo:
             (worker, kind, start, end),
         ).fetchone()
         return int(row["n"])
+
+
+class PresetsRepo:
+    """Пресеты: критерии поиска одним JSON-документом на строку.
+
+    `criteria` хранится строкой, но наружу отдаётся разобранным словарём:
+    вызывающему незачем знать про сериализацию, а забытый `json.loads` в
+    одном из мест вызова — ровно тот дефект, который потом ищут полдня.
+    """
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    @staticmethod
+    def _row(row: sqlite3.Row) -> dict:
+        parsed = dict(row)
+        parsed["criteria"] = json.loads(parsed["criteria"])
+        return parsed
+
+    def list(self) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT * FROM presets ORDER BY position, id"
+        ).fetchall()
+        return [self._row(row) for row in rows]
+
+    def get(self, preset_id: int) -> dict | None:
+        row = self._conn.execute(
+            "SELECT * FROM presets WHERE id = ?", (preset_id,)
+        ).fetchone()
+        return self._row(row) if row else None
+
+    def get_by_name(self, name: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT * FROM presets WHERE name = ?", (name,)
+        ).fetchone()
+        return self._row(row) if row else None
+
+    def next_position(self) -> int:
+        row = self._conn.execute("SELECT MAX(position) AS top FROM presets").fetchone()
+        top = row["top"] if row and row["top"] is not None else -1
+        return int(top) + 1
+
+    def create(self, name: str, criteria: dict, now: datetime) -> int:
+        stamp = now.isoformat(timespec="seconds")
+        payload = json.dumps(criteria, ensure_ascii=False)
+        with transaction(self._conn):
+            cursor = self._conn.execute(
+                "INSERT INTO presets (name, position, criteria, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (name, self.next_position(), payload, stamp, stamp),
+            )
+        return int(cursor.lastrowid)
+
+    def update_criteria(
+        self, preset_id: int, mutator: Callable[[dict], dict]
+    ) -> dict:
+        """Атомарное чтение -> изменение -> запись внутри одной транзакции.
+
+        Та же причина, что у `SettingsRepo.update()`: чтение в autocommit и
+        запись отдельной транзакцией дают окно, в котором параллельный
+        писатель успевает сохранить своё целиком, и его правка молча
+        затирается устаревшим снимком — без исключения где-либо.
+        """
+        with transaction(self._conn):
+            row = self._conn.execute(
+                "SELECT criteria FROM presets WHERE id = ?", (preset_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(preset_id)
+            new_criteria = mutator(json.loads(row["criteria"]))
+            self._conn.execute(
+                "UPDATE presets SET criteria = ?, updated_at = ? WHERE id = ?",
+                (
+                    json.dumps(new_criteria, ensure_ascii=False),
+                    datetime.now().isoformat(timespec="seconds"),
+                    preset_id,
+                ),
+            )
+        return new_criteria
+
+    def set_name(self, preset_id: int, name: str, now: datetime) -> None:
+        with transaction(self._conn):
+            self._conn.execute(
+                "UPDATE presets SET name = ?, updated_at = ? WHERE id = ?",
+                (name, now.isoformat(timespec="seconds"), preset_id),
+            )
+
+    def set_position(self, preset_id: int, position: int, now: datetime) -> None:
+        with transaction(self._conn):
+            self._conn.execute(
+                "UPDATE presets SET position = ?, updated_at = ? WHERE id = ?",
+                (position, now.isoformat(timespec="seconds"), preset_id),
+            )
+
+    def delete(self, preset_id: int) -> None:
+        with transaction(self._conn):
+            self._conn.execute("DELETE FROM presets WHERE id = ?", (preset_id,))
+
+    def count(self) -> int:
+        row = self._conn.execute("SELECT COUNT(*) AS n FROM presets").fetchone()
+        return int(row["n"])
+
+
+class ResumesRepo:
+    """Библиотека резюме: записи. Сами файлы — в `job_monitor/resume_store.py`."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def add(
+        self, original_name: str, stored_name: str, size_bytes: int, now: datetime
+    ) -> int:
+        with transaction(self._conn):
+            cursor = self._conn.execute(
+                "INSERT INTO resumes (original_name, stored_name, size_bytes, uploaded_at)"
+                " VALUES (?, ?, ?, ?)",
+                (
+                    original_name,
+                    stored_name,
+                    size_bytes,
+                    now.isoformat(timespec="seconds"),
+                ),
+            )
+        return int(cursor.lastrowid)
+
+    def list(self) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT * FROM resumes ORDER BY uploaded_at DESC, id DESC"
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get(self, resume_id: int) -> dict | None:
+        row = self._conn.execute(
+            "SELECT * FROM resumes WHERE id = ?", (resume_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def delete(self, resume_id: int) -> None:
+        with transaction(self._conn):
+            self._conn.execute("DELETE FROM resumes WHERE id = ?", (resume_id,))
+
+    def presets_using(self, resume_id: int) -> list[str]:
+        """Имена пресетов, ссылающихся на это резюме.
+
+        `resume_id` живёт внутри JSON-документа критериев, поэтому связь
+        проверяется разбором, а не внешним ключом — и именно разбором, а не
+        поиском подстроки: `LIKE '%"resume_id": 1%'` спутал бы 1 с 11.
+        Удаление файла, на который ссылается пресет, сломало бы его молча,
+        поэтому удаление обязано уметь назвать всех, кто пострадает.
+        """
+        names: list[str] = []
+        for row in self._conn.execute("SELECT name, criteria FROM presets").fetchall():
+            if json.loads(row["criteria"]).get("resume_id") == resume_id:
+                names.append(row["name"])
+        return names
+
+
+class TgFoundRepo:
+    """Найденное в Telegram. Пишется этим подпроектом, читается следующим."""
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def record(
+        self,
+        channel: str,
+        message_id: int,
+        username: str | None,
+        preview: str | None,
+        matched_keyword: str | None,
+        now: datetime,
+    ) -> bool:
+        """`True`, если пост новый; `False`, если такой уже записан.
+
+        `INSERT OR IGNORE` вместо предварительного `SELECT`: проверка и
+        вставка одним оператором не оставляют окна между ними.
+        """
+        with transaction(self._conn):
+            cursor = self._conn.execute(
+                "INSERT OR IGNORE INTO tg_found"
+                " (channel, message_id, found_at, username, preview, matched_keyword)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    channel,
+                    message_id,
+                    now.isoformat(timespec="seconds"),
+                    username,
+                    preview,
+                    matched_keyword,
+                ),
+            )
+        return cursor.rowcount == 1
+
+    def exists(self, channel: str, message_id: int) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM tg_found WHERE channel = ? AND message_id = ?",
+            (channel, message_id),
+        ).fetchone()
+        return row is not None
+
+    def recent(self, limit: int) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT * FROM tg_found ORDER BY found_at DESC, id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]

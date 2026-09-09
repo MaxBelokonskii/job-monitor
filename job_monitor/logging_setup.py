@@ -63,6 +63,12 @@ _MARKER = "_job_monitor_channel"
 # не попадёт вообще; ровно это и проверяет tests/test_logging_setup.py —
 # «модуль, который логирует, обязан быть виден на какой-то вкладке».
 #
+# `job_monitor.db.migrations` — тоже в ОБА канала, по той же причине. Он
+# предупреждает, что резервная копия БД перед миграцией не удалась: копия
+# best-effort и миграцию не отменяет, но пользователь обязан узнать, что
+# необратимый шаг прошёл без страховки. Отнести это к одному из воркеров
+# неоткуда — схема общая.
+#
 # `job_monitor.settings` — в ОБА канала. Он предупреждает о выброшенных при
 # чтении неизвестных ключах настроек (`_drop_unknown_fields`), то есть о том,
 # что часть сохранённой конфигурации молча не применяется. Ключ мог быть и
@@ -88,6 +94,7 @@ CHANNELS: dict[str, tuple[str, tuple[str, ...]]] = {
             "job_monitor.settings",
             "job_monitor.paths",
             "job_monitor.envfile",
+            "job_monitor.db.migrations",
         ),
     ),
     "hh": (
@@ -98,6 +105,7 @@ CHANNELS: dict[str, tuple[str, tuple[str, ...]]] = {
             "job_monitor.settings",
             "job_monitor.paths",
             "job_monitor.envfile",
+            "job_monitor.db.migrations",
         ),
     ),
 }
