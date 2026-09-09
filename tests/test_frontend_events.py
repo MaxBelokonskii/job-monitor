@@ -400,7 +400,8 @@ def test_toggle_branches_on_state_not_on_the_running_boolean() -> None:
     Проверяется НЕ форма кода, а какие запросы уходят на каждый клик."""
     sources = "\n".join(
         _maybe_extract(name) for name in
-        ("workerView", "workerToggleAction", "setWorkerState", "toggleTG", "toggleHH")
+        ("workerView", "workerToggleAction", "setWorkerState", "stopResultText",
+         "toggleTG", "toggleHH")
     )
     harness = """
     let posted = [];
@@ -1073,3 +1074,82 @@ def test_the_chat_list_does_not_render_the_raw_timestamp() -> None:
         f"время рисуется как есть: {match.group(0)} — в узкой колонке это ISO с "
         "секундами и латинской T"
     )
+
+
+# ── Живой воркер в ответе на остановку — не ошибка ────────────────────
+
+
+@skip_without_node
+def test_a_worker_restarted_by_someone_else_is_not_reported_as_an_error() -> None:
+    """Гонка двух клиентов, целиком.
+
+    Сторож остановки (`job_monitor/workers/manager.py::_await_stop`) живёт
+    отдельной таской и переживает отмену ожидающего; проснувшись, он молчит,
+    если `_tasks[name]` уже принадлежит ДРУГОМУ запуску — иначе он объявил бы
+    «остановлен» про живого воркера, и следующий start() поднял бы второй
+    экземпляр. Плата за это: клиент A, попросивший стоп, получает состояние
+    воркера, запущенного клиентом B, — `{"status":"running","detail":null}`.
+
+    Строго лучше прежнего (тогда A получал `stopped` при живом воркере), но
+    тост врал: ветка показывала `r.detail || 'Ошибка'`, а `detail` у живого
+    состояния пуст. Проверяется, ЧТО видит пользователь, а не наличие
+    проверки.
+    """
+    sources = "\n".join(
+        _maybe_extract(name) for name in
+        ("workerView", "workerToggleAction", "setWorkerState", "stopResultText",
+         "toggleTG", "toggleHH")
+    )
+    harness = """
+    let toasts = [];
+    let reply = null;
+    async function apiPost() { return reply; }
+    function updateTGButton() {}
+    function updateHHButton() {}
+    function showToast(text) { toasts.push(text); }
+    function hideRestartBanner() {}
+    const tgState = {};
+    const hhState = {};
+
+    (async () => {
+      for (const [worker, toggle, name] of
+           [[tgState, toggleTG, 'TG'], [hhState, toggleHH, 'HH']]) {
+        // Воркер работает, пользователь жмёт «Остановить».
+        worker.state = 'running'; worker.running = true; worker.canStart = true;
+        toasts = [];
+        reply = { status: 'running', detail: null };
+        await toggle();
+        check(name + ': тост не «Ошибка»', toasts.length === 1 && toasts[0] !== 'Ошибка');
+        check(name + ': тост говорит про запуск, а не про сбой',
+              !/[Оо]шибк/.test(toasts[0]));
+        check(name + ': состояние осталось живым', worker.state === 'running');
+        check(name + ': кнопка снова умеет останавливать',
+              workerToggleAction(worker, name) === 'stop');
+
+        // `starting` — та же гонка, только сторож проснулся ещё раньше.
+        worker.state = 'running'; worker.running = true; worker.canStart = true;
+        toasts = [];
+        reply = { status: 'starting', detail: null };
+        await toggle();
+        check(name + ': starting тоже не ошибка', !/[Оо]шибк/.test(toasts[0]));
+
+        // А вот зависший воркер — ошибка, и её текст обязан дойти.
+        worker.state = 'running'; worker.running = true; worker.canStart = true;
+        toasts = [];
+        reply = { status: 'error', detail: 'воркер не остановился за 10.0s' };
+        await toggle();
+        same(name + ': причина зависания показана', toasts,
+             ['воркер не остановился за 10.0s']);
+        check(name + ': состояние стало error', worker.state === 'error');
+
+        // Ответ вообще без состояния (сеть, 500) — по-прежнему «Ошибка».
+        worker.state = 'running'; worker.running = true; worker.canStart = true;
+        toasts = [];
+        reply = null;
+        await toggle();
+        same(name + ': пустой ответ остался ошибкой', toasts, ['Ошибка']);
+      }
+    })();
+    """
+    result = _run_node(f"{sources}\n{NODE_CHECK_HELPER}\n{harness}")
+    assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"

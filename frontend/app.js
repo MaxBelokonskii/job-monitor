@@ -286,6 +286,27 @@ function workerToggleAction(worker, name) {
   return workerView(worker.state, name, worker.canStart).action;
 }
 
+// Что сказать пользователю, когда POST /api/{tg,hh}/stop ответил не
+// `stopped`. Ответ несёт НАСТОЯЩЕЕ состояние воркера, и не всякое «не
+// stopped» — отказ.
+//
+// Живое состояние в ответе на остановку — как раз не отказ. Сторож остановки
+// (`job_monitor/workers/manager.py::_await_stop`) живёт отдельной таской и
+// переживает отмену ожидающего; проснувшись, он молчит, если таской уже
+// владеет ДРУГОЙ запуск. Сценарий целиком: клиент A жмёт «Остановить» и
+// ждёт, воркер гаснет, клиент B успевает нажать «Запустить», сторож
+// просыпается и отдаёт A состояние нового воркера —
+// {"status":"running","detail":null}. Состояние на экране при этом
+// выставляется верно, а тост показывал «Ошибка» — ровно потому, что
+// `detail` пуст, а не потому что что-то сломалось.
+function stopResultText(reply, name) {
+  if (!reply || !reply.status) return 'Ошибка';
+  if (reply.status === 'running' || reply.status === 'starting') {
+    return `${name} монитор снова работает — его запустили заново`;
+  }
+  return reply.detail || 'Ошибка';
+}
+
 async function toggleTG() {
   const action = workerToggleAction(tgState, 'TG');
   if (action === 'none') return;
@@ -300,7 +321,7 @@ async function toggleTG() {
       // остаётся под наблюдением, и следующий start() ответит 400 — покажем
       // это, а не оставим на экране устаревшую кнопку «работает».
       if (r && r.status) { setWorkerState(tgState, r.status, r.detail); updateTGButton(); }
-      showToast(r?.detail || 'Ошибка');
+      showToast(stopResultText(r, 'TG'));
     }
   } else {
     const r = await apiPost('/tg/start');
@@ -327,7 +348,7 @@ async function toggleHH() {
       // tracked, so the next start() will refuse. Show that instead of
       // leaving the stale "running" button on screen.
       if (r && r.status) { setWorkerState(hhState, r.status, r.detail); updateHHButton(); }
-      showToast(r?.detail || 'Ошибка');
+      showToast(stopResultText(r, 'HH'));
     }
   } else {
     const r = await apiPost('/hh/start');
