@@ -821,7 +821,14 @@ def test_the_cascade_resolver_agrees_with_the_stylesheet() -> None:
 # можно было добавить в app.js, и прогон оставался зелёным — докстринг ниже
 # обещал обратное. Реализацию (`updateWorkerButton`) тест и раньше брал
 # настоящую; теперь настоящий и перебор состояний.
-WORKER_VIEW_CASE = re.compile(r"case\s+'([a-z_]+)'\s*:")
+#
+# Сама регулярка была уже, чем язык: `case\s+'([a-z_]+)'\s*:` видела только
+# одинарные кавычки и только нижний регистр, поэтому `case "paused":` или
+# `case 'Paused':` возвращали ровно ту дыру, которую этот тест и закрывал —
+# состояние есть в app.js, а перебор его не знает. Все три кавычки JS
+# (`'`, `"`, backtick) и любой регистр теперь учитываются; что регулярка
+# действительно их видит, закреплено тестом ниже.
+WORKER_VIEW_CASE = re.compile(r"""case\s+['"`]([A-Za-z_][\w-]*)['"`]\s*:""")
 
 
 def _worker_view_states() -> list[str]:
@@ -835,6 +842,34 @@ def _worker_view_states() -> list[str]:
     # `default:` отвечает за `stopped` (и за всё незнакомое) — своей `case` у
     # него нет, поэтому имя добавляется явно.
     return sorted({*states, "stopped"})
+
+
+WORKER_VIEW_CASE_FORMS = {
+    "одинарные кавычки": ("case 'paused':", ["paused"]),
+    "двойные кавычки": ('case "paused":', ["paused"]),
+    "шаблонная строка": ("case `paused`:", ["paused"]),
+    "верхний регистр": ("case 'Paused':", ["Paused"]),
+    "пробел перед двоеточием": ("case 'paused' :", ["paused"]),
+    "подчёркивание и цифры": ("case 'half_open2':", ["half_open2"]),
+    "дефис": ("case 'login-required':", ["login-required"]),
+    "несколько ветвей подряд": (
+        "switch (s) {\n  case 'a':\n  case \"b\":\n    return 1;\n}", ["a", "b"],
+    ),
+}
+
+
+def test_the_worker_state_scan_sees_every_way_a_case_can_be_written() -> None:
+    """Перебор состояний кнопки берётся из `switch` в `workerView()`, и
+    ровно поэтому его разбор обязан понимать язык, а не одну манеру записи:
+    состояние, записанное в другой кавычке, иначе тихо выпадет из проверки
+    контраста — то есть вернётся дефект, ради которого перебор и стали брать
+    из app.js."""
+    for name, (snippet, expected) in WORKER_VIEW_CASE_FORMS.items():
+        assert WORKER_VIEW_CASE.findall(snippet) == expected, (
+            f"форма «{name}» ({snippet!r}) разобрана как "
+            f"{WORKER_VIEW_CASE.findall(snippet)}"
+        )
+    assert not WORKER_VIEW_CASE.findall("caseless = 'paused';"), "ложное срабатывание"
 
 
 def _worker_button_states_script() -> str:

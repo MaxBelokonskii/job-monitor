@@ -175,7 +175,19 @@ STATE_MARKERS = (
 CWD_CALLS = {"getcwd", "cwd"}
 PATH_BUILDERS = {"join", "abspath", "dirname", "expanduser", "realpath"}
 PATH_OPENERS = {"open", "connect", "TelegramClient"}
-WRITE_METHODS = {"write_text", "write_bytes", "mkdir", "touch", "chmod", "unlink", "replace"}
+WRITE_METHODS = {
+    "write_text", "write_bytes", "mkdir", "touch", "chmod", "unlink", "replace",
+    # `Path.rename` и `Path.rmdir` — та же семья, что `replace`/`unlink`, и
+    # раньше их не было: `Path("hh_cookies.json").rename(...)` проходил.
+    "rename", "rmdir",
+}
+# Методы, у которых путь не только в получателе, но и в аргументе:
+# `Path(tmp).rename("telegram.session")`. Только `rename`, не `replace`:
+# `str.replace(a, b)` — слишком частая форма, и «второй путь» превратил бы
+# `text.replace("\\n", "\\\\n")` в нарушение. Литеральное назначение
+# `p.replace(Path("hh_cookies.json"))` при этом всё равно ловится — самим
+# правилом про `Path(...)`, и это закреплено мутацией ниже.
+TWO_PATH_METHODS = {"rename"}
 # Вызовы, у которых путь — ПЕРВЫЙ позиционный аргумент, а сам вызов создаёт
 # или переписывает файл/каталог. Имена здесь однозначные: `d.copy()` или
 # `text.replace(a, b)` под них не попадают, поэтому ложных срабатываний на
@@ -191,6 +203,22 @@ WRITE_CALLS = {
 # `move` — слишком частые имена методов (`dict.copy`, `deque.move`).
 COPY_MODULE = "shutil"
 COPY_CALLS = {"copy", "copy2", "copyfile", "copytree", "move"}
+# Голые функции `os`, которые создают, переименовывают или удаляют путь.
+# Сканер знал `Path.replace`/`Path.unlink` и `os.makedirs`/`shutil.rmtree`, но
+# та же семья в виде функций `os` проходила мимо: `os.remove(
+# "hh_cookies.json")` не замечался вовсе.
+#
+# Требуется именно квалификатор `os.` — ровно затем, чтобы список не купил
+# покрытие ложными срабатываниями: `remove` и `rename` слишком частые имена
+# методов (`list.remove`, `DataFrame.rename`). Цена — `from os import remove`
+# в обход проверки; она осознанная и та же, что у `shutil` рядом.
+OS_MODULE = "os"
+OS_WRITE_CALLS = {
+    "remove", "unlink", "rmdir", "removedirs", "mkdir", "makedirs",
+    "rename", "renames", "replace", "link", "symlink", "truncate", "chmod",
+}
+# ...из них те, у которых путей два: `os.rename(src, dst)`.
+OS_TWO_PATH_CALLS = {"rename", "renames", "replace", "link", "symlink"}
 # Путь, переданный именованным аргументом: `tempfile.mkstemp(dir=…)`,
 # `logging.basicConfig(filename=…)`, `NamedTemporaryFile(dir=…)`. Режим
 # оставлен читающим: сюда попадает и безобидное `open(file=…)`, поэтому
@@ -304,6 +332,15 @@ class _StatePathScan:
         if (
             isinstance(function, ast.Attribute)
             and isinstance(function.value, ast.Name)
+            and function.value.id == OS_MODULE
+            and function.attr in OS_WRITE_CALLS
+            and node.args
+        ):
+            count = 2 if function.attr in OS_TWO_PATH_CALLS else 1
+            return [(node, argument, "w") for argument in node.args[:count]] + keyword_paths
+        if (
+            isinstance(function, ast.Attribute)
+            and isinstance(function.value, ast.Name)
             and function.value.id == COPY_MODULE
             and function.attr in COPY_CALLS
         ):
@@ -317,7 +354,10 @@ class _StatePathScan:
         if isinstance(function, ast.Name) and function.id == "Path":
             return [(node, node, "r")]
         if isinstance(function, ast.Attribute) and function.attr in WRITE_METHODS:
-            return [(node, function.value, "w")] + keyword_paths
+            found = [(node, function.value, "w")]
+            if function.attr in TWO_PATH_METHODS:
+                found += [(node, argument, "w") for argument in node.args[:1]]
+            return found + keyword_paths
         return keyword_paths
 
     def violations(self) -> list[str]:
@@ -426,6 +466,44 @@ handle, name = tempfile.mkstemp(dir="logs")
 import os, sys
 ENV = os.path.join(os.path.dirname(sys.argv[0]), ".env")
 """,
+    "os.remove по относительному имени": """
+import os
+def forget():
+    os.remove("hh_cookies.json")
+""",
+    "os.rename состояния рядом с кодом": """
+import os
+def rotate(source):
+    os.rename(source, "job_monitor.db.bak")
+""",
+    "os.rename ОТ относительного имени": """
+import os
+def rotate(destination):
+    os.rename("telegram.session", destination)
+""",
+    "os.rmdir по относительному пути": """
+import os
+os.rmdir("logs")
+""",
+    "os.replace по относительному пути": """
+import os
+def commit(temporary):
+    os.replace(temporary, ".env")
+""",
+    "Path.rename на относительное имя": """
+from pathlib import Path
+def rotate(source):
+    Path(source).rename("telegram.session.bak")
+""",
+    "Path.rmdir от __file__": """
+from pathlib import Path
+Path(__file__).parent.joinpath("logs").rmdir()
+""",
+    "Path.replace на литеральное назначение": """
+from pathlib import Path
+def commit(temporary):
+    temporary.replace(Path("hh_cookies.json"))
+""",
 }
 
 ALLOWED = {
@@ -479,6 +557,25 @@ def backup(source, destination):
 def read(handle_path="/etc/hosts"):
     with open(file=handle_path, mode="r", encoding="utf-8") as handle:
         return handle.read()
+""",
+    "remove — метод списка, а не функция os": """
+def forget(names):
+    names.remove("logs")
+""",
+    "rename — метод чужого объекта, а не функция os": """
+def relabel(frame):
+    return frame.rename({"session": "cookies"})
+""",
+    "os.rename между путями, названными снаружи": """
+import os
+def rotate(source, destination):
+    os.rename(source, destination)
+""",
+    "os.replace на путь из paths (как пишет envfile)": """
+import os
+from job_monitor import paths
+def commit(temporary):
+    os.replace(temporary, paths.env_file())
 """,
 }
 
