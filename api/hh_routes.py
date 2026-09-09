@@ -1,119 +1,124 @@
-from fastapi import APIRouter, HTTPException
-from typing import Optional
-import subprocess
-import sys
-import os
-import json
+import asyncio
 from datetime import date
+from typing import Any
+
+from fastapi import APIRouter, HTTPException
+
 from .config_routes import load_config
+from job_monitor.db.connection import get_connection
+from job_monitor.db.repositories import HhRepo
+from job_monitor.logging_setup import log_file
+from job_monitor.workers.hh import LoginWindowNotOpen, login
+from job_monitor.workers.manager import WorkerAlreadyRunning, WorkerNotRunning, manager
 
 router = APIRouter(prefix="/api/hh", tags=["hh"])
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-HH_SCRIPT_PATH = os.path.join(BASE_DIR, "hh_monitor.py")
-HH_SENT_PATH = os.path.join(BASE_DIR, "hh_sent.json")
-HH_LOG_PATH = os.path.join(BASE_DIR, "logs", "hh.log")
-HH_PID_FILE = os.path.join(BASE_DIR, "hh_pid.txt")
-
-hh_process: Optional[subprocess.Popen] = None
-
-def hh_is_running() -> bool:
-    global hh_process
-    if hh_process and hh_process.poll() is None:
-        return True
-    if os.path.exists(HH_PID_FILE):
-        try:
-            with open(HH_PID_FILE) as f:
-                pid = int(f.read().strip())
-            os.kill(pid, 0)
-            return True
-        except (OSError, ValueError):
-            try:
-                os.remove(HH_PID_FILE)
-            except Exception:
-                pass
-    return False
-
-def load_hh_sent() -> dict:
-    if not os.path.exists(HH_SENT_PATH):
-        return {}
-    with open(HH_SENT_PATH, "r", encoding="utf-8") as f:
-        try:
-            return json.load(f)
-        except Exception:
-            return {}
 
 def get_hh_log(lines: int = 100) -> str:
-    if not os.path.exists(HH_LOG_PATH):
+    """Хвост файла, в который пишет HH-сторона приложения.
+
+    Путь вычисляется на каждый вызов, а не один раз на импорте — см.
+    комментарий-близнец в api/tg_routes.py::get_system_log.
+    """
+    target = log_file("hh")
+    if not target.exists():
         return ""
-    with open(HH_LOG_PATH, "r", encoding="utf-8") as f:
+    with open(target, "r", encoding="utf-8") as f:
         all_lines = f.readlines()
     return "".join(all_lines[-lines:])
 
+
 @router.get("/status")
-async def hh_status():
-    sent = load_hh_sent()
-    today = date.today().strftime("%Y-%m-%d")
-    sent_today = sum(
-        1 for v in sent.values()
-        if v.get("applied_at", "").startswith(today)
-        and v.get("status") == "отклик отправлен"
-    )
-    found_today = sum(
-        1 for v in sent.values()
-        if v.get("applied_at", "").startswith(today)
-    )
+async def hh_status() -> dict[str, Any]:
+    repo = HhRepo(get_connection())
     cfg = load_config()
     return {
-        "running": hh_is_running(),
-        "sent_today": sent_today,
-        "found_today": found_today,
-        "total_sent": sum(1 for v in sent.values() if v.get("status") == "отклик отправлен"),
+        "running": manager.status("hh").as_dict()["running"],
+        "sent_today": repo.applied_on(date.today()),
+        "found_today": repo.found_on(date.today()),
+        "total_sent": repo.applied_total(),
         "max_per_day": cfg.get("hh_max_per_day", 20),
         "hh_autostart": cfg.get("hh_autostart", False),
     }
 
+
 @router.post("/start")
-async def hh_start():
-    global hh_process
-    if hh_is_running():
+async def hh_start() -> dict[str, str]:
+    try:
+        await manager.start("hh")
+    except WorkerAlreadyRunning:
         raise HTTPException(status_code=400, detail="HH монитор уже запущен")
-    if not os.path.exists(HH_SCRIPT_PATH):
-        raise HTTPException(status_code=404, detail="hh_monitor.py не найден")
-    hh_process = subprocess.Popen(
-        [sys.executable, HH_SCRIPT_PATH],
-        cwd=BASE_DIR
-    )
-    return {"status": "started", "pid": hh_process.pid}
+    return {"status": "started"}
+
 
 @router.post("/stop")
-async def hh_stop():
-    global hh_process
-    stopped = False
-    if hh_process and hh_process.poll() is None:
-        hh_process.terminate()
-        try:
-            hh_process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            hh_process.kill()
-        hh_process = None
-        stopped = True
-    if os.path.exists(HH_PID_FILE):
-        try:
-            os.remove(HH_PID_FILE)
-        except Exception:
-            pass
-    if not stopped:
+async def hh_stop() -> dict[str, str | None]:
+    try:
+        status = await manager.stop("hh")
+    except WorkerNotRunning:
         raise HTTPException(status_code=400, detail="HH монитор не запущен")
-    return {"status": "stopped"}
+    # Возвращаем НАСТОЯЩЕЕ состояние, а не безусловное "stopped": воркер
+    # может не уложиться в бюджет остановки (apply_to_vacancy — это
+    # WebDriverWait(15) плюс фиксированные паузы), и тогда manager.stop()
+    # ставит error и продолжает отслеживать таску. Раньше UI в этом случае
+    # показывал «монитор остановлен», пользователь жал «Старт», получал 400
+    # «уже запущен» и жал «Стоп» ещё раз — то самое место, где второй стоп
+    # раньше бросал живой поток Selenium без присмотра.
+    # Форма ответа сохранена: успешная остановка по-прежнему даёт
+    # {"status": "stopped"}, на который смотрит frontend/app.js.
+    return {"status": status.state.value, "detail": status.last_error}
+
+
+@router.post("/login/start")
+async def hh_login_start() -> dict:
+    return {"state": (await asyncio.to_thread(login.start)).value}
+
+
+@router.post("/login/confirm")
+async def hh_login_confirm() -> dict:
+    """«Я вошёл, сохранить сессию».
+
+    Кнопка «Закрыть окно входа» видна всегда и стоит рядом, поэтому
+    последовательность «Закрыть» → «Я вошёл» достижима в два клика и
+    приводила в `confirm()` без драйвера: необработанный RuntimeError и 500.
+    Это ошибка последовательности вызовов, а не сбой сервера, — 400 с
+    объяснением. Дизейбл кнопки в UI сюда не годится в одиночку: 500 отдаётся
+    любому клиенту (curl, вкладка со старым состоянием). Сам дизейбл теперь
+    есть — `login.state` приходит в каждом `GET /api/state`, — но он гасит
+    лишь приглашение нажать, а не сам вызов.
+
+    Ловится именно `LoginWindowNotOpen`, а не всякий RuntimeError: упавший
+    посреди проверки Selenium — это настоящая поломка, и она должна остаться
+    500, а не притвориться ошибкой пользователя.
+    """
+    try:
+        state = await asyncio.to_thread(login.confirm)
+    except LoginWindowNotOpen as error:
+        raise HTTPException(
+            status_code=400,
+            detail="Окно входа не открыто — нажмите «Открыть вход в hh.ru»",
+        ) from error
+    return {"state": state.value}
+
+
+@router.post("/login/cancel")
+async def hh_login_cancel() -> dict:
+    """Закрыть окно входа, не подтверждая его.
+
+    Без этого роута единственный способ погасить открытый Chrome — успешный
+    `confirm()`: пользователь, у которого вход не удался или который передумал,
+    оставался с живым окном без единого контрола в UI. `quit()` блокирующий,
+    поэтому — как и `login.start` выше — через `asyncio.to_thread`.
+    """
+    await asyncio.to_thread(login.close)
+    return {"state": login.state.value}
+
 
 @router.get("/vacancies")
-async def hh_vacancies():
-    sent = load_hh_sent()
-    vacancies = list(sent.values())
-    vacancies.sort(key=lambda x: x.get("applied_at", ""), reverse=True)
-    return vacancies[:50]
+async def hh_vacancies() -> list[dict]:
+    return HhRepo(get_connection()).recent(50)
+
 
 @router.get("/logs")
-async def hh_logs(lines: int = 100):
+async def hh_logs(lines: int = 100) -> dict[str, str]:
     return {"log": get_hh_log(lines)}
