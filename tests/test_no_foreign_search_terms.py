@@ -12,7 +12,8 @@ from __future__ import annotations
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCANNED_DIRS = ("job_monitor", "api")
+SCANNED_DIRS = ("job_monitor", "api", "frontend")
+SCANNED_SUFFIXES = (".py", ".js", ".html", ".css")
 
 # Собираются из частей, чтобы файл теста не срабатывал на себе, если каталог
 # сканирования когда-нибудь расширят.
@@ -42,8 +43,10 @@ def _sources() -> list[Path]:
     for directory in SCANNED_DIRS:
         found.extend(
             item
-            for item in (REPO_ROOT / directory).rglob("*.py")
-            if "__pycache__" not in item.parts
+            for item in (REPO_ROOT / directory).rglob("*")
+            if item.is_file()
+            and item.suffix in SCANNED_SUFFIXES
+            and "__pycache__" not in item.parts
         )
     assert found, "не найдено ни одного исходника — структура переехала?"
     return sorted(found)
@@ -72,7 +75,21 @@ def test_a_fresh_install_searches_for_nothing() -> None:
 
 
 def test_the_scan_is_not_vacuous() -> None:
-    """Сторож против вырождения: если список терминов опустеет или сканер
-    перестанет читать файлы, проверка выше станет зелёной навсегда."""
+    """Сторож против вырождения.
+
+    Мало проверить, что файлов «достаточно много»: сузить `SCANNED_DIRS` до
+    одного каталога можно было незаметно — суммарного числа файлов хватало
+    бы и без `api/`. Поэтому проверяется, что каждый каталог области
+    сканирования действительно даёт файлы, и что среди них есть разметка:
+    чужой поиск нашёлся именно в ней.
+    """
     assert len(FOREIGN_TERMS) >= 8
-    assert len(_sources()) >= 10
+    sources = _sources()
+    assert len(sources) >= 10
+    for directory in SCANNED_DIRS:
+        assert any(
+            str(item).startswith(str(REPO_ROOT / directory)) for item in sources
+        ), f"каталог {directory} выпал из области сканирования"
+    assert any(item.suffix == ".html" for item in sources), (
+        "разметка не сканируется — а чужой поиск нашёлся именно там"
+    )

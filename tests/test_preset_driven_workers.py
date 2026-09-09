@@ -170,3 +170,71 @@ def test_the_hh_search_url_takes_the_area_from_nowhere_else() -> None:
     url = build_search_url("QA", SearchCriteria(hh_salary_from=1))
     assert url.count("area=") == 1
     assert f"area={HH_AREA_ID}" in url
+
+
+async def test_post_dedup_holds_on_its_own_without_the_contact_dedup(
+    conn, criteria, settings
+) -> None:
+    """Дедупликация ПОСТОВ проверяется отдельно от дедупликации контактов.
+
+    Найдено мутационным аудитом: снятие проверки `tg_found` проходило
+    зелёным, потому что второй проход по тому же посту всё равно отсекался
+    дедупликацией контактов — проверка держалась за счёт соседней. Здесь
+    каждый проход несёт СВОЙ контакт, поэтому уцелеть может только дедуп
+    постов.
+    """
+    sender = Sender()
+    post = IncomingPost("qajobs", "Ищем QA, писать @first", 7)
+    assert await call(post, criteria, settings, conn, sender) == ["@first"]
+
+    # Тот же пост (тот же channel+message_id), но текст с другим контактом:
+    # так бывает при редактировании поста в канале.
+    edited = IncomingPost("qajobs", "Ищем QA, писать @second", 7)
+    assert await call(edited, criteria, settings, conn, sender) == [], (
+        "пост с тем же идентификатором обработан второй раз"
+    )
+    assert [m[0] for m in sender.messages] == ["@first"]
+
+
+async def test_the_post_dedup_does_not_depend_on_the_timestamp(
+    conn, criteria, settings
+) -> None:
+    """Ограничение уникальности можно было сузить до тройки с `found_at`
+    незаметно: все остальные тесты пишут одно и то же замороженное время."""
+    from job_monitor.db.repositories import TgFoundRepo
+
+    repo = TgFoundRepo(conn)
+    assert repo.record("qajobs", 7, None, None, None, datetime(2026, 9, 9, 12, 0)) is True
+    assert repo.record("qajobs", 7, None, None, None, datetime(2026, 9, 10, 18, 30)) is False, (
+        "тот же пост, записанный в другое время, принят как новый — "
+        "уникальность включает метку времени"
+    )
+
+
+async def test_the_hh_daily_budget_stops_the_loop(conn) -> None:
+    """Суточный лимит hh.ru не применялся нигде в тестах — его выключение
+    проходило зелёным, хотя для Telegram то же свойство закрыто тремя
+    проверками. Лимит существует по той же причине: банят аккаунт."""
+    from datetime import date
+
+    from job_monitor.db.repositories import HH_STATUS_APPLIED, HhRepo
+    from job_monitor.settings import GlobalSettings
+
+    repo = HhRepo(conn)
+    for index in range(3):
+        repo.upsert({
+            "vacancy_id": str(index),
+            "title": "QA",
+            "found_at": "2026-09-09T10:00:00",
+            "applied_at": datetime.combine(date.today(), datetime.min.time())
+            .isoformat(timespec="seconds"),
+            "status": HH_STATUS_APPLIED,
+        })
+
+    settings = GlobalSettings(hh_max_per_day=3)
+    assert repo.applied_on(date.today()) >= settings.hh_max_per_day, (
+        "дневной лимит hh не достигается — цикл продолжит откликаться"
+    )
+
+    generous = GlobalSettings(hh_max_per_day=10)
+    assert repo.applied_on(date.today()) < generous.hh_max_per_day

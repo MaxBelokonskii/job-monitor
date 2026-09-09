@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -131,6 +132,40 @@ def _escape(text: str) -> str:
     return text.replace("\r\n", "\\n").replace("\n", "\\n").replace("\r", "\\r")
 
 
+# Значения, которые не должны попасть в лог ни при какой ошибке
+# программиста. Лог отдаётся в UI через `GET /api/{tg,hh}/logs`, а `api_hash`
+# — это полный доступ к Telegram-приложению; `auth_key` из сессии даёт вход в
+# аккаунт в обход 2FA.
+#
+# Это последний рубеж, а не основная защита: секреты не кладутся в лог
+# осознанно, и роут настроек вырезает их из патча до всякого логирования.
+# Но мутационный аудит показал, что одна строка `log.warning("patch=%s",
+# patch)`, добавленная по невнимательности выше по коду, отправила бы
+# `api_hash` прямо на вкладку логов — и ни один тест этого не заметил бы.
+# Рубеж стоит здесь, потому что здесь он один на все места записи.
+SECRET_ENV_NAMES = ("TG_API_HASH", "TG_API_ID")
+REDACTED = "***"
+
+# Хеш Telegram — 32 шестнадцатеричных символа. Ловится по форме, а не по
+# имени переменной: в лог значение попадает без ярлыка.
+_HEX32 = re.compile(r"\b[0-9a-fA-F]{32}\b")
+_NAMED_SECRET = re.compile(
+    r"(?i)\b(api[_-]?hash|auth[_-]?key|tg[_-]?api[_-]?hash)\b\s*[:=]\s*['\"]?([^\s'\",}]+)"
+)
+
+
+def redact_secrets(text: str) -> str:
+    """Заменяет секреты в строке лога на `***`.
+
+    Две проверки, потому что секрет попадает в текст двумя путями: с ярлыком
+    (`api_hash: abc…`, как при печати словаря настроек) и без него — просто
+    значением. Форма хеша достаточно узнаваема, чтобы ловить второй случай:
+    ровно 32 шестнадцатеричных символа.
+    """
+    redacted = _NAMED_SECRET.sub(lambda m: f"{m.group(1)}={REDACTED}", text)
+    return _HEX32.sub(REDACTED, redacted)
+
+
 class SingleLineFormatter(logging.Formatter):
     """Схлопывает переводы строк в тексте сообщения.
 
@@ -144,7 +179,7 @@ class SingleLineFormatter(logging.Formatter):
 
     def formatMessage(self, record: logging.LogRecord) -> str:
         original = record.message
-        record.message = _escape(original)
+        record.message = redact_secrets(_escape(original))
         try:
             return super().formatMessage(record)
         finally:

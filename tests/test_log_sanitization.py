@@ -174,3 +174,57 @@ def test_a_newline_from_telegram_cannot_forge_a_line_in_the_log_endpoint(isolate
     assert not forged, (
         f"в отдаваемом UI логе появились записи, которых не было: {forged}"
     )
+
+
+# ── Секрет в логе: последний рубеж ────────────────────────────────────
+
+
+def test_a_secret_never_reaches_the_log_file(tmp_path, monkeypatch) -> None:
+    """Найдено мутационным аудитом: одна строка `log.warning("patch=%s",
+    patch)`, добавленная выше по коду, отправляла `api_hash` прямо на
+    вкладку логов — лог отдаётся в UI через `GET /api/tg/logs`.
+
+    Это последний рубеж, а не основная защита: секреты в лог не кладутся, и
+    роут настроек вырезает их из патча заранее. Но рубеж один на все места
+    записи, а мест записи много.
+    """
+    import logging
+
+    from job_monitor import logging_setup, paths
+
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
+    logging_setup.configure_logging()
+    logging.getLogger("job_monitor.workers.telegram").warning(
+        'patch={"api_hash": "deadbeefdeadbeefdeadbeefdeadbeef", "api_id": 1234567}'
+    )
+    for handler in logging.getLogger("job_monitor.workers.telegram").handlers:
+        handler.flush()
+
+    written = (paths.logs_dir() / "tg_system.log").read_text(encoding="utf-8")
+    assert "deadbeefdeadbeefdeadbeefdeadbeef" not in written, (
+        "api_hash попал в файл лога, который отдаётся в UI"
+    )
+    assert "***" in written
+
+
+def test_a_bare_hash_value_is_redacted_too() -> None:
+    """Секрет попадает в текст и без ярлыка — просто значением. Форма
+    достаточно узнаваема: ровно 32 шестнадцатеричных символа."""
+    from job_monitor.logging_setup import redact_secrets
+
+    assert "deadbeefdeadbeefdeadbeefdeadbeef" not in redact_secrets(
+        "не удалось подключиться с ключом deadbeefdeadbeefdeadbeefdeadbeef"
+    )
+
+
+def test_redaction_leaves_ordinary_text_alone() -> None:
+    """Обратная сторона: замазывать всё подряд — значит сделать логи
+    бесполезными и приучить не смотреть в них."""
+    from job_monitor.logging_setup import redact_secrets
+
+    for text in (
+        "воркер hh упал: TimeoutException",
+        "найдена вакансия QA инженер в канале qajobs",
+        "отправлено @hr_anna",
+    ):
+        assert redact_secrets(text) == text

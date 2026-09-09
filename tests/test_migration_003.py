@@ -145,3 +145,33 @@ def test_pending_migrations_leave_a_backup_of_the_database(tmp_path, monkeypatch
     assert row is not None and "safe_mode" in row["value"], (
         "копия не содержит данных — вероятно, скопирован только основной файл без WAL"
     )
+
+
+def test_the_backup_is_0600_like_everything_else_it_copies(tmp_path, monkeypatch) -> None:
+    """Найдено мутационным аудитом: правам копии не было ни одного теста.
+
+    В `job_monitor.db.bak-003` лежат ровно те же контакты и превью
+    переписки, что и в самой базе. Всем остальным носителям этих данных —
+    базе, `-wal`, `-shm`, файлу сессии, `.env`, логам — права закреплены
+    отдельными проверками; копия была единственным исключением, и ослабление
+    до `0644` проходило зелёным.
+    """
+    import stat
+
+    from job_monitor import paths
+    from job_monitor.db import migrations
+
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
+    conn = sqlite3.connect(paths.db_file())
+    migrations.migrate(conn)
+    conn.execute("DELETE FROM schema_version")
+    conn.execute("INSERT INTO schema_version (version) VALUES (2)")
+    conn.commit()
+    migrations.migrate(conn)
+
+    backup = paths.db_backup_file("003")
+    assert backup.exists()
+    assert stat.S_IMODE(backup.stat().st_mode) == 0o600, (
+        "копия базы доступна на чтение кому попало, а в ней те же контакты "
+        "и переписка, что и в самой базе"
+    )
