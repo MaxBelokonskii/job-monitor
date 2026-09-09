@@ -148,3 +148,70 @@ def test_save_settings_does_not_lose_a_concurrent_writer(tmp_path, monkeypatch):
     assert final.max_per_day == 99, "A's own patch must survive"
     assert final.delay_min == 42, "B's concurrent write must not be lost"
     connection.reset_connection()
+
+
+# ── «Безопасно по умолчанию» — целиком, а не выборочно ────────────────
+#
+# `test_defaults_are_returned_for_empty_db` выше пиннит `safe_mode is True`,
+# и мутация этого значения ловится. Соседние флаги, у которых цена неверного
+# значения не ниже, не пиннил никто, и мутации проходили зелёными:
+#
+# * `parse_history: bool = False` → `True` — на первом же запуске воркер
+#   разбирает историю каналов и пишет ВСЕМ найденным контактам, а не только
+#   авторам новых постов;
+# * `tg_autostart: bool = False` → `True` — свежая установка сама поднимает
+#   TG-воркер на старте приложения, до того как пользователь что-либо
+#   настроил;
+# * `hh_autostart: bool = False` → `True` — то же для Selenium: приложение
+#   само открывает браузер и начинает откликаться.
+#
+# Все три — действия, которых пользователь не просил, и все три необратимы:
+# отправленное сообщение не отозвать, отклик на hh.ru не отменить.
+# `test_autostart_is_skipped_when_the_flags_are_off` из
+# test_lifespan_autostart.py к значениям по умолчанию отношения не имеет —
+# он сам записывает `False` в базу перед проверкой.
+
+SAFE_DEFAULTS = {
+    "safe_mode": True,          # пишем ли по-настоящему
+    "parse_history": False,     # трогаем ли историю канала
+    "tg_autostart": False,      # поднимаем ли воркер без просьбы
+    "hh_autostart": False,
+}
+
+
+@pytest.mark.parametrize("field, expected", sorted(SAFE_DEFAULTS.items()))
+def test_the_safe_default_is_pinned(conn, field, expected):
+    value = getattr(settings_module.load_settings(conn), field)
+    assert value is expected, (
+        f"{field} по умолчанию {value!r}: на свежей установке приложение начинает "
+        "действовать от лица пользователя без его участия"
+    )
+
+
+def test_the_safe_defaults_are_the_model_defaults_too(conn):
+    """Ассерты выше читают базу; тот же вопрос к самой модели — на случай,
+    если значение по умолчанию появится не в `AppSettings`, а в записи,
+    которую кто-нибудь заведёт при первом запуске."""
+    fresh = settings_module.AppSettings()
+    for field, expected in SAFE_DEFAULTS.items():
+        assert getattr(fresh, field) is expected, f"AppSettings.{field}"
+
+
+# ── `Secrets.is_complete` — половина ключей это не «готово» ───────────
+#
+# Именно `is_complete` решает, собирать ли `TelegramClient`
+# (job_monitor/telegram_client.py). Мутация `and` → `or` проходила зелёной:
+# единственный закреплённый случай — «нет ни одного ключа», а там `or` даёт
+# тот же `False`. Наполовину заполненные секреты — обычное состояние: ключи
+# вводятся двумя полями и сохраняются одной кнопкой.
+
+
+@pytest.mark.parametrize("api_id, api_hash, complete", [
+    (12345, "deadbeefcafef00d", True),
+    (None, "deadbeefcafef00d", False),
+    (12345, None, False),
+    (12345, "", False),
+    (None, None, False),
+])
+def test_secrets_are_complete_only_with_both_halves(api_id, api_hash, complete):
+    assert settings_module.Secrets(api_id=api_id, api_hash=api_hash).is_complete is complete

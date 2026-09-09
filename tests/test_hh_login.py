@@ -1,4 +1,5 @@
 import json
+import stat
 import threading
 import time
 
@@ -35,6 +36,32 @@ def test_save_cookies_writes_file(tmp_path):
     target = tmp_path / "hh_cookies.json"
     save_cookies(FakeDriver(), target)
     assert json.loads(target.read_text(encoding="utf-8"))[0]["name"] == "sid"
+
+
+def test_saved_cookies_are_private(tmp_path):
+    """`hh_cookies.json` — живая сессия hh.ru: вход в аккаунт соискателя с
+    резюме и перепиской с работодателями. Права на него были единственным
+    пробелом в остальном полной таблице: у `.env`, `telegram.session`,
+    `job_monitor.db` вместе с `-wal`/`-shm`, файлов логов и самого каталога
+    данных режим закреплён поимённо, а тут мутация `target.chmod(0o600)` →
+    `pass` проходила зелёной. Файл при этом создаётся через
+    `Path.write_text`, то есть по umask — обычно `0644`.
+    """
+    target = tmp_path / "hh_cookies.json"
+    save_cookies(FakeDriver(), target)
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600, (
+        "cookies hh.ru читаются любым процессом пользователя: "
+        f"{oct(stat.S_IMODE(target.stat().st_mode))}"
+    )
+
+
+def test_the_directory_that_holds_the_cookies_is_private(tmp_path):
+    """`save_cookies` создаёт каталог сама (вход может случиться раньше
+    любого другого обращения к каталогу данных), и режим `0o700` в этом
+    `mkdir` — часть той же защиты."""
+    target = tmp_path / "state" / "hh_cookies.json"
+    save_cookies(FakeDriver(), target)
+    assert stat.S_IMODE(target.parent.stat().st_mode) == 0o700
 
 
 def test_load_cookies_drops_fields_selenium_rejects(tmp_path):
