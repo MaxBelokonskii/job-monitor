@@ -53,6 +53,43 @@ def test_worker_state_says_whether_start_can_succeed(client):
     assert body["hh"]["can_start"] is True
 
 
+def test_state_names_the_run_each_worker_status_belongs_to(client, monkeypatch):
+    """`epoch` — номер запуска воркера (`WorkerManager._epoch`), и он обязан
+    доезжать до фронтенда в общем `GET /api/state`.
+
+    Без него клиент знает только текущее состояние и не может распознать
+    устаревший ответ на остановку: ответ `POST /stop` помечен номером СВОЕЙ
+    остановки, и сравнивать его не с чем. Мутационный признак — поле,
+    выброшенное из `WorkerStatus.as_dict()`.
+    """
+    from job_monitor.workers.manager import WorkerState, WorkerStatus
+
+    monkeypatch.setitem(
+        manager._statuses,
+        "tg",
+        WorkerStatus(name="tg", state=WorkerState.running, epoch=5),
+    )
+    monkeypatch.setitem(
+        manager._statuses,
+        "hh",
+        WorkerStatus(name="hh", state=WorkerState.stopped, epoch=6),
+    )
+
+    body = client.get("/api/state", headers=AUTH).json()
+
+    assert body["tg"]["epoch"] == 5
+    assert body["hh"]["epoch"] == 6
+
+
+def test_state_reports_a_run_number_even_for_a_worker_never_started(client):
+    """`0` — «в этом процессе ещё не запускался». Поле должно быть числом
+    всегда: фронтенд сравнивает номера, а не проверяет их наличие."""
+    body = client.get("/api/state", headers=AUTH).json()
+    for worker in ("tg", "hh"):
+        assert isinstance(body[worker]["epoch"], int), body[worker]
+        assert body[worker]["epoch"] >= 0
+
+
 def test_recent_events_are_returned(client):
     EventsRepo(connection.get_connection()).add("tg", "sent", "@hr_anna", datetime.now())
     body = client.get("/api/state", headers=AUTH).json()

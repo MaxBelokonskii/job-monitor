@@ -42,7 +42,7 @@ def test_a_real_stop_still_reports_stopped(client, monkeypatch):
     `r.status === 'stopped'`."""
 
     async def fake_stop(name, timeout=10.0):
-        return WorkerStatus(name=name, state=WorkerState.stopped)
+        return WorkerStatus(name=name, state=WorkerState.stopped, epoch=4)
 
     monkeypatch.setattr(manager, "stop", fake_stop)
 
@@ -50,6 +50,11 @@ def test_a_real_stop_still_reports_stopped(client, monkeypatch):
 
     assert body["status"] == "stopped"
     assert body["detail"] is None
+    assert body["epoch"] == 4, (
+        "ответ на остановку обязан нести номер запуска, который она "
+        "останавливала: без него клиент не отличит «мою остановку отменили» "
+        "от «воркер уже перезапустили без меня»"
+    )
 
 
 def test_stop_without_a_running_worker_is_still_a_400(client, monkeypatch):
@@ -64,14 +69,23 @@ def test_stop_without_a_running_worker_is_still_a_400(client, monkeypatch):
     assert response.json()["detail"] == "TG воркер не запущен"
 
 
-def test_start_still_answers_started(client, monkeypatch):
+def test_start_still_answers_started_and_names_the_run(client, monkeypatch):
     """Start, unlike stop, cannot lie: manager.start() either raises
-    WorkerAlreadyRunning or returns a `starting` status. The shape stays
-    {"status": "started"} — frontend/app.js checks exactly that."""
+    WorkerAlreadyRunning or returns a `starting` status. `status` stays
+    `"started"` — frontend/app.js checks exactly that — and `epoch` names
+    the run that just began, so the UI knows the fresh number without
+    waiting for the next /api/state poll."""
 
     async def fake_start(name):
-        return WorkerStatus(name=name, state=WorkerState.starting)
+        return WorkerStatus(name=name, state=WorkerState.starting, epoch=7)
 
     monkeypatch.setattr(manager, "start", fake_start)
 
-    assert client.post("/api/tg/start").json() == {"status": "started"}
+    body = client.post("/api/tg/start").json()
+
+    assert body == {"status": "started", "epoch": 7}
+    assert isinstance(body["epoch"], int), (
+        "epoch приехал строкой — аннотация обработчика становится "
+        "response_model, и `dict[str, str]` превратила бы число в текст или "
+        "в 500; фронтенд сравнивает номера как числа"
+    )
