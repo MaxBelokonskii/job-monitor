@@ -70,6 +70,23 @@ async function apiSend(method, path, body = {}) {
     return await res.json();
   } catch { return null; }
 }
+// Загрузка файла: тело — сами байты, имя — заголовком. Отдельный помощник,
+// а не сырой fetch на месте вызова, ровно по той же причине, что apiGet и
+// apiSend: 403 обязан поднимать баннер протухшего токена, а не-JSON тело не
+// должно бросать исключение. Третий вызывающий `fetch` в этом файле — это
+// третья копия этих двух правил, и одна из копий однажды отстанет.
+async function apiUpload(path, filename, blob) {
+  try {
+    const res = await fetch(API + path, {
+      method: 'POST',
+      headers: headers({ 'X-Filename': encodeURIComponent(filename) }),
+      body: blob,
+    });
+    if (res.status === 403) { showTokenExpiredBanner(); return null; }
+    return await res.json().catch(() => null);
+  } catch { return null; }
+}
+
 const apiPost = (path, body) => apiSend('POST', path, body);
 const apiPatch = (path, body) => apiSend('PATCH', path, body);
 
@@ -94,6 +111,118 @@ function configErrorDetail(r) {
   return 'Ошибка сохранения';
 }
 
+// ── Пресеты и справочники ─────────────────────────────────────────────
+//
+// Критерии поиска живут в активном пресете, а не в /api/config: туда уехало
+// только глобальное (лимиты, задержки, безопасный режим). Патч критерия,
+// отправленный на /config, теперь отвергается с 422 — поэтому все экраны
+// критериев ходят через `patchCriteria`.
+const presetState = { list: [], activeId: null, criteria: {} };
+let dictionaries = null;
+
+async function patchCriteria(patch) {
+  if (presetState.activeId === null) { showToast('Активный пресет не загружен'); return false; }
+  const r = await apiPatch(`/presets/${presetState.activeId}`, patch);
+  if (!configPatchOk(r)) { showToast(configErrorDetail(r)); return false; }
+  Object.assign(presetState.criteria, patch);
+  return true;
+}
+
+async function loadPresets() {
+  const list = await apiGet('/presets');
+  if (!Array.isArray(list)) return;
+  presetState.list = list;
+  const active = list.find(p => p.is_active);
+  presetState.activeId = active ? active.id : null;
+  renderPresetBar();
+}
+
+function renderPresetBar() {
+  const bar = document.getElementById('presetBar');
+  if (!bar) return;
+  fill(bar, presetState.list.map(preset => el('div', {
+    style: 'display:flex;flex-direction:column;gap:2px;align-items:flex-start',
+  }, [
+    el('button', {
+      class: 'preset-chip' + (preset.is_active ? ' active' : ''),
+      text: preset.name,
+      'data-action': 'activatePreset',
+      'data-arg': String(preset.id),
+      disabled: preset.is_active ? 'disabled' : null,
+    }),
+    el('span', {
+      class: 'preset-meta',
+      text: `${preset.channels_count} кан. · ${preset.professions_count} проф.`,
+    }),
+    preset.is_active ? null : el('button', {
+      class: 'btn-del',
+      text: 'удалить',
+      'data-action': 'deletePreset',
+      'data-arg': String(preset.id),
+    }),
+  ])));
+}
+
+async function activatePreset(id) {
+  const r = await apiPost(`/presets/${id}/activate`);
+  // 409 — воркер не остановился в отведённый бюджет. Пресет при этом НЕ
+  // переключён, и показать обратное значило бы соврать: пользователь думал
+  // бы, что ищет по новым критериям, пока воркер работает по старым.
+  if (!r || r.activated === undefined) {
+    showToast(configErrorDetail(r) || 'Не удалось переключить пресет');
+    await loadPresets();
+    return;
+  }
+  const stopped = (r.stopped || []).join(', ');
+  showToast(stopped ? `Пресет переключён, остановлено: ${stopped}` : 'Пресет переключён');
+  await loadPresets();
+  await loadSettings();
+}
+
+async function createPreset(copy) {
+  const input = document.getElementById('newPresetName');
+  const name = input.value.trim();
+  if (!name) { showToast('Введите название пресета'); return; }
+  const body = { name };
+  if (copy && presetState.activeId !== null) body.copy_from = presetState.activeId;
+  const r = await apiPost('/presets', body);
+  if (!r || r.id === undefined) { showToast(configErrorDetail(r)); return; }
+  input.value = '';
+  showToast('Пресет создан');
+  await loadPresets();
+}
+
+const copyPreset = () => createPreset(true);
+
+async function deletePreset(id) {
+  const r = await apiSend('DELETE', `/presets/${id}`);
+  if (!r || r.status !== 'deleted') { showToast(configErrorDetail(r)); return; }
+  showToast('Пресет удалён');
+  await loadPresets();
+}
+
+async function loadDictionaries() {
+  if (dictionaries) return dictionaries;
+  dictionaries = await apiGet('/dictionaries');
+  return dictionaries;
+}
+
+function renderChoiceBox(boxId, options, chosen, name) {
+  const box = document.getElementById(boxId);
+  if (!box || !options) return;
+  fill(box, Object.entries(options).map(([code, label]) => {
+    const input = el('input', { type: 'checkbox', value: code, class: name });
+    if (chosen.includes(code)) input.checked = true;
+    return el('label', {
+      style: 'display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer',
+    }, [input, ' ' + label]);
+  }));
+}
+
+function chosenCodes(name) {
+  return [...document.querySelectorAll(`.${name}:checked`)].map(cb => cb.value);
+}
+
 // ── State ─────────────────────────────────────────────────────────────
 // `state` mirrors WorkerStatus.state from the backend (stopped / starting /
 // running / stopping / error) and is what the toggle buttons render;
@@ -114,7 +243,6 @@ const tgState = {
 const hhState = {
   running: false, state: 'stopped', canStart: true, lastError: null, viewSig: null, epoch: 0,
   keywords: [], exclude: [],
-  areaIds: [113], schedule: ['remote', 'fullDay', 'flexible'],
   maxPerDay: 20, sentToday: 0, foundToday: 0, totalSent: 0,
   autostart: false, seleniumSteps: [],
   // HhLoginState из job_monitor/workers/hh.py. Приходит в каждом
@@ -413,8 +541,7 @@ function addChannel() {
 }
 function removeChannel(i) { tgState.channels.splice(i, 1); renderChannelEdit(); updateDashboard(); }
 async function saveChannels() {
-  const r = await apiPatch('/config', { channels: tgState.channels });
-  if (!configPatchOk(r)) { showToast(configErrorDetail(r)); return; }
+  if (!await patchCriteria({ channels: tgState.channels })) return;
   if (tgState.running) { showToast('Сохранено — перезапустите TG'); showRestartBanner(); }
   else showToast('Каналы сохранены');
 }
@@ -436,8 +563,9 @@ function removeKw(i) { tgState.keywords.splice(i, 1); renderKeywords(); }
 function addEx() { const v = document.getElementById('newEx').value.trim().toLowerCase(); if (!v) return; if (tgState.exclude.includes(v)) { showToast('Уже есть'); return; } tgState.exclude.push(v); document.getElementById('newEx').value = ''; renderKeywords(); }
 function removeEx(i) { tgState.exclude.splice(i, 1); renderKeywords(); }
 async function saveKeywords() {
-  const r = await apiPatch('/config', { keywords: tgState.keywords, exclude: tgState.exclude });
-  if (!configPatchOk(r)) { showToast(configErrorDetail(r)); return; }
+  if (!await patchCriteria({
+    tg_keywords: tgState.keywords, tg_exclude: tgState.exclude,
+  })) return;
   updateDashboard();
   if (tgState.running) { showToast('Сохранено — перезапустите TG'); showRestartBanner(); }
   else showToast('Ключевые слова сохранены');
@@ -446,25 +574,96 @@ async function saveKeywords() {
 // ── Templates ─────────────────────────────────────────────────────────
 async function saveTemplate() {
   tgState.template = document.getElementById('templateText').value;
-  const r = await apiPatch('/config', { template: tgState.template });
-  if (!configPatchOk(r)) { showToast(configErrorDetail(r)); return; }
+  if (!await patchCriteria({ template: tgState.template })) return;
   if (tgState.running) { showToast('Сохранено — перезапустите TG'); showRestartBanner(); }
   else showToast('Шаблон сохранён');
 }
 async function saveHHCoverLetter() {
   const letter = document.getElementById('hhCoverLetter').value;
-  const r = await apiPatch('/config', { hh_cover_letter: letter });
-  if (!configPatchOk(r)) { showToast(configErrorDetail(r)); return; }
+  if (!await patchCriteria({ hh_cover_letter: letter })) return;
   showToast('Сопроводительное письмо сохранено');
 }
+// ── Библиотека резюме ─────────────────────────────────────────────────
+//
+// Раньше здесь жил мёртвый обработчик выбора файла: он обновлял три
+// подписи и НИКОГДА не отправлял файл на бэкенд — резюме нельзя было
+// приложить вообще (дефект L14). Теперь файл действительно загружается и
+// живёт в каталоге данных.
+//
+// Тело запроса — сами байты файла, имя — в заголовке. Форма multipart не
+// используется намеренно: она требует пакета `python-multipart` и заводит
+// лишний разборщик недоверенного ввода ради одного поля.
+
 // Delegated `change` handler: every action is called as action(arg, event).
-function onFileSelect(_arg, event) {
-  const file = event.target.files[0]; if (!file) return;
-  document.getElementById('fileZone').classList.add('has-file');
-  document.getElementById('fileZoneLabel').textContent = 'Файл выбран';
-  document.getElementById('fileName').textContent = file.name;
-  document.getElementById('currentFile').textContent = file.name;
-  showToast('Файл выбран: ' + file.name);
+async function uploadResume(_arg, event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  event.target.value = '';   // тот же файл можно выбрать повторно
+  const label = document.getElementById('fileZoneLabel');
+  if (label) label.textContent = 'Загружаю…';
+  const body = await apiUpload('/resumes', file.name, file);
+  if (label) label.textContent = 'Нажмите чтобы загрузить файл';
+  if (!body || body.id === undefined) {
+    showToast(configErrorDetail(body) || 'Не удалось загрузить резюме');
+    return;
+  }
+  showToast('Резюме загружено: ' + file.name);
+  await loadResumes();
+}
+
+async function loadResumes() {
+  const box = document.getElementById('resumeList');
+  if (!box) return;
+  const items = await apiGet('/resumes');
+  if (!Array.isArray(items)) return;
+  const chosen = presetState.criteria.resume_id ?? null;
+  if (items.length === 0) {
+    fill(box, el('div', {
+      style: 'font-size:12px;color:var(--muted)',
+      text: 'Пока ничего не загружено.',
+    }));
+    return;
+  }
+  fill(box, items.map(item => el('div', {
+    class: 'resume-row' + (item.id === chosen ? ' chosen' : ''),
+  }, [
+    // `original_name` — имя, которое дал пользователь; на диске его нет.
+    // Рисуется через textContent (el), поэтому разметка в имени безопасна.
+    el('span', { class: 'resume-name', text: item.original_name }),
+    el('span', {
+      class: 'preset-meta',
+      text: `${Math.max(1, Math.round(item.size_bytes / 1024))} КБ`,
+    }),
+    item.id === chosen
+      ? el('span', { class: 'preset-meta', text: 'выбрано' })
+      : el('button', {
+          class: 'btn btn-secondary',
+          text: 'Выбрать',
+          'data-action': 'chooseResume',
+          'data-arg': String(item.id),
+        }),
+    el('button', {
+      class: 'btn-del',
+      text: '×',
+      'data-action': 'deleteResume',
+      'data-arg': String(item.id),
+    }),
+  ])));
+}
+
+async function chooseResume(id) {
+  if (!await patchCriteria({ resume_id: parseInt(id, 10) })) return;
+  showToast('Резюме выбрано для активного пресета');
+  await loadResumes();
+}
+
+async function deleteResume(id) {
+  const r = await apiSend('DELETE', `/resumes/${id}`);
+  // Отказ здесь осмысленный: резюме используется пресетами, и ответ их
+  // называет. Показать его дословно полезнее, чем «не удалось».
+  if (!r || r.status !== 'deleted') { showToast(configErrorDetail(r)); return; }
+  showToast('Резюме удалено');
+  await loadResumes();
 }
 
 // ── Settings ──────────────────────────────────────────────────────────
@@ -495,23 +694,36 @@ async function loadSettings() {
     document.getElementById('apiHash').placeholder = 'abcdef1234567890abcdef1234567890';
   }
 
-  // HH
-  if (cfg.hh_keywords) { hhState.keywords = cfg.hh_keywords; renderHHKeywords(); }
-  if (cfg.hh_exclude) { hhState.exclude = cfg.hh_exclude; renderHHKeywords(); }
-  if (cfg.hh_area_ids) {
-    hhState.areaIds = cfg.hh_area_ids;
-    document.querySelectorAll('.hh-region').forEach(cb => { cb.checked = hhState.areaIds.includes(parseInt(cb.value)); });
+  // HH: критерии — из активного пресета, лимиты и расписание — из настроек.
+  const criteria = presetState.criteria;
+  hhState.keywords = criteria.professions || [];
+  hhState.exclude = criteria.hh_exclude || [];
+  renderHHKeywords();
+
+  const dict = await loadDictionaries();
+  if (dict) {
+    const areaLabel = document.getElementById('hhAreaLabel');
+    if (areaLabel) areaLabel.textContent = `код ${dict.area_id}`;
+    const experience = document.getElementById('hhExperience');
+    if (experience) {
+      fill(experience, Object.entries(dict.experience).map(
+        ([code, label]) => el('option', { value: code, text: label }),
+      ));
+      experience.value = criteria.hh_experience || 'noExperience';
+    }
+    renderChoiceBox('hhScheduleBox', dict.schedule, criteria.hh_schedule || [], 'hh-schedule');
+    renderChoiceBox('hhEmploymentBox', dict.employment, criteria.hh_employment || [], 'hh-employment');
   }
-  if (cfg.hh_experience) document.getElementById('hhExperience').value = cfg.hh_experience;
-  if (cfg.hh_salary_from !== undefined) document.getElementById('hhSalaryFrom').value = cfg.hh_salary_from;
-  if (cfg.hh_search_period) document.getElementById('hhSearchPeriod').value = cfg.hh_search_period;
+
+  document.getElementById('hhSalaryFrom').value = criteria.hh_salary_from || 0;
+  if (criteria.hh_search_period) document.getElementById('hhSearchPeriod').value = criteria.hh_search_period;
+  document.getElementById('hhResumeId').value = criteria.hh_resume_id || '';
+  document.getElementById('hhCoverLetter').value = criteria.hh_cover_letter || '';
   if (cfg.hh_max_per_day) document.getElementById('hhMaxPerDayInput').value = cfg.hh_max_per_day;
   if (cfg.hh_check_interval) document.getElementById('hhCheckInterval').value = cfg.hh_check_interval / 60;
-  if (cfg.hh_schedule) document.querySelectorAll('.hh-schedule').forEach(cb => { cb.checked = cfg.hh_schedule.includes(cb.value); });
-  if (cfg.hh_resume_id) document.getElementById('hhResumeId').value = cfg.hh_resume_id;
-  if (cfg.hh_cover_letter) document.getElementById('hhCoverLetter').value = cfg.hh_cover_letter;
   if (cfg.hh_autostart !== undefined) document.getElementById('toggleHHAutostart').checked = cfg.hh_autostart;
   if (cfg.hh_selenium_steps) { hhState.seleniumSteps = cfg.hh_selenium_steps; renderSeleniumSteps(); }
+  await loadResumes();
   renderHHLoginControls();
   renderHHLoginStatus(hhState.loginState);
 
@@ -617,25 +829,31 @@ function addHHEx() { const v = document.getElementById('newHHEx').value.trim().t
 function removeHHEx(i) { hhState.exclude.splice(i, 1); renderHHKeywords(); }
 
 async function saveHHSettings() {
-  const schedule = [...document.querySelectorAll('.hh-schedule:checked')].map(cb => cb.value);
-  const areaIds = [...document.querySelectorAll('.hh-region:checked')].map(cb => parseInt(cb.value));
-  const data = {
-    hh_keywords: hhState.keywords,
+  // Сохранение расходится по двум адресатам, потому что настройки теперь
+  // тоже двух видов: критерии поиска — в активный пресет, лимиты и
+  // расписание проверок — в глобальные настройки. Регион не отправляется
+  // вовсе: он константа приложения (решение D8).
+  const criteria = {
+    professions: hhState.keywords,
     hh_exclude: hhState.exclude,
-    hh_area_ids: areaIds,
     hh_experience: document.getElementById('hhExperience').value,
     hh_salary_from: parseInt(document.getElementById('hhSalaryFrom').value) || 0,
     hh_search_period: parseInt(document.getElementById('hhSearchPeriod').value),
-    hh_max_per_day: parseInt(document.getElementById('hhMaxPerDayInput').value),
-    hh_check_interval: parseInt(document.getElementById('hhCheckInterval').value) * 60,
-    hh_schedule: schedule,
+    hh_schedule: chosenCodes('hh-schedule'),
+    hh_employment: chosenCodes('hh-employment'),
     hh_resume_id: document.getElementById('hhResumeId').value.trim(),
     hh_cover_letter: document.getElementById('hhCoverLetter').value,
+  };
+  const global = {
+    hh_max_per_day: parseInt(document.getElementById('hhMaxPerDayInput').value),
+    hh_check_interval: parseInt(document.getElementById('hhCheckInterval').value) * 60,
     hh_autostart: document.getElementById('toggleHHAutostart').checked,
     hh_selenium_steps: hhState.seleniumSteps,
   };
-  const r = await apiPatch('/config', data);
+  if (!await patchCriteria(criteria)) return;
+  const r = await apiPatch('/config', global);
   if (!configPatchOk(r)) { showToast(configErrorDetail(r)); return; }
+  await loadPresets();
   showToast('HH настройки сохранены');
 }
 
@@ -1103,6 +1321,7 @@ async function pollStatus() {
 
       updateMetrics();
       renderRecent(state.recent || []);
+      renderDataDirWarning(state.data_dir_warning || null);
     }
   } catch (error) {
     console.error('pollStatus:', error);
@@ -1111,45 +1330,66 @@ async function pollStatus() {
   }
 }
 
+function renderDataDirWarning(service) {
+  const box = document.getElementById('dataDirWarning');
+  if (!box) return;
+  if (!service) { box.style.display = 'none'; fill(box, []); return; }
+  box.style.display = '';
+  // Через textContent, как и всё остальное: имя сервиса приходит с
+  // бэкенда, но правило «строим узлы, а не HTML-строки» исключений не
+  // знает — иначе оно перестаёт быть правилом.
+  fill(box, el('span', {
+    text: `⚠️ Каталог данных лежит в папке ${service}. В нём файл сессии `
+      + 'Telegram: его достаточно для входа в аккаунт в обход 2FA. '
+      + 'Перенесите каталог за пределы синхронизируемой папки '
+      + '($JOB_MONITOR_DATA_DIR).',
+  }));
+}
+
 // ── Init ──────────────────────────────────────────────────────────────
 async function init() {
   const cfg = await apiGet('/config');
   if (!cfg) { showToast('Бэкенд недоступен — запустите start_web.bat'); return; }
 
-  tgState.channels = cfg.channels || [];
-  tgState.keywords = cfg.keywords || [];
-  tgState.exclude = cfg.exclude || [];
-  tgState.template = cfg.template || '';
+  // Пресеты грузятся ДО критериев: без активного пресета читать нечего.
+  await loadPresets();
+  await loadActiveCriteria();
+
   tgState.safeMode = cfg.safe_mode;
   tgState.parseHistory = cfg.parse_history;
   tgState.maxPerDay = cfg.max_per_day;
   tgState.historyLimit = cfg.history_limit;
   tgState.apiId = cfg.api_id || '';
   tgState.apiHashSet = cfg.api_hash_set || false;
-
-  if (cfg.hh_keywords) hhState.keywords = cfg.hh_keywords;
-  if (cfg.hh_exclude) hhState.exclude = cfg.hh_exclude;
-  if (cfg.hh_area_ids) hhState.areaIds = cfg.hh_area_ids;
   if (cfg.hh_max_per_day) hhState.maxPerDay = cfg.hh_max_per_day;
   if (cfg.hh_selenium_steps) hhState.seleniumSteps = cfg.hh_selenium_steps;
-  if (cfg.hh_cover_letter) {
-    const el = document.getElementById('hhCoverLetter');
-    if (el) el.value = cfg.hh_cover_letter;
-  }
-  if (cfg.file_path) {
-    const el = document.getElementById('currentFile');
-    if (el) el.textContent = cfg.file_path.split(/[\/\\]/).pop();
-  }
-
-  const tpl = document.getElementById('templateText');
-  if (tpl) tpl.value = tgState.template;
 
   updateTGButton();
   updateHHButton();
   updateMetrics();
   updateDashboard();
+  loadResumes();
   loadHHVacancies();
   pollStatus();
+}
+
+async function loadActiveCriteria() {
+  if (presetState.activeId === null) return;
+  const preset = await apiGet(`/presets/${presetState.activeId}`);
+  if (!preset || !preset.criteria) return;
+  presetState.criteria = preset.criteria;
+
+  tgState.channels = preset.criteria.channels || [];
+  tgState.keywords = preset.criteria.tg_keywords || [];
+  tgState.exclude = preset.criteria.tg_exclude || [];
+  tgState.template = preset.criteria.template || '';
+  hhState.keywords = preset.criteria.professions || [];
+  hhState.exclude = preset.criteria.hh_exclude || [];
+
+  const tpl = document.getElementById('templateText');
+  if (tpl) tpl.value = tgState.template;
+  const letter = document.getElementById('hhCoverLetter');
+  if (letter) letter.value = preset.criteria.hh_cover_letter || '';
 }
 
 // ── About modal ───────────────────────────────────────────────────────
@@ -1203,7 +1443,13 @@ const ACTIONS = {
   addEx,
   saveTemplate,
   pickFile,
-  onFileSelect,
+  uploadResume,
+  chooseResume,
+  deleteResume,
+  activatePreset,
+  createPreset,
+  copyPreset,
+  deletePreset,
   hhLoginCancel,
   saveHHCoverLetter,
   saveTGSettings,
