@@ -24,10 +24,15 @@
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "start_web.bat"
+GITATTRIBUTES = REPO_ROOT / ".gitattributes"
 
 
 def _text() -> str:
@@ -127,3 +132,61 @@ def test_the_failure_hint_does_not_blame_the_network_alone() -> None:
     assert text.count("[ошибка]") >= 2, "нет отдельного сообщения для отказа сервера"
     hint = text[text.index(":failed"):]
     assert "python" in hint, "подсказка не предлагает проверить сам Python"
+
+
+# ── Батник обязан выгружаться с CRLF ──────────────────────────────────
+#
+# cmd.exe разбирает файл построчно, на ходу, и многострочный `if (...)` с
+# `goto` изнутри блока — самая хрупкая к LF конструкция интерпретатора. В
+# `start_web.bat` таких блоков два, и оба появились в этой ветке.
+#
+# Сам файл лежит в репозитории с LF (ноль CR), и клонирующего это не
+# задевает: Git for Windows по умолчанию ставит `core.autocrlf=true`. Ровно
+# поэтому дефект и не всплывал — маскирует его настройка на стороне
+# пользователя, которой у скачавшего ZIP с форджа нет вовсе.
+
+
+def test_the_repository_declares_crlf_for_batch_files() -> None:
+    assert GITATTRIBUTES.exists(), (
+        ".gitattributes нет: батник выгружается с теми переводами строк, что лежат "
+        "в репозитории (LF), и на Windows это ломает многострочные блоки cmd.exe"
+    )
+    rules = [
+        line.strip()
+        for line in GITATTRIBUTES.read_text(encoding="utf-8").splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    bat = [rule for rule in rules if rule.split()[0] in ("*.bat", "start_web.bat")]
+    assert bat, f"в .gitattributes нет правила для .bat: {rules}"
+    assert any("eol=crlf" in rule for rule in bat), (
+        f"правило для .bat есть, но CRLF оно не требует: {bat}"
+    )
+
+
+def test_git_agrees_that_the_batch_file_gets_crlf() -> None:
+    """Проверка не текста правила, а его действия: маску можно написать так,
+    что она не совпадёт с самим файлом (`*.BAT`, `bat/*`)."""
+    if not (REPO_ROOT / ".git").exists() or shutil.which("git") is None:
+        pytest.skip("нет git-репозитория — правило проверено только по тексту файла")
+    result = subprocess.run(
+        ["git", "check-attr", "eol", "--", SCRIPT.name],
+        cwd=REPO_ROOT, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "eol: crlf" in result.stdout, (
+        f"git считает переводы строк {SCRIPT.name} неопределёнными: {result.stdout.strip()}"
+    )
+
+
+def test_the_repository_itself_stays_on_lf() -> None:
+    """`eol=crlf` — свойство ВЫГРУЗКИ. Внутри репозитория текст остаётся с
+    LF, иначе `.gitattributes` перенормализовал бы всё дерево, и диф этой
+    правки был бы размером с репозиторий."""
+    if not (REPO_ROOT / ".git").exists() or shutil.which("git") is None:
+        pytest.skip("нет git-репозитория")
+    blob = subprocess.run(
+        ["git", "show", f"HEAD:{SCRIPT.name}"],
+        cwd=REPO_ROOT, capture_output=True,
+    )
+    assert blob.returncode == 0, blob.stderr
+    assert b"\r" not in blob.stdout, "в репозитории батник уже лежит с CRLF"
