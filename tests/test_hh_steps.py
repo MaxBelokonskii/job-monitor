@@ -137,3 +137,88 @@ def test_wait_element_step_uses_wait_factory(monkeypatch):
         no_wait,
     )
     assert driver.queried == [("css selector", "#thing")]
+
+
+# ── Остатки мутационного аудита ───────────────────────────────────────
+#
+# `test_parse_defaults_wait_seconds` выше пиннит ДЕФОЛТ, но не то, что
+# явное значение доживает до исполнения: мутация
+# `if kind == "wait" and seconds <= 0` → `or` проходила зелёной и затирала
+# любое заданное пользователем время дефолтом 2.0. А шаг `select` не
+# исполнялся ни в одном тесте — мутация `== "select"` → `!=` тоже проходила
+# зелёной, то есть выпадающий список в сценарии молча не выбирался бы.
+#
+# Оба шага исполняются уже ПОСЛЕ клика по кнопке отклика на живом hh.ru
+# (`apply_to_vacancy` зовёт `run_steps` между кликом и отправкой), поэтому
+# «шаг не выполнился» — это отправленный отклик без письма или без
+# выбранного резюме, а не просто неудобство.
+
+
+def test_parse_keeps_an_explicit_wait():
+    assert parse_steps([{"type": "wait", "seconds": 5}])[0].seconds == 5.0
+    assert parse_steps([{"type": "wait", "seconds": "0.5"}])[0].seconds == 0.5
+    # Форма из старого UI: время лежало в `value`, а не в `seconds`.
+    assert parse_steps([{"type": "wait", "value": "7"}])[0].seconds == 7.0
+
+
+def test_the_wait_step_sleeps_for_the_time_it_was_given(monkeypatch):
+    slept: list[float] = []
+    monkeypatch.setattr("time.sleep", slept.append)
+    run_steps(FakeDriver(), parse_steps([{"type": "wait", "seconds": 5}]), no_wait)
+    assert slept == [5.0], (
+        "шаг `wait` проспал не то время, что задал пользователь: заданная пауза "
+        f"между кликом и отправкой отклика не соблюдена — {slept}"
+    )
+
+
+def test_the_select_step_picks_the_option_by_visible_text(monkeypatch):
+    """`Select` подменяется двойником: настоящий требует `<select>` из живого
+    DOM. Проверяется то, что зависит от нашего кода — что до `Select` дошли
+    именно на шаге `select` и передали ему текст из сценария."""
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+    chosen: list[tuple[object, str]] = []
+
+    class FakeSelect:
+        def __init__(self, element):
+            self.element = element
+
+        def select_by_visible_text(self, text):
+            chosen.append((self.element, text))
+
+    import selenium.webdriver.support.ui as selenium_ui
+
+    monkeypatch.setattr(selenium_ui, "Select", FakeSelect)
+
+    driver = FakeDriver()
+    run_steps(
+        driver,
+        parse_steps([{"type": "select", "selector": "#resume", "value": "QA инженер"}]),
+        no_wait,
+    )
+
+    assert chosen == [(driver.element, "QA инженер")], (
+        "шаг `select` не исполнился: выпадающий список в сценарии остаётся на "
+        "значении по умолчанию, а отклик всё равно отправляется"
+    )
+    assert driver.element.clicked is False, "шаг `select` не должен кликать"
+
+
+def test_a_click_step_does_not_go_through_select(monkeypatch):
+    """Обратная сторона: ветка `select` не должна срабатывать на других
+    типах шагов — иначе `Select` получал бы кнопку и валил сценарий."""
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+    used: list[object] = []
+
+    class ExplodingSelect:
+        def __init__(self, element):
+            used.append(element)
+            raise AssertionError("Select применён к шагу, который не select")
+
+    import selenium.webdriver.support.ui as selenium_ui
+
+    monkeypatch.setattr(selenium_ui, "Select", ExplodingSelect)
+
+    driver = FakeDriver()
+    run_steps(driver, parse_steps([{"type": "click", "selector": ".apply"}]), no_wait)
+    assert used == []
+    assert driver.element.clicked is True

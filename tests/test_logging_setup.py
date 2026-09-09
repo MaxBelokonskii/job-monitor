@@ -450,3 +450,42 @@ def test_log_endpoints_return_something_after_the_app_starts() -> None:
     assert "TG-воркер запущен" in tg
     assert "[HH] цикл запущен" in hh
     assert paths.logs_dir() / "tg_system.log" == log_file("tg")
+
+
+# ── Уровень логгера поднимается, а не только опускается ───────────────
+#
+# `configure_logging` делает `if logger.level == NOTSET or logger.level > level:
+# logger.setLevel(level)`. Мутация `>` → `<=` проходила зелёной, а означает
+# она вот что: логгер, у которого уровень уже выставлен строже (`WARNING`
+# — например библиотекой или прошлым вызовом), остаётся при нём, его
+# `INFO`-записи до обработчика не доходят, и вкладка логов в UI молча
+# пустеет — тот самый дефект, ради которого этот модуль и появился.
+
+
+def test_a_stricter_logger_is_relaxed_to_the_configured_level(isolated_logging) -> None:
+    logger = logging.getLogger("job_monitor.workers.hh")
+    logger.setLevel(logging.WARNING)
+    try:
+        configure_logging()
+        logger.info("[HH] цикл запущен")
+        for handler in logger.handlers:
+            handler.flush()
+    finally:
+        logger.setLevel(logging.NOTSET)
+
+    assert "[HH] цикл запущен" in log_file("hh").read_text(encoding="utf-8"), (
+        "логгер остался на своём строгом уровне, INFO-записи до файла не доходят — "
+        "вкладка логов в UI пуста при работающем воркере"
+    )
+
+
+def test_a_more_verbose_logger_is_left_alone(isolated_logging) -> None:
+    """Обратная сторона: `configure_logging` не должна ЗАЖИМАТЬ уровень.
+    Разработчик, поставивший `DEBUG`, должен его сохранить."""
+    logger = logging.getLogger("job_monitor.workers.hh")
+    logger.setLevel(logging.DEBUG)
+    try:
+        configure_logging()
+        assert logger.level == logging.DEBUG
+    finally:
+        logger.setLevel(logging.NOTSET)

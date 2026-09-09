@@ -1,5 +1,6 @@
 import os
 import stat
+from pathlib import Path
 
 import pytest
 
@@ -290,3 +291,142 @@ def test_a_retired_key_goes_away_but_its_neighbours_do_not(tmp_path, monkeypatch
     assert "SAFE_MODE" not in text
     assert "# безопасный режим" in text, "комментарий пользователя пропал вместе с ключом"
     assert "HTTPS_PROXY=proxy" in text
+
+
+# ── Разбор `.env` с комментариями и пустыми строками ──────────────────
+#
+# `envfile.read_env()` пропускает пустые строки и `#`-комментарии, и мутация
+# `or` → `and` в этом условии проходила зелёной: ни один тест не читал `.env`
+# с комментарием или пустой строкой. Между тем поставляемый `.env.example`
+# состоит как раз из комментариев и двух присваиваний, а SECURITY.md
+# предлагает пользователю его скопировать — то есть непроверенным оставался
+# самый первый `GET /api/config` у нового пользователя.
+#
+# Волна C научила `write_env` СОХРАНЯТЬ комментарии (`_render`) и добавила
+# `_key_of`, который заодно смягчил последствия этой мутации (структурно
+# битая строка теперь пропускается, а не валит распаковку). Но свойство
+# «комментарий не превращается в переменную» так и осталось без теста.
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_read_env_skips_comments_and_blank_lines(tmp_path, monkeypatch):
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
+    (tmp_path / ".env").write_text(
+        "# Ключи Telegram: my.telegram.org -> API development tools\n"
+        "\n"
+        "TG_API_ID=12345\n"
+        "   \n"
+        "  # отступ перед решёткой — тоже комментарий\n"
+        "TG_API_HASH=deadbeefcafef00d\n"
+        "\n",
+        encoding="utf-8",
+    )
+
+    assert envfile.read_env() == {
+        "TG_API_ID": "12345",
+        "TG_API_HASH": "deadbeefcafef00d",
+    }
+
+
+def test_the_shipped_example_file_is_readable_as_an_env(tmp_path, monkeypatch):
+    """SECURITY.md предлагает скопировать `.env.example` в `~/.job-monitor/.env`.
+    Значит файл обязан читаться — иначе первый же `GET /api/config` у нового
+    пользователя отвечал бы 500."""
+    example = REPO_ROOT / ".env.example"
+    assert example.exists(), ".env.example исчез, а документация на него ссылается"
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
+    (tmp_path / ".env").write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
+
+    parsed = envfile.read_env()
+
+    assert set(parsed) <= {"TG_API_ID", "TG_API_HASH"}, (
+        f"в примере `.env` появились посторонние ключи: {sorted(parsed)}"
+    )
+    # Страховка от вакуумности: в примере есть комментарии, и именно они —
+    # предмет проверки. Пустой разбор пустого файла ничего не доказывает.
+    assert "#" in example.read_text(encoding="utf-8"), (
+        "в .env.example больше нет комментариев — проверка их пропуска стала "
+        "вакуумной, замените её на файл с комментариями"
+    )
+
+
+def test_a_users_own_comment_is_not_reported_as_broken(tmp_path, monkeypatch, caplog):
+    """Комментарий и пустая строка — не «битая строка».
+
+    Волна C сделала разбор снисходительным (`_key_of` + `_report_broken`),
+    и это заодно превратило мутацию `or` → `and` в условии пропуска
+    комментариев из «500 на первом же запросе» в «поток жалоб на файл
+    пользователя»: каждая его собственная `#`-строка получала бы
+    предупреждение «строка N не задаёт переменной», а логи отдаются в UI.
+    Результат разбора при этом не меняется — поэтому проверка смотрит
+    именно на лог, а не на словарь.
+    """
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
+    (tmp_path / ".env").write_text(
+        "# Ключи Telegram: my.telegram.org\n"
+        "\n"
+        "TG_API_ID=12345\n"
+        "  # мой комментарий\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(envfile, "_REPORTED_BAD_LINES", set())
+
+    with caplog.at_level("WARNING", logger="job_monitor.envfile"):
+        assert envfile.read_env() == {"TG_API_ID": "12345"}
+
+    complaints = [record for record in caplog.records if record.name == "job_monitor.envfile"]
+    assert complaints == [], (
+        "приложение жалуется на собственные комментарии пользователя: "
+        f"{[record.getMessage() for record in complaints]}"
+    )
+
+
+def test_a_comment_never_becomes_a_variable(tmp_path, monkeypatch):
+    """Отдельно от разбора выше: комментарий, внутри которого есть `=`.
+    Именно на нём «пропускать комментарии» и «пропускать строки без `=`»
+    расходятся."""
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
+    (tmp_path / ".env").write_text(
+        "# TG_API_HASH=закомментированный-старый-ключ\n"
+        "TG_API_ID=7\n",
+        encoding="utf-8",
+    )
+    parsed = envfile.read_env()
+    assert parsed == {"TG_API_ID": "7"}
+    assert not any(key.startswith("#") for key in parsed)
+
+
+# ── Инъекция через ИМЯ переменной, а не только через значение ─────────
+#
+# `test_rejects_newline_injection` выше проверяет перевод строки в
+# ЗНАЧЕНИИ. Newline в ИМЕНИ — та же инъекция в `.env` и тот же способ
+# дописать туда чужую переменную, — не был закреплён ничем: мутация
+# `_validate` (`or` → `and` в условии на имя) проходила зелёной.
+
+
+@pytest.mark.parametrize("bad_key", [
+    "TG_API_ID\nSAFE_MODE",
+    "TG_API_ID\rSAFE_MODE",
+    "TG_API_ID\x00",
+    "TG_API_ID=SMUGGLED",
+    "",
+])
+def test_write_env_rejects_a_forbidden_variable_name(tmp_path, monkeypatch, bad_key):
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
+    with pytest.raises(ValueError):
+        envfile.write_env({bad_key: "false"})
+    assert not (tmp_path / ".env").exists(), (
+        "файл создан несмотря на отказ — проверка стоит после записи"
+    )
+
+
+def test_a_rejected_name_does_not_damage_an_existing_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
+    envfile.write_env({"TG_API_ID": "7"})
+    before = (tmp_path / ".env").read_text(encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        envfile.write_env({"TG_API_ID\nSAFE_MODE": "false"})
+
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == before
