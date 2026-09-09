@@ -99,7 +99,11 @@ function configErrorDetail(r) {
 // running / stopping / error) and is what the toggle buttons render;
 // `running` stays as the plain boolean the start/stop handlers branch on.
 const tgState = {
-  running: false, state: 'stopped', canStart: true, lastError: null, viewSig: null,
+  // `epoch` — номер запуска воркера (WorkerManager._epoch на бэкенде).
+  // Приходит в каждом GET /api/state и в ответах на start/stop; нужен, чтобы
+  // отличить ответ на СВОЮ остановку от ответа про запуск, которого больше
+  // нет, — см. isStaleWorkerReply().
+  running: false, state: 'stopped', canStart: true, lastError: null, viewSig: null, epoch: 0,
   safeMode: true, parseHistory: false,
   channels: [], keywords: [], exclude: [],
   template: '', maxPerDay: 25, historyLimit: 50,
@@ -108,7 +112,7 @@ const tgState = {
 };
 
 const hhState = {
-  running: false, state: 'stopped', canStart: true, lastError: null, viewSig: null,
+  running: false, state: 'stopped', canStart: true, lastError: null, viewSig: null, epoch: 0,
   keywords: [], exclude: [],
   areaIds: [113], schedule: ['remote', 'fullDay', 'flexible'],
   maxPerDay: 20, sentToday: 0, foundToday: 0, totalSent: 0,
@@ -286,6 +290,33 @@ function workerToggleAction(worker, name) {
   return workerView(worker.state, name, worker.canStart).action;
 }
 
+// Номер запуска из любого ответа бэкенда (GET /api/state, POST /start,
+// POST /stop). Отсутствие поля — старый ответ; тогда прежнее знание
+// сохраняется, а не обнуляется.
+function rememberEpoch(worker, reply) {
+  if (reply && typeof reply.epoch === 'number') worker.epoch = reply.epoch;
+}
+
+// Устарел ли ответ на остановку.
+//
+// `POST /api/{tg,hh}/stop` помечен номером запуска, который останавливал
+// ИМЕННО ЭТОТ вызов (`WorkerManager.stop()` запоминает epoch на входе, до
+// всякого ожидания). Если наш номер уже больше — значит опрос /api/state
+// успел увидеть чужой перезапуск, пока мы ждали ответа, и ответ относится
+// к запуску, которого больше нет.
+//
+// Перерисовывать по такому ответу нельзя, и это не косметика: сторож
+// остановки, успевший записать `stopped` до чужого `start()`, отдаёт
+// именно `{"status":"stopped"}` — поверх уже работающего нового воркера.
+// Экран показал бы «остановлен», кнопка предложила бы «Запустить», а она
+// получила бы 400 «уже запущен». Тост по такому ответу врёт по той же
+// причине. Свежее состояние придёт следующим тиком опроса (раз в 3 с).
+function isStaleWorkerReply(worker, reply) {
+  return !!reply && typeof reply.epoch === 'number'
+    && typeof worker.epoch === 'number'
+    && reply.epoch < worker.epoch;
+}
+
 // Что сказать пользователю, когда POST /api/{tg,hh}/stop ответил не
 // `stopped`. Ответ несёт НАСТОЯЩЕЕ состояние воркера, и не всякое «не
 // stopped» — отказ.
@@ -312,6 +343,8 @@ async function toggleTG() {
   if (action === 'none') return;
   if (action === 'stop') {
     const r = await apiPost('/tg/stop');
+    // Ответ про прошлый запуск — не наш ответ: ни состояния, ни тоста.
+    if (isStaleWorkerReply(tgState, r)) return;
     if (r && r.status === 'stopped') {
       setWorkerState(tgState, 'stopped'); updateTGButton();
       showToast('TG монитор остановлен');
@@ -326,6 +359,7 @@ async function toggleTG() {
   } else {
     const r = await apiPost('/tg/start');
     if (r && r.status === 'started') {
+      rememberEpoch(tgState, r);
       setWorkerState(tgState, 'starting'); updateTGButton();
       showToast('TG монитор запущен');
     } else showToast(r?.detail || 'Ошибка запуска TG');
@@ -339,6 +373,8 @@ async function toggleHH() {
   if (action === 'none') return;
   if (action === 'stop') {
     const r = await apiPost('/hh/stop');
+    // Ответ про прошлый запуск — не наш ответ: ни состояния, ни тоста.
+    if (isStaleWorkerReply(hhState, r)) return;
     if (r && r.status === 'stopped') {
       setWorkerState(hhState, 'stopped'); updateHHButton();
       showToast('HH монитор остановлен');
@@ -353,6 +389,7 @@ async function toggleHH() {
   } else {
     const r = await apiPost('/hh/start');
     if (r && r.status === 'started') {
+      rememberEpoch(hhState, r);
       setWorkerState(hhState, 'starting'); updateHHButton();
       showToast('HH монитор запущен — войдите в браузере');
     } else showToast(r?.detail || 'Ошибка запуска HH');
@@ -1008,6 +1045,9 @@ function showToast(msg) {
 // (/tg/status, /hh/status, /tg/logs, /hh/logs) for one screen. GET
 // /api/state (api/routes_state.py) aggregates all of it into one response.
 function applyWorkerState(worker, payload, update) {
+  // Номер запуска — первым делом: именно он делает следующий ответ на
+  // остановку узнаваемо устаревшим (см. isStaleWorkerReply).
+  rememberEpoch(worker, payload);
   worker.state = payload.state || (payload.running ? 'running' : 'stopped');
   worker.running = !!payload.running;
   worker.lastError = payload.last_error || null;

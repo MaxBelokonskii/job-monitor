@@ -349,6 +349,19 @@ function same(name, got, want) {
 }
 """
 
+# Всё, что нужно, чтобы исполнить настоящие toggleTG/toggleHH в node. Список
+# один на все тесты кнопки: забытое здесь имя даёт не «красный тест», а
+# `ReferenceError` из node, то есть падение на форме кода вместо проверки
+# поведения.
+TOGGLE_SOURCE_NAMES = (
+    "workerView", "workerToggleAction", "setWorkerState", "stopResultText",
+    "rememberEpoch", "isStaleWorkerReply", "toggleTG", "toggleHH",
+)
+
+
+def _toggle_sources() -> str:
+    return "\n".join(_maybe_extract(name) for name in TOGGLE_SOURCE_NAMES)
+
 
 @skip_without_node
 def test_worker_view_label_and_action_come_from_the_same_arm() -> None:
@@ -398,11 +411,7 @@ def test_toggle_branches_on_state_not_on_the_running_boolean() -> None:
     То же в `error` с ещё живой таской: «запустить снова» всегда даёт 400.
 
     Проверяется НЕ форма кода, а какие запросы уходят на каждый клик."""
-    sources = "\n".join(
-        _maybe_extract(name) for name in
-        ("workerView", "workerToggleAction", "setWorkerState", "stopResultText",
-         "toggleTG", "toggleHH")
-    )
+    sources = _toggle_sources()
     harness = """
     let posted = [];
     async function apiPost(path) {
@@ -1095,11 +1104,7 @@ def test_a_worker_restarted_by_someone_else_is_not_reported_as_an_error() -> Non
     состояния пуст. Проверяется, ЧТО видит пользователь, а не наличие
     проверки.
     """
-    sources = "\n".join(
-        _maybe_extract(name) for name in
-        ("workerView", "workerToggleAction", "setWorkerState", "stopResultText",
-         "toggleTG", "toggleHH")
-    )
+    sources = _toggle_sources()
     harness = """
     let toasts = [];
     let reply = null;
@@ -1148,6 +1153,136 @@ def test_a_worker_restarted_by_someone_else_is_not_reported_as_an_error() -> Non
         reply = null;
         await toggle();
         same(name + ': пустой ответ остался ошибкой', toasts, ['Ошибка']);
+      }
+    })();
+    """
+    result = _run_node(f"{sources}\n{NODE_CHECK_HELPER}\n{harness}")
+    assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
+
+
+# ── Устаревший ответ на остановку не перерисовывает экран ─────────────
+
+
+@skip_without_node
+def test_a_stop_answer_about_an_older_run_is_ignored() -> None:
+    """Гонка двух клиентов, вид со стороны экрана.
+
+    `POST /api/{tg,hh}/stop` помечен номером запуска, который останавливал
+    именно этот вызов (`WorkerManager.stop()` запоминает epoch на входе, до
+    всякого ожидания). Пока клиент A ждёт ответ — а бюджет остановки 10
+    секунд против опроса раз в 3, — тик `/api/state` успевает принести
+    состояние ЧУЖОГО перезапуска.
+
+    Самый неприятный ответ в этом окне — не `running`, а `stopped`: сторож
+    остановки, успевший записать терминальный статус до чужого `start()`,
+    отдаёт A честное `{"status":"stopped","epoch":1}` — про запуск, которого
+    больше нет. Без сравнения номеров экран показал бы «остановлен» поверх
+    работающего воркера, кнопка предложила бы «Запустить», а она получила бы
+    400 «уже запущен» — то же тупиковое место, ради которого кнопка вообще
+    перестала ветвиться по булеву `running`.
+
+    Проверяется, ЧТО видит пользователь (состояние кнопки и тосты), а не
+    наличие проверки в коде.
+    """
+    sources = "\n".join(
+        _maybe_extract(name)
+        for name in TOGGLE_SOURCE_NAMES + ("workerSignature", "applyWorkerState")
+    )
+    harness = """
+    let toasts = [];
+    let reply = null;
+    let pollDuringStop = null;
+    let target = null;
+
+    // Ответ на остановку приходит не мгновенно: тик опроса /api/state,
+    // случившийся за это время, применяется настоящим applyWorkerState().
+    async function apiPost() {
+      if (pollDuringStop) applyWorkerState(target, pollDuringStop, () => {});
+      return reply;
+    }
+    function updateTGButton() {}
+    function updateHHButton() {}
+    function showToast(text) { toasts.push(text); }
+    function hideRestartBanner() {}
+    const tgState = {};
+    const hhState = {};
+
+    function running(worker, epoch) {
+      Object.assign(worker, {
+        state: 'running', running: true, canStart: true, epoch, viewSig: null,
+      });
+      toasts = [];
+      pollDuringStop = null;
+    }
+
+    (async () => {
+      for (const [worker, toggle, name] of
+           [[tgState, toggleTG, 'TG'], [hhState, toggleHH, 'HH']]) {
+        target = worker;
+
+        // ── A останавливает, B перезапускает, ответ A устарел ──────
+        running(worker, 1);
+        pollDuringStop = { state: 'running', running: true, can_start: false, epoch: 2 };
+        reply = { status: 'stopped', detail: null, epoch: 1 };
+        await toggle();
+        same(name + ': по устаревшему ответу ничего не сказано', toasts, []);
+        check(name + ': экран не показал «остановлен» поверх живого воркера',
+              worker.state === 'running');
+        check(name + ': номер запуска не откатился к прошлому', worker.epoch === 2);
+        same(name + ': кнопка по-прежнему умеет останавливать',
+             workerToggleAction(worker, name), 'stop');
+
+        // Та же гонка, но сторож проснулся после чужого start() и вернул
+        // живое состояние: тоже устарело, и тоста быть не должно —
+        // пользователь уже увидел перезапуск из опроса.
+        running(worker, 1);
+        pollDuringStop = { state: 'running', running: true, can_start: false, epoch: 2 };
+        reply = { status: 'running', detail: null, epoch: 1 };
+        await toggle();
+        same(name + ': устаревшее живое состояние тоже молчит', toasts, []);
+        check(name + ': состояние осталось живым', worker.state === 'running');
+
+        // ── Без гонки ответ ПРИНИМАЕТСЯ ────────────────────────────
+        // Обратная сторона: иначе «Остановить» перестало бы гасить кнопку
+        // до следующего опроса, и гвард был бы просто выключенной ветвью.
+        running(worker, 1);
+        reply = { status: 'stopped', detail: null, epoch: 1 };
+        await toggle();
+        check(name + ': свой ответ принят', worker.state === 'stopped');
+        check(name + ': и о нём сказано',
+              toasts.length === 1 && /остановлен/.test(toasts[0]));
+
+        // ── Зависший воркер СВОЕГО запуска — по-прежнему ошибка ────
+        running(worker, 3);
+        reply = { status: 'error', detail: 'воркер не остановился за 10.0s', epoch: 3 };
+        await toggle();
+        same(name + ': причина зависания показана', toasts,
+             ['воркер не остановился за 10.0s']);
+        check(name + ': состояние стало error', worker.state === 'error');
+
+        // ── start запоминает номер нового запуска сразу ────────────
+        // Иначе первая же остановка только что запущенного воркера
+        // выглядела бы устаревшей: опрос принесёт номер лишь через 3 с.
+        Object.assign(worker, {
+          state: 'stopped', running: false, canStart: true, epoch: 2, viewSig: null,
+        });
+        toasts = [];
+        pollDuringStop = null;
+        reply = { status: 'started', epoch: 3 };
+        await toggle();
+        check(name + ': start запомнил номер запуска', worker.epoch === 3);
+        reply = { status: 'stopped', detail: null, epoch: 3 };
+        worker.state = 'running'; worker.running = true;
+        await toggle();
+        check(name + ': остановка только что запущенного воркера принята',
+              worker.state === 'stopped');
+
+        // ── Ответ без номера (старый бэкенд) принимается ───────────
+        running(worker, 5);
+        reply = { status: 'stopped', detail: null };
+        await toggle();
+        check(name + ': ответ без epoch не считается устаревшим',
+              worker.state === 'stopped');
       }
     })();
     """

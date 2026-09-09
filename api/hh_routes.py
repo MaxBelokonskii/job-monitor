@@ -43,16 +43,18 @@ async def hh_status() -> dict[str, Any]:
 
 
 @router.post("/start")
-async def hh_start() -> dict[str, str]:
+async def hh_start() -> dict[str, str | int]:
     try:
-        await manager.start("hh")
+        status = await manager.start("hh")
     except WorkerAlreadyRunning:
         raise HTTPException(status_code=400, detail="HH монитор уже запущен")
-    return {"status": "started"}
+    # `epoch` — как в tg_start: номер запуска, чтобы фронтенд знал свежий
+    # номер сразу и распознавал устаревший ответ на остановку.
+    return {"status": "started", "epoch": status.epoch}
 
 
 @router.post("/stop")
-async def hh_stop() -> dict[str, str | None]:
+async def hh_stop() -> dict[str, str | int | None]:
     try:
         status = await manager.stop("hh")
     except WorkerNotRunning:
@@ -66,7 +68,15 @@ async def hh_stop() -> dict[str, str | None]:
     # раньше бросал живой поток Selenium без присмотра.
     # Форма ответа сохранена: успешная остановка по-прежнему даёт
     # {"status": "stopped"}, на который смотрит frontend/app.js.
-    return {"status": status.state.value, "detail": status.last_error}
+    #
+    # `epoch` — номер запуска, который останавливал именно этот вызов; см.
+    # подробное объяснение в api/tg_routes.py::tg_stop и в
+    # WorkerManager.stop().
+    return {
+        "status": status.state.value,
+        "detail": status.last_error,
+        "epoch": status.epoch,
+    }
 
 
 @router.post("/login/start")

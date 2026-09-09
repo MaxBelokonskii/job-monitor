@@ -50,18 +50,23 @@ async def tg_status() -> dict[str, Any]:
     }
 
 @router.post("/start")
-async def tg_start() -> dict[str, str]:
+async def tg_start() -> dict[str, str | int]:
     try:
-        await manager.start("tg")
+        status = await manager.start("tg")
     except WorkerAlreadyRunning:
         raise HTTPException(status_code=400, detail="TG воркер уже запущен")
     # Безусловное "started" здесь честно и совпадает с hh_start: в отличие
     # от stop, у start нет бюджета времени — manager.start() либо бросает
     # WorkerAlreadyRunning, либо возвращает статус `starting`, третьего нет.
-    return {"status": "started"}
+    # `epoch` — номер этого запуска (WorkerManager._epoch): с ним фронтенд
+    # знает свежий номер сразу, не дожидаясь следующего опроса, и потому
+    # умеет распознать устаревший ответ на остановку. Аннотация расширена
+    # до `str | int` не для красоты: у обработчика FastAPI она становится
+    # `response_model`, и `dict[str, str]` отдало бы 500 на числовом поле.
+    return {"status": "started", "epoch": status.epoch}
 
 @router.post("/stop")
-async def tg_stop() -> dict[str, str | None]:
+async def tg_stop() -> dict[str, str | int | None]:
     try:
         status = await manager.stop("tg")
     except WorkerNotRunning:
@@ -74,7 +79,17 @@ async def tg_stop() -> dict[str, str | None]:
     # получал 400 «уже запущен», жал «Остановить» ещё раз.
     # Форма ответа сохранена: успешная остановка по-прежнему даёт
     # {"status": "stopped"}, на который смотрит frontend/app.js.
-    return {"status": status.state.value, "detail": status.last_error}
+    #
+    # `epoch` — номер запуска, который останавливал ИМЕННО ЭТОТ вызов
+    # (manager.stop() запоминает его на входе). Без него ответ не говорил, к
+    # какому запуску относится: клиент, чья остановка догнала перезапуск
+    # другого клиента, получал `{"status": "running"}` и не мог отличить
+    # «мою остановку отменили» от «воркер уже перезапущен без меня».
+    return {
+        "status": status.state.value,
+        "detail": status.last_error,
+        "epoch": status.epoch,
+    }
 
 @router.get("/chats")
 async def tg_chats() -> list[dict[str, Any]]:

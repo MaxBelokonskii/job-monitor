@@ -330,3 +330,135 @@ async def test_a_superseded_stop_waiter_leaves_the_status_alone():
     live.cancel()
     with pytest.raises(asyncio.CancelledError):
         await live
+
+
+# ── Ответ на остановку помечен номером СВОЕГО запуска ─────────────────
+
+
+async def test_epoch_counts_runs_and_never_goes_backwards():
+    """Счётчик двигается только успешным `start()` — и только вперёд.
+
+    Отказавший `start()` (воркер уже работает) номер не тратит: иначе
+    клиент, получивший 400, «узнал» бы о запуске, которого не было, и его
+    следующая остановка выглядела бы устаревшей.
+    """
+    manager = WorkerManager()
+    manager.register("idle", lambda: asyncio.sleep(3600))
+
+    assert manager.status("idle").epoch == 0, "до первого запуска номера нет"
+    assert manager.status_dict("idle")["epoch"] == 0
+    assert manager.status("nope").epoch == 0
+
+    assert (await manager.start("idle")).epoch == 1
+    with pytest.raises(WorkerAlreadyRunning):
+        await manager.start("idle")
+    assert manager.status("idle").epoch == 1, "отказавший start() истратил номер"
+
+    stopped = await manager.stop("idle")
+    assert stopped.epoch == 1, "остановка первого запуска помечена его номером"
+    assert manager.status("idle").epoch == 1, (
+        "остановка обнулила номер — следующий ответ о запуске 1 нельзя будет "
+        "отличить от ответа о запуске 2"
+    )
+
+    assert (await manager.start("idle")).epoch == 2
+    assert manager.status_dict("idle")["epoch"] == 2
+    await manager.stop("idle")
+
+
+async def test_a_stop_answer_carries_its_own_run_number_not_the_current_one():
+    """Гонка двух клиентов, целиком — и то, чего в ответе не хватало.
+
+    Последовательность (та же, что в
+    `test_a_restart_during_a_pending_stop_is_not_reported_as_stopped`, но
+    клиент A на этот раз дожидается ответа): A зовёт `stop()` и ждёт; таска
+    гаснет; B успевает `start()`; сторож просыпается, видит в `_tasks`
+    ЧУЖУЮ таску и молчит, возвращая текущий статус.
+
+    До epoch A получал из этого `{"state": "running", "last_error": None}` и
+    не мог отличить «мою остановку отменили» от «воркер уже перезапустили
+    без меня»: в ответе не было ни слова о том, к какому запуску он
+    относится. Теперь ответ помечен номером ЕГО остановки (1), а менеджер
+    живёт с номером нового запуска (2) — расхождение и есть признак
+    устаревшего ответа.
+    """
+    manager = WorkerManager()
+    manager.register("hh", lambda: asyncio.sleep(3600))
+
+    await manager.start("hh")
+    await wait_for(manager, "hh", WorkerState.running)
+    first_task = manager._tasks["hh"]
+    assert manager.status("hh").epoch == 1
+
+    # Клиент A жмёт «остановить» и ЖДЁТ ответа.
+    a = asyncio.create_task(manager.stop("hh", timeout=5))
+    await _tick()
+    assert manager.status("hh").state is WorkerState.stopping
+
+    # Отменённая таска гаснет, но сторож ещё не просыпался: всё окно гонки
+    # укладывается в один-два тика цикла, поэтому тиками, а не сном.
+    for _ in range(10):
+        if first_task.done():
+            break
+        await asyncio.sleep(0)
+    assert first_task.done(), "отменённая таска ещё жива — start() и не должен проходить"
+    assert not manager._stop_waiters["hh"].done(), (
+        "сторож уже проснулся: в этом порядке тиков гонку не воспроизвести,"
+        " тест перестал что-либо проверять"
+    )
+    assert not a.done(), "клиент A уже получил ответ — гонки не было"
+
+    # Клиент B жмёт «запустить».
+    await manager.start("hh")
+    second_task = manager._tasks["hh"]
+    assert second_task is not first_task
+    assert manager.status("hh").epoch == 2
+
+    # Сторож просыпается, и A наконец получает ответ.
+    answer = await a
+
+    assert answer.epoch == 1, (
+        "ответ клиента A помечен номером текущего состояния, а не номером его "
+        f"остановки: {answer.epoch} — A снова не может отличить отменённую "
+        "остановку от чужого перезапуска"
+    )
+    assert answer.epoch < manager.status("hh").epoch, (
+        "ответ обязан быть распознаваемо устаревшим: его номер меньше номера "
+        "текущего запуска"
+    )
+
+    # ...и при этом состояние воркера осталось верным.
+    assert manager._tasks.get("hh") is second_task, (
+        "сторож старого запуска выкинул из-под наблюдения ЖИВУЮ таску нового"
+    )
+    assert not second_task.done(), "второй запуск не должен был пострадать"
+    assert manager.status("hh").state in (WorkerState.starting, WorkerState.running)
+    assert manager.status("hh").epoch == 2, (
+        "пометка ответа переписала epoch в общем реестре — менеджер соврал бы "
+        "про живой воркер всем остальным читателям"
+    )
+    assert manager.status_dict("hh")["can_start"] is False
+    with pytest.raises(WorkerAlreadyRunning):
+        await manager.start("hh")
+
+    second_task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await second_task
+
+
+async def test_a_stop_that_actually_stopped_is_not_marked_stale():
+    """Обратная сторона: без гонки номер ответа совпадает с номером
+    текущего состояния, и фронтенд обязан такой ответ ПРИНЯТЬ. Иначе
+    «остановить» перестало бы гасить кнопку до следующего опроса."""
+    manager = WorkerManager()
+    manager.register("idle", lambda: asyncio.sleep(3600))
+    await manager.start("idle")
+    await wait_for(manager, "idle", WorkerState.running)
+
+    answer = await manager.stop("idle")
+
+    assert answer.state is WorkerState.stopped
+    assert answer.epoch == manager.status("idle").epoch == 1
+    assert answer is manager.status("idle"), (
+        "в отсутствие гонки stop() возвращает сам статус из реестра, без копии"
+    )
