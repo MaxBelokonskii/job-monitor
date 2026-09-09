@@ -46,7 +46,8 @@ def _code_lines() -> list[str]:
     lines = []
     for line in _text().splitlines():
         stripped = line.strip()
-        if not stripped or stripped.upper().startswith("REM "):
+        # И `REM текст`, и одинокий `REM` — разделитель абзаца в комментарии.
+        if not stripped or stripped.upper() == "REM" or stripped.upper().startswith("REM "):
             continue
         lines.append(stripped)
     return lines
@@ -115,13 +116,113 @@ def test_an_unknown_argument_is_an_error() -> None:
     )
 
 
-def test_the_server_exit_code_is_checked() -> None:
-    server = _index_of(r"-m uvicorn")
-    checks = _indexes_of(r"if errorlevel 1")
-    assert any(check > server for check in checks), (
-        "код возврата uvicorn не проверяется: занятый порт и ошибка импорта выглядят "
-        "как штатный выход по Ctrl+C"
+# ── Что батник делает с кодом возврата uvicorn ────────────────────────
+#
+# Первая версия проверки была `if errorlevel 1`, то есть «код >= 1». Падение
+# по access violation (0xC0000005 — например в драйвере Chrome) даёт
+# errorlevel = -1073741819, условие ложно, и выполнялся `pause` из ветки
+# успеха: аварийное завершение выглядело нормальным. Занятый порт и
+# ModuleNotFoundError дают ровно 1 и ловились — это был остаток, а не полный
+# отказ проверки.
+#
+# Ниже проверяется ПОВЕДЕНИЕ: куда уйдёт управление при конкретном коде. Для
+# этого хвост батника после запуска uvicorn прогоняется крошечным
+# интерпретатором, понимающим ровно четыре конструкции; всё остальное он
+# отвергает с внятным сообщением, а не молча трактует по-своему.
+
+SET_FROM_ERRORLEVEL = re.compile(r'^set\s+"?(\w+)=%ERRORLEVEL%"?$', re.IGNORECASE)
+IF_STRING_EQUALS = re.compile(
+    r'^if\s+(not\s+)?"%(\w+)%"\s*==\s*"(-?\d+)"\s+goto\s+(\w+)$', re.IGNORECASE
+)
+IF_ERRORLEVEL = re.compile(r"^if\s+(not\s+)?errorlevel\s+(-?\d+)\s+goto\s+(\w+)$", re.IGNORECASE)
+GOTO = re.compile(r"^goto\s+(\w+)$", re.IGNORECASE)
+EXIT_CODE = re.compile(r"^exit\s+/b\s+(-?\d+)$", re.IGNORECASE)
+IGNORED = re.compile(r"^(echo|pause|title|chcp|start|set\s|setlocal|cd\s)", re.IGNORECASE)
+
+# 0xC000013A. Единственный код, который может прийти от штатного закрытия
+# приложения: Ctrl+C убил python жёстко, а на «Terminate batch job (Y/N)»
+# пользователь ответил «N», так что батник дожил до проверки.
+CTRL_C_EXIT = -1073741510
+CRASH_CODES = {
+    "0xC0000005 access violation (например в драйвере Chrome)": -1073741819,
+    "0xC0000374 heap corruption": -1073740940,
+    "0xC000041D unhandled exception in callback": -1073741283,
+}
+
+
+def _batch_exit_code_for(server_return_code: int) -> int:
+    """Код, с которым завершится батник, если uvicorn вернул этот код."""
+    lines = _code_lines()
+    labels = {
+        line[1:].lower(): number
+        for number, line in enumerate(lines)
+        if line.startswith(":")
+    }
+    variables: dict[str, int] = {}
+    index = _index_of(r"-m uvicorn") + 1
+    for _step in range(len(lines) * 2):
+        assert index < len(lines), "хвост батника кончился без `exit /b`"
+        line = lines[index]
+        index += 1
+
+        if line.startswith(":"):
+            continue                                  # метка — просто отметка в тексте
+
+        jump = None
+        captured = SET_FROM_ERRORLEVEL.match(line)
+        equals = IF_STRING_EQUALS.match(line)
+        threshold = IF_ERRORLEVEL.match(line)
+        goto = GOTO.match(line)
+        finish = EXIT_CODE.match(line)
+        if captured:
+            variables[captured.group(1)] = server_return_code
+        elif equals:
+            negated, name, expected, target = equals.groups()
+            assert name in variables, f"сравнение с необъявленной переменной: {line!r}"
+            matched = variables[name] == int(expected)
+            jump = target if matched != bool(negated) else None
+        elif threshold:
+            negated, level, target = threshold.groups()
+            # Именно в этом семантика `if errorlevel N`: «код >= N».
+            matched = server_return_code >= int(level)
+            jump = target if matched != bool(negated) else None
+        elif goto:
+            jump = goto.group(1)
+        elif finish:
+            return int(finish.group(1))
+        else:
+            assert IGNORED.match(line), (
+                f"строка {line!r} записана формой, которую этот тест не понимает — "
+                "обновите интерпретатор в tests/test_start_web_bat.py, иначе проверка "
+                "кода возврата держится на догадке"
+            )
+
+        if jump is not None:
+            assert jump.lower() in labels, f"переход на несуществующую метку: {line!r}"
+            index = labels[jump.lower()] + 1
+    raise AssertionError("разбор хвоста батника зациклился")
+
+
+def test_a_clean_shutdown_is_not_reported_as_a_failure() -> None:
+    assert _batch_exit_code_for(0) == 0, "штатное завершение uvicorn считается ошибкой"
+    assert _batch_exit_code_for(CTRL_C_EXIT) == 0, (
+        "жёсткое убийство по Ctrl+C (0xC000013A) — это закрытие приложения "
+        "пользователем, а не отказ сервера"
     )
+
+
+@pytest.mark.parametrize("reason, code", sorted(CRASH_CODES.items()))
+def test_a_negative_exit_code_is_reported_as_a_failure(reason: str, code: int) -> None:
+    """`if errorlevel 1` означает «код >= 1» и ни один из этих кодов не
+    ловит: после падения выполнялся `pause` из ветки успеха."""
+    assert _batch_exit_code_for(code) != 0, f"{reason} ({code}) выглядит как штатный выход"
+
+
+@pytest.mark.parametrize("code", [1, 2, 3, 8, 3221225477])
+def test_a_positive_exit_code_is_still_reported_as_a_failure(code: int) -> None:
+    """То, ради чего проверка заводилась (занятый порт 8000 и
+    `ModuleNotFoundError` дают 1), не должно потеряться при переписывании."""
+    assert _batch_exit_code_for(code) != 0
 
 
 def test_the_failure_hint_does_not_blame_the_network_alone() -> None:
