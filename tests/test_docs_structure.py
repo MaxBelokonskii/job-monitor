@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import inspect
 import re
 from pathlib import Path
 
@@ -136,3 +137,55 @@ def test_the_structure_check_is_not_vacuous() -> None:
         "app.py",
     }, "проверка «файла нет в дереве» не сработала бы на именах из старой версии спецификации"
     assert real in _actual_modules() and real in _existing_python_files()
+
+
+# ── README не пересказывает числа, которые называет прогон ────────────
+
+README = REPO_ROOT / "README.md"
+COUNTED_TESTS = re.compile(r"\b(\d+)\s+тест", re.IGNORECASE)
+
+
+def _paragraphs_about_node() -> list[str]:
+    paragraphs = [
+        paragraph
+        for paragraph in README.read_text(encoding="utf-8").split("\n\n")
+        if "Node" in paragraph
+    ]
+    assert paragraphs, "в README нет абзаца про Node.js — раздел про прогон переехал?"
+    return paragraphs
+
+
+def test_the_readme_does_not_restate_how_many_tests_node_skips() -> None:
+    """Число пропущенных тестов в README держалось руками и разошлось с
+    фактом на первом же добавленном тесте: было написано «14 тестов», а
+    прогон без node давал 15.
+
+    Источник у этого числа один и он не в документации:
+    `pytest_terminal_summary` в tests/conftest.py считает пропуски с нашей
+    причиной и печатает их количество в конце вывода. Дублировать его в
+    README — значит завести второе место, которое надо помнить обновлять, и
+    оно уже один раз не обновилось.
+    """
+    offenders = [
+        (number, paragraph.strip())
+        for paragraph in _paragraphs_about_node()
+        for number in COUNTED_TESTS.findall(paragraph)
+    ]
+    assert not offenders, (
+        "README снова называет количество тестов, пропущенных без Node.js: "
+        + ", ".join(f"«{number} тест...»" for number, _paragraph in offenders)
+        + " — это число печатает сам прогон (tests/conftest.py::"
+        "pytest_terminal_summary), и руками оно уже расходилось с фактом"
+    )
+
+
+def test_the_run_still_reports_that_number_itself() -> None:
+    """Обратная сторона: убрать число из README можно только потому, что его
+    называет прогон. Если предупреждение перестанет считать пропуски, README
+    останется единственным местом — и там будет пусто."""
+    import conftest
+
+    assert "{len(skipped)}" in inspect.getsource(conftest.pytest_terminal_summary), (
+        "предупреждение о ненайденном Node.js больше не называет количество "
+        "пропущенных тестов — тогда его надо вернуть в README"
+    )
