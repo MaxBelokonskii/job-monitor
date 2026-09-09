@@ -22,7 +22,7 @@
 - **Ловушка FastAPI:** аннотация возврата становится `response_model`, то есть включает валидацию ответа — добавили поле в ответ, расширьте аннотацию, иначе 500. И наоборот: аннотация наследником `Response` заставляет FastAPI не строить `response_model` вовсе, молча снимая валидацию.
 - Тесты не ходят в сеть и не открывают браузер: внешние границы подменяются двойниками.
 - Прогон не создаёт ничего в домашнем каталоге и не зависит от порядка файлов.
-- `make test` (`.venv/bin/python -m pytest -q`) зелёный на каждом коммите. На старте плана — **461 passed**.
+- `make test` (`.venv/bin/python -m pytest -q`) зелёный на каждом коммите. На старте плана — **507 passed**.
 - Файлы-растяжки (`tests/test_secrets_handling.py`, `test_route_invariants.py`, `test_frontend_safety.py`, `test_check_no_secrets.py`, `test_paths.py`) править можно **только усиливая**: покрытие не должно сузиться нигде.
 - Каждый новый тест обязан быть дискриминирующим: для него формулируется мутация, которая должна его свалить, и эта мутация прогоняется.
 - Сообщения коммитов — Conventional Commits, по-английски, в стиле репозитория (`git log --oneline -10`).
@@ -30,13 +30,15 @@
 
 ---
 
-## Ветка `refactor/drop-cors-and-worker-epoch`
+## База плана
 
-Параллельно существует **неслитая** ветка от того же `master`: она убирает `CORSMiddleware` и добавляет воркерам epoch запуска (тесты 461 → 507).
+Ветка `refactor/drop-cors-and-worker-epoch` (отказ от `CORSMiddleware`, epoch запуска у воркеров) **слита в `master`** до начала работ — PR #2, merge-коммит `1fba402`. Она пересекалась с этим планом по семи файлам, и разрешать семь конфликтов в конце было бы дороже, чем слить её в начале.
 
-Пересечения с этим планом — **семь файлов**, проверено `git diff --name-only master..refactor/drop-cors-and-worker-epoch`: `api/main.py` (подключение роутеров против удаления middleware), `api/tg_routes.py` и `api/hh_routes.py` (отказ старта против epoch в ответе), `job_monitor/workers/manager.py` (`running()` против `_epochs`), `frontend/app.js` (пресеты против гварда устаревшего epoch), `SECURITY.md` и `README.md`. Конфликты аддитивные, но их семь, и разрешать их в конце плана дороже, чем слить ветку до начала.
+Из этого следует для исполнителя:
 
-**Рекомендация: слить ту ветку в `master` первой**, а этот план вести поверх. Она закончена, отревьюирована и зелёная.
+- `CORSMiddleware` в `api/main.py` больше нет, и возвращать его нельзя: инвариант «ни один ответ не несёт `Access-Control-*`» закреплён `tests/test_no_cross_origin_permission.py`.
+- `WorkerStatus` несёт поле `epoch`, а `POST /api/{tg,hh}/{start,stop}` и `GET /api/state` его отдают. Двойники воркеров в тестах Task 4 должны нести `epoch`, иначе `response_model` даст 500.
+- Стартовый счёт тестов — **507**.
 
 Если та ветка сольётся раньше — счёт тестов на старте плана будет 507, а не 461, и двойники в тестах Task 4 должны нести ещё и поле `epoch`. Сверяться с фактом (`git log --oneline -3`), а не с этим числом.
 
@@ -717,7 +719,7 @@ Expected: PASS, 12 passed.
 - [ ] **Step 14: Прогнать весь набор и закоммитить**
 
 Run: `.venv/bin/python -m pytest -q`
-Expected: PASS, не меньше 478 passed (461 + 17 новых).
+Expected: PASS, не меньше 524 passed (507 + 17 новых).
 
 ```bash
 git add job_monitor/db/migrations.py job_monitor/db/repositories.py job_monitor/paths.py tests/test_migration_003.py tests/test_presets_repo.py tests/test_resumes_repo.py tests/test_tg_found_repo.py
