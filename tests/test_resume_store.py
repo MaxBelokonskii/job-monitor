@@ -61,11 +61,14 @@ def test_hostile_names_cannot_escape_the_resume_dir(hostile: str) -> None:
 
 
 def test_extension_outside_the_allowlist_is_rejected() -> None:
-    for name in ("payload.exe", "script.sh", "page.html", "noextension"):
+    for name in ("payload.exe", "script.sh", "page.html", "noextension", "cv.txt"):
         with pytest.raises(resume_store.ResumeRejected):
             resume_store.store(name, b"x")
+    # `.txt` намеренно не в списке: заблокировать `*.txt` в хуке защиты от
+    # коммита нельзя (в репозитории есть законные текстовые файлы), и резюме
+    # в таком формате стало бы единственным, которое хук не поймает.
     assert resume_store.ALLOWED_EXTENSIONS == frozenset(
-        {".pdf", ".doc", ".docx", ".rtf", ".odt", ".txt"}
+        {".pdf", ".doc", ".docx", ".rtf", ".odt"}
     )
 
 

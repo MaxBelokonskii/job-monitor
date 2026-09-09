@@ -26,6 +26,19 @@ async def get_config() -> dict:
 @router.patch("")
 async def update_config(patch: dict) -> dict:
     patch = dict(patch)
+    # Активный пресет через этот роут не меняется. Иначе он обходил бы всё,
+    # ради чего существует `POST /api/presets/{id}/activate`: тот сначала
+    # останавливает воркеров и отказывается переключаться, если воркер не
+    # уложился в бюджет остановки (решение D9). Смена поля напрямую
+    # оставляла бы воркер работающим — и следующая его итерация прочитала бы
+    # чужие критерии и приложила чужое резюме, а отозвать отправленное
+    # человеку сообщение нельзя.
+    if "active_preset_id" in patch:
+        raise HTTPException(
+            status_code=400,
+            detail="активный пресет меняется через POST /api/presets/{id}/activate — "
+            "он останавливает воркеров перед переключением",
+        )
     api_id = patch.pop("api_id", None)
     api_hash = patch.pop("api_hash", None)
     patch.pop("api_hash_set", None)

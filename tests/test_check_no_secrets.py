@@ -194,3 +194,38 @@ def test_the_hook_runs_on_commit():
         assert "pre-commit" in stages or "commit" in stages, (
             f"хук объявлен только на стадиях {stages} — на коммите он не сработает"
         )
+
+
+def test_the_hook_blocks_every_extension_the_resume_library_accepts() -> None:
+    """Связь двух списков, которую иначе никто не удержит.
+
+    Приложение принимает резюме шести форматов, а хук знал три — найдено
+    финальным ревью. Резюме в `.rtf` или `.odt` коммитилось бы свободно, то
+    есть исходная утечка S1 повторилась бы с другим расширением: в
+    закоммиченном архиве лежало именно резюме предыдущего автора, с ФИО,
+    телефоном и почтой.
+
+    Проверяется свойство, а не два списка порознь: добавили формат в
+    загрузку — обязаны добавить и в хук, иначе тест падает.
+    """
+    import importlib.util
+
+    from job_monitor import resume_store
+
+    spec = importlib.util.spec_from_file_location(
+        "check_no_secrets",
+        Path(__file__).resolve().parents[1] / "scripts" / "check_no_secrets.py",
+    )
+    check_no_secrets = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(check_no_secrets)
+
+    blocked = {
+        pattern.removeprefix("*")
+        for pattern in check_no_secrets.FORBIDDEN_NAMES
+        if pattern.startswith("*.")
+    }
+    missing = resume_store.ALLOWED_EXTENSIONS - blocked
+    assert not missing, (
+        "приложение принимает как резюме форматы, которые хук не блокирует: "
+        f"{sorted(missing)}"
+    )

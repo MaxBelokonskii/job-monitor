@@ -226,3 +226,30 @@ def test_the_last_preset_is_protected_even_when_it_is_not_the_active_one(client)
     assert refused.status_code == 400
     assert "единственный" in refused.json()["detail"]
     assert len(client.get("/api/presets").json()) == 1
+
+
+def test_the_active_preset_cannot_be_switched_through_the_config_route(
+    client, monkeypatch
+) -> None:
+    """Дыра, найденная финальным ревью: `PATCH /api/config` со значением
+    `active_preset_id` обходил решение D9 целиком.
+
+    `POST /api/presets/{id}/activate` сначала останавливает воркеров и
+    отказывается переключаться, если воркер не уложился в бюджет. Смена поля
+    напрямую оставляла воркер работающим, и его следующая итерация читала
+    чужие критерии и прикладывала чужое резюме — то есть человек получал
+    сообщение от одного пресета с резюме от другого.
+    """
+    from job_monitor.workers.manager import manager
+
+    monkeypatch.setattr(manager, "running", lambda: ["tg"])
+
+    second = client.post("/api/presets", json={"name": "Второй"}).json()["id"]
+    before = next(p for p in client.get("/api/presets").json() if p["is_active"])["id"]
+
+    refused = client.patch("/api/config", json={"active_preset_id": second})
+    assert refused.status_code == 400
+    assert "activate" in refused.json()["detail"]
+
+    still = next(p for p in client.get("/api/presets").json() if p["is_active"])["id"]
+    assert still == before, "активный пресет сменился в обход остановки воркеров"

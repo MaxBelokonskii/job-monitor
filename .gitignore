@@ -26,6 +26,8 @@ venv/
 *.pdf
 *.doc
 *.docx
+*.rtf
+*.odt
 
 # OS
 .DS_Store
