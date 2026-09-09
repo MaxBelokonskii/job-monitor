@@ -24,6 +24,12 @@ dev = [
     "httpx>=0.27,<1.0",
     "pre-commit>=3.7,<5.0",
     "detect-secrets>=1.5,<2.0",
+    # tests/test_check_no_secrets.py разбирает .pre-commit-config.yaml,
+    # чтобы проверить, что хук защиты от коммита секретов действительно
+    # подключён. PyYAML приезжает транзитивно с pre-commit и закреплён в
+    # requirements.lock, но проверка периметра не должна зависеть от
+    # чужого дерева зависимостей: резервная ветка разбора слабее.
+    "pyyaml>=6,<7",
 ]
 
 [tool.pytest.ini_options]
