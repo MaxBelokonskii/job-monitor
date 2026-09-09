@@ -103,3 +103,81 @@ def test_patch_survives_a_hand_broken_env_file(client, tmp_path):
 
     assert response.status_code == 200, response.text
     assert client.get("/api/config", headers=AUTH).json()["max_per_day"] == 9
+
+
+# ── PATCH не имеет права затереть сохранённый секрет ──────────────────
+#
+# `api/config_routes.py:33`: `if api_hash and not str(api_hash).startswith("•")`.
+# Мутация `and` → `or` проходила зелёной, потому что
+# `test_env_never_gets_application_settings` выше проверяет ИМЕНА ключей в
+# `.env` (`keys <= ALLOWED_ENV_KEYS`, `"TG_API_HASH" in keys`), а не их
+# ЗНАЧЕНИЯ: множество имён остаётся правильным и когда значение испорчено.
+#
+# Сценарий, который при этом ломается, — обычный: пользователь правит любую
+# настройку на странице настроек и нажимает «сохранить». PATCH без
+# `api_hash` записал бы в `~/.job-monitor/.env` строку `TG_API_HASH=None`, а
+# PATCH с маской из фронтенда (`app.js::saveApiKeys` подставляет в поле
+# `••••••••••••••••`) — сами bullet-ы. Telegram-воркер после этого не
+# поднимается, а UI показывает `api_hash_set: true`, потому что строка
+# непустая.
+
+STORED_HASH = "deadbeefcafef00ddeadbeefcafef00d"
+FRONTEND_MASK = "••••••••••••••••"
+
+
+def _env_value(tmp_path, key: str) -> str | None:
+    target = tmp_path / ".env"
+    if not target.exists():
+        return None
+    for line in target.read_text(encoding="utf-8").splitlines():
+        if line.startswith(f"{key}="):
+            return line.split("=", 1)[1]
+    return None
+
+
+def test_a_patch_without_secrets_leaves_the_stored_hash_alone(client, tmp_path):
+    client.patch("/api/config", json={"api_id": "42", "api_hash": STORED_HASH},
+                 headers=AUTH)
+    assert _env_value(tmp_path, "TG_API_HASH") == STORED_HASH
+
+    client.patch("/api/config", json={"max_per_day": 9}, headers=AUTH)
+
+    assert _env_value(tmp_path, "TG_API_HASH") == STORED_HASH, (
+        "PATCH без секретов перезаписал TG_API_HASH — Telegram-воркер больше не "
+        "поднимется, а UI покажет «ключи заданы», потому что строка непустая"
+    )
+    assert client.get("/api/config", headers=AUTH).json()["api_hash_set"] is True
+
+
+def test_the_masked_hash_from_the_ui_is_not_written_back(client, tmp_path):
+    """Фронтенд подставляет в поле маску, а не сам ключ — иначе секрет
+    уезжал бы в HTML главной страницы. Значит бэкенд обязан отличить маску
+    от нового значения; забудь он это, и `.env` получил бы bullet-ы."""
+    client.patch("/api/config", json={"api_id": "42", "api_hash": STORED_HASH},
+                 headers=AUTH)
+
+    response = client.patch("/api/config", json={"api_id": "42", "api_hash": FRONTEND_MASK},
+                            headers=AUTH)
+
+    assert response.status_code == 200, response.text
+    assert _env_value(tmp_path, "TG_API_HASH") == STORED_HASH, (
+        f"в .env уехала маска из интерфейса: {_env_value(tmp_path, 'TG_API_HASH')!r}"
+    )
+
+
+def test_a_genuinely_new_hash_still_replaces_the_old_one(client, tmp_path):
+    """Обратная сторона двух проверок выше: они не должны держаться на том,
+    что секреты просто перестали писаться."""
+    client.patch("/api/config", json={"api_id": "42", "api_hash": STORED_HASH},
+                 headers=AUTH)
+    client.patch("/api/config", json={"api_id": "42", "api_hash": "f00dcafe" * 4},
+                 headers=AUTH)
+    assert _env_value(tmp_path, "TG_API_HASH") == "f00dcafe" * 4
+
+
+def test_a_patch_without_secrets_leaves_the_stored_api_id_alone(client, tmp_path):
+    client.patch("/api/config", json={"api_id": "42", "api_hash": STORED_HASH},
+                 headers=AUTH)
+    client.patch("/api/config", json={"safe_mode": False}, headers=AUTH)
+    assert _env_value(tmp_path, "TG_API_ID") == "42"
+    assert client.get("/api/config", headers=AUTH).json()["api_id"] == "42"
