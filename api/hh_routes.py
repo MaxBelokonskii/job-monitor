@@ -1,5 +1,6 @@
 import asyncio
 from datetime import date
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
@@ -28,7 +29,7 @@ def get_hh_log(lines: int = 100) -> str:
 
 
 @router.get("/status")
-async def hh_status():
+async def hh_status() -> dict[str, Any]:
     repo = HhRepo(get_connection())
     cfg = load_config()
     return {
@@ -42,7 +43,7 @@ async def hh_status():
 
 
 @router.post("/start")
-async def hh_start():
+async def hh_start() -> dict[str, str]:
     try:
         await manager.start("hh")
     except WorkerAlreadyRunning:
@@ -51,7 +52,7 @@ async def hh_start():
 
 
 @router.post("/stop")
-async def hh_stop():
+async def hh_stop() -> dict[str, str | None]:
     try:
         status = await manager.stop("hh")
     except WorkerNotRunning:
@@ -114,10 +115,10 @@ async def hh_login_cancel() -> dict:
 
 
 @router.get("/vacancies")
-async def hh_vacancies():
+async def hh_vacancies() -> list[dict]:
     return HhRepo(get_connection()).recent(50)
 
 
 @router.get("/logs")
-async def hh_logs(lines: int = 100):
+async def hh_logs(lines: int = 100) -> dict[str, str]:
     return {"log": get_hh_log(lines)}

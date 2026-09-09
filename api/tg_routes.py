@@ -1,4 +1,5 @@
 from datetime import date
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
@@ -29,7 +30,7 @@ def get_system_log(lines: int = 100) -> str:
 # ── Routes ────────────────────────────────────────────────────────────
 
 @router.get("/status")
-async def tg_status():
+async def tg_status() -> dict[str, Any]:
     cfg = load_config()
     secrets = load_secrets()
     conn = get_connection()
@@ -49,7 +50,7 @@ async def tg_status():
     }
 
 @router.post("/start")
-async def tg_start():
+async def tg_start() -> dict[str, str]:
     try:
         await manager.start("tg")
     except WorkerAlreadyRunning:
@@ -60,7 +61,7 @@ async def tg_start():
     return {"status": "started"}
 
 @router.post("/stop")
-async def tg_stop():
+async def tg_stop() -> dict[str, str | None]:
     try:
         status = await manager.stop("tg")
     except WorkerNotRunning:
@@ -76,7 +77,7 @@ async def tg_stop():
     return {"status": status.state.value, "detail": status.last_error}
 
 @router.get("/chats")
-async def tg_chats():
+async def tg_chats() -> list[dict[str, Any]]:
     has_file = bool(load_config().get("file_path"))
     return [
         {
@@ -90,5 +91,5 @@ async def tg_chats():
     ]
 
 @router.get("/logs")
-async def tg_logs(lines: int = 100):
+async def tg_logs(lines: int = 100) -> dict[str, str]:
     return {"log": get_system_log(lines)}

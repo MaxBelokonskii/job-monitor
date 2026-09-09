@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional
+from typing import Any, Optional
 from job_monitor.telegram_client import get_client
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -20,7 +20,7 @@ class MessageRequest(BaseModel):
     text: str
 
 @router.get("/status")
-async def auth_status():
+async def auth_status() -> dict[str, Any]:
     client = get_client()
     try:
         await client.connect()
@@ -32,7 +32,7 @@ async def auth_status():
         pass  # singleton — не отключаем
 
 @router.post("/send-code")
-async def send_code(body: AuthRequest):
+async def send_code(body: AuthRequest) -> dict[str, str]:
     client = get_client()
     try:
         await client.connect()
@@ -46,7 +46,7 @@ async def send_code(body: AuthRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/verify-code")
-async def verify_code(body: AuthCode):
+async def verify_code(body: AuthCode) -> dict[str, str]:
     from telethon.errors import SessionPasswordNeededError
     client = get_client()
     try:
@@ -64,7 +64,7 @@ async def verify_code(body: AuthCode):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.get("/messages/{username}")
-async def get_messages(username: str, limit: int = 30):
+async def get_messages(username: str, limit: int = 30) -> list[dict[str, Any]]:
     client = get_client()
     try:
         await client.connect()
@@ -87,7 +87,7 @@ async def get_messages(username: str, limit: int = 30):
         raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/messages/{username}")
-async def send_message(username: str, body: MessageRequest):
+async def send_message(username: str, body: MessageRequest) -> dict[str, str]:
     client = get_client()
     try:
         await client.connect()

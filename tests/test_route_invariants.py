@@ -9,6 +9,7 @@ by default and nothing would catch it.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from pathlib import Path
 
 import pytest
 
@@ -58,3 +59,26 @@ def test_docs_and_openapi_endpoints_are_disabled(raw_client, path: str) -> None:
     return 200 with no token at all — unnecessary surface on a tool whose
     premise is a token-gated API."""
     assert raw_client.get(path).status_code == 404
+
+
+def test_every_api_handler_declares_a_return_type() -> None:
+    """Глобальное ограничение ветки — «весь новый код с аннотациями типов», —
+    но обработчики роутов долго оставались исключением: в `api/` они писались
+    до перехода на пакет и возвращаемого типа не объявляли. Проверка держится
+    на AST, а не на импорте: FastAPI оборачивает функции, и у обёртки
+    аннотации уже не те, что у исходника. Функции модуля, не являющиеся
+    обработчиками (помощники вроде `get_system_log`), тоже обязаны их иметь —
+    правило одно для всего пакета.
+    """
+    import ast
+
+    api_dir = Path(__file__).resolve().parents[1] / "api"
+    missing: list[str] = []
+    for source_file in sorted(api_dir.glob("*.py")):
+        tree = ast.parse(source_file.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if node.returns is None:
+                missing.append(f"{source_file.name}:{node.lineno} {node.name}")
+    assert not missing, "без аннотации возвращаемого типа: " + ", ".join(missing)

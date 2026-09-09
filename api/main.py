@@ -1,5 +1,6 @@
 import asyncio
 import threading
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -87,7 +88,7 @@ async def close_login_window(timeout: float | None = None) -> None:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Логирование настраивается здесь, а не на импорте: импорт модуля не
     # должен создавать каталог данных и файлы (см. job_monitor/logging_setup.py).
     configure_logging()
@@ -163,7 +164,7 @@ if os.path.exists(FRONTEND_DIR):
     app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
 @app.get("/", response_class=HTMLResponse)
-async def serve_ui():
+async def serve_ui() -> str:
     html_path = os.path.join(FRONTEND_DIR, "index.html")
     if not os.path.exists(html_path):
         return "<h1>index.html not found in frontend/</h1>"
