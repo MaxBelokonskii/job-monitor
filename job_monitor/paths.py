@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import stat
+import subprocess
+import sys
 from pathlib import Path
 
 ENV_VAR = "JOB_MONITOR_DATA_DIR"
@@ -144,3 +147,79 @@ def tg_session() -> Path:
 
 def hh_cookies() -> Path:
     return path("hh_cookies.json")
+
+# Каталоги, попадание в которые сводит права `0600` на нет: файл уезжает в
+# чужое облако целиком. Сравнение идёт по СЕГМЕНТАМ пути, а не по подстроке:
+# `~/MyDropboxBackups` — не Dropbox, и ложное предупреждение здесь дороже
+# пропуска, потому что ему перестают верить.
+SYNCED_MARKERS: tuple[tuple[str, str], ...] = (
+    ("Library/Mobile Documents/com~apple~CloudDocs", "iCloud Drive"),
+    ("Dropbox", "Dropbox"),
+    ("Google Drive", "Google Drive"),
+    ("OneDrive", "OneDrive"),
+    ("Yandex.Disk", "Яндекс.Диск"),
+)
+
+
+def looks_synced(directory: Path | None = None) -> str | None:
+    """Имя облачного сервиса, если каталог похож на его папку.
+
+    Проверка по пути, а не опросом сервисов: опрашивать нечего, а путь
+    известен и достаточен. Нужна ровно тогда, когда каталог данных задан
+    пользователем через `$JOB_MONITOR_DATA_DIR`, — по умолчанию он лежит в
+    домашнем каталоге и никуда не синхронизируется.
+    """
+    target = (directory or data_dir()).resolve()
+    parts = target.parts
+    for marker, service in SYNCED_MARKERS:
+        marker_parts = tuple(Path(marker).parts)
+        window = len(marker_parts)
+        if any(
+            parts[index : index + window] == marker_parts
+            for index in range(len(parts) - window + 1)
+        ):
+            return service
+    return None
+
+
+EXCLUSION_MARKER = ".backup-excluded"
+
+
+def exclude_from_backups() -> bool:
+    """Исключает каталог данных из Time Machine. Best-effort и ОДИН раз.
+
+    Не условие запуска: `tmutil` может отсутствовать, том — не поддерживать
+    исключения, а прав может не хватить. То же правило, что у `tighten()`:
+    ужесточение защиты никогда не мешает работать.
+
+    Отметка о выполненном исключении лежит в самом каталоге данных, и
+    повторный запуск приложения внешнюю утилиту уже не зовёт. Причина не в
+    экономии: `tmutil` — сторонний процесс с бюджетом в десять секунд, и
+    вызывать его на КАЖДОМ старте значит поставить запуск приложения в
+    зависимость от чужой утилиты. Удалили каталог данных — удалили и отметку,
+    исключение сделается заново.
+    """
+    if sys.platform != "darwin":
+        return False
+    marker = data_dir() / EXCLUSION_MARKER
+    if marker.exists():
+        return True
+    tmutil = shutil.which("tmutil")
+    if tmutil is None:
+        return False
+    try:
+        result = subprocess.run(  # noqa: S603 — shell=False, аргументы списком
+            [tmutil, "addexclusion", str(data_dir())],
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if result.returncode != 0:
+        return False
+    try:
+        marker.touch(mode=FILE_MODE)
+    except OSError:
+        # Отметку не записали — просто позовём `tmutil` в следующий раз.
+        pass
+    return True

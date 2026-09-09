@@ -17,6 +17,7 @@ from .dictionaries_routes import router as dictionaries_router
 from .presets_routes import router as presets_router
 from .resumes_routes import router as resumes_router
 from .routes_state import router as state_router
+from job_monitor import paths
 from job_monitor.db.connection import get_connection
 from job_monitor.security import (
     ALLOWED_HOSTS,
@@ -94,6 +95,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Логирование настраивается здесь, а не на импорте: импорт модуля не
     # должен создавать каталог данных и файлы (см. job_monitor/logging_setup.py).
     configure_logging()
+    # Ужесточение защиты каталога данных — best-effort, как и `paths.tighten`:
+    # отказ ничего не роняет. Права `0600` защищают от другого пользователя
+    # машины, но не от бэкапа — в `telegram.session` лежит `auth_key`, которого
+    # достаточно для входа в аккаунт в обход 2FA.
+    paths.exclude_from_backups()
+    synced = paths.looks_synced()
+    if synced:
+        worker_logger("tg").warning(
+            "каталог данных похож на папку %s: файл сессии Telethon содержит "
+            "auth_key, которого достаточно для входа в аккаунт в обход 2FA — "
+            "перенесите каталог за пределы синхронизируемой папки",
+            synced,
+        )
     register_workers()
     settings = load_settings(get_connection())
     # Each autostart is isolated in its own try/except, matching the

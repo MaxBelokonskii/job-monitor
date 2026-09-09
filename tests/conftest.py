@@ -170,3 +170,37 @@ def bare_conn(tmp_path):
     conn.execute("PRAGMA busy_timeout=5000")
     migrate(conn)
     return conn
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_external_tools():
+    """Набор не запускает системные утилиты.
+
+    `lifespan` зовёт `paths.exclude_from_backups()`, а на macOS `tmutil`
+    существует по-настоящему — и каждый тест, входящий в lifespan, начинал
+    порождать сторонний процесс: прогон вырос с 16 до 86 секунд, а тест
+    бюджета остановки стал мерить чужое время. Это тот же класс требований,
+    что «тесты не ходят в сеть»: внешние границы подменяются двойниками.
+    """
+    from job_monitor import paths
+
+    original = paths.exclude_from_backups
+    paths.exclude_from_backups = lambda: False
+    # Отдаём настоящую реализацию: тесты самой функции обязаны звать её, а
+    # не заглушку, иначе «вернула False» проходит вакуумно — заглушка
+    # возвращает False всегда.
+    yield original
+    paths.exclude_from_backups = original
+
+
+@pytest.fixture()
+def real_exclude_from_backups(_no_external_tools, monkeypatch):
+    """Настоящая `paths.exclude_from_backups` вместо сессионной заглушки.
+
+    Для тестов, которые проверяют саму функцию: они подменяют `shutil.which`
+    и `subprocess.run`, то есть наружу всё равно не выходят.
+    """
+    from job_monitor import paths
+
+    monkeypatch.setattr(paths, "exclude_from_backups", _no_external_tools)
+    return _no_external_tools
