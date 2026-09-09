@@ -29,7 +29,17 @@ from __future__ import annotations
 
 import logging
 
-from job_monitor.logging_setup import LOG_FORMAT, SingleLineFormatter
+import pytest
+from fastapi.testclient import TestClient
+
+from job_monitor.logging_setup import (
+    LOG_FORMAT,
+    SingleLineFormatter,
+    configure_logging,
+    log_file,
+    reset_logging,
+)
+from job_monitor.security import APP_TOKEN, TOKEN_HEADER
 
 
 def _format(message: str, *args: object) -> str:
@@ -87,3 +97,80 @@ def test_traceback_stays_multiline() -> None:
     formatted = SingleLineFormatter(LOG_FORMAT).format(record)
     assert "Traceback (most recent call last):" in formatted
     assert formatted.count("\n") > 1
+
+
+# ── Санитайзер должен быть ПОДКЛЮЧЁН, а не только существовать ────────
+#
+# Всё выше конструирует `SingleLineFormatter` руками. Это проверяет
+# двойник, а не предмет: мутация одной строки в
+# `job_monitor/logging_setup.py::_make_handler`
+#
+#     handler.setFormatter(SingleLineFormatter(LOG_FORMAT, DATE_FORMAT))
+#  →  handler.setFormatter(logging.Formatter(LOG_FORMAT, DATE_FORMAT))
+#
+# проходила зелёной на всём наборе, и дефект L15 возвращался целиком:
+# `\n` из заголовка вакансии hh.ru снова дорисовывает в `logs/hh.log`
+# строки, которых не было, а `GET /api/hh/logs` отдаёт файл в UI построчно.
+#
+# Ниже поэтому проверяется свойство сквозь НАСТОЯЩУЮ настройку логирования:
+# запись уходит через тот логгер, которым пользуется воркер, и читается из
+# того файла, который отдаёт эндпоинт.
+
+# Заголовок вакансии, каким его может прислать hh.ru: первая строка
+# безобидна, вторая подделывает запись лога целиком — с временем, уровнем и
+# именем логгера.
+FORGED_LINE = "2020-01-01 00:00:00 [ERROR] job_monitor.workers.hh: отклик отправлен всем"
+MALICIOUS_TITLE = f"QA инженер\n{FORGED_LINE}"
+
+
+@pytest.fixture
+def isolated_logging(tmp_path, monkeypatch):
+    """Свой каталог данных и чистые обработчики до и после.
+
+    Обработчики висят на глобальных логгерах: без снятия они пережили бы
+    тест и продолжили писать в уже удалённый tmp_path.
+    """
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path / "state"))
+    reset_logging()
+    yield tmp_path / "state"
+    reset_logging()
+
+
+def test_a_newline_from_hh_cannot_forge_a_line_in_the_real_log_file(isolated_logging) -> None:
+    configure_logging()
+    logger = logging.getLogger("job_monitor.workers.hh")
+    logger.info("[HH][OK] Отклик отправлен: %s", MALICIOUS_TITLE)
+    for handler in logger.handlers:
+        handler.flush()
+
+    lines = [line for line in log_file("hh").read_text(encoding="utf-8").splitlines() if line]
+    assert len(lines) == 1, (
+        "одна запись воркера дала в файле несколько строк — обработчик, который "
+        f"вешает configure_logging(), не несёт SingleLineFormatter: {lines}"
+    )
+    # Страховка от вакуумности: проверка выше имела бы смысл и при пустом
+    # файле. Недоверенный текст должен дойти до лога — просто одной строкой.
+    assert "отклик отправлен всем" in lines[0]
+
+
+def test_a_newline_from_telegram_cannot_forge_a_line_in_the_log_endpoint(isolated_logging) -> None:
+    """Тот же инвариант на границе, где его видит пользователь.
+
+    `GET /api/{tg,hh}/logs` отдаёт хвост файла в UI как есть, построчно, —
+    то есть подделанная запись выглядела бы в интерфейсе настоящей.
+    """
+    from api.main import app
+
+    with TestClient(app, base_url="http://127.0.0.1:8000") as client:
+        logging.getLogger("job_monitor.workers.telegram").info(
+            "отправлено %s", "@hr_anna\n2020-01-01 00:00:00 [INFO] отправлено @всем"
+        )
+        for handler in logging.getLogger("job_monitor.workers.telegram").handlers:
+            handler.flush()
+        body = client.get("/api/tg/logs", headers={TOKEN_HEADER: APP_TOKEN}).json()["log"]
+
+    assert "@hr_anna" in body, "запись не дошла до эндпоинта — проверка стала вакуумной"
+    forged = [line for line in body.splitlines() if line.startswith("2020-01-01")]
+    assert not forged, (
+        f"в отдаваемом UI логе появились записи, которых не было: {forged}"
+    )
