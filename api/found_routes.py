@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict
 
 from job_monitor import statuses
 from job_monitor.db.connection import get_connection
-from job_monitor.db.repositories import TgFoundRepo, TgRepo
+from job_monitor.db.repositories import HhRepo, TgFoundRepo, TgRepo
 
 router = APIRouter(prefix="/api/found", tags=["found"])
 
@@ -138,3 +138,57 @@ async def patch_tg_found(found_id: int, patch: StatusPatch) -> dict[str, Any]:
 
     repo.set_status(found_id, patch.status, now)
     return {"status": "saved", "found": _tg_view(repo.get(found_id))}
+
+
+def _hh_view(row: dict) -> dict[str, Any]:
+    """Вакансия наружу. Ключи те же, что в таблице: ссылка у hh.ru уже
+    лежит в `url`, собирать нечего."""
+    return {
+        "vacancy_id": row["vacancy_id"],
+        "title": row["title"],
+        "company": row["company"],
+        "salary": row["salary"],
+        "city": row["city"],
+        "url": row["url"],
+        "found_at": row["found_at"],
+        "applied_at": row["applied_at"],
+        "status": row["status"],
+        "status_source": row["status_source"],
+        "error": row["error"],
+    }
+
+
+@router.get("/hh")
+async def list_hh_found(
+    status: StatusFilter = "all",
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> list[dict[str, Any]]:
+    rows = HhRepo(get_connection()).list_found(
+        decided=_decided_flag(status), limit=limit, offset=offset
+    )
+    return [_hh_view(row) for row in rows]
+
+
+@router.patch("/hh/{vacancy_id}")
+async def patch_hh_found(vacancy_id: str, patch: StatusPatch) -> dict[str, Any]:
+    """Ручной статус вакансии hh.ru.
+
+    Побочных эффектов, в отличие от Telegram, нет: дедупликация здесь идёт
+    по самому статусу — он попадает в `DECIDED`, и воркер вакансию больше
+    не тронет.
+    """
+    repo = HhRepo(get_connection())
+    row = repo.get(vacancy_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="вакансия не найдена")
+
+    check_transition(row["status"], patch.status)
+    # Возврат в очередь подписывается роботом намеренно: запись снова
+    # принадлежит ему, и следующая надпись на карточке должна говорить о
+    # роботе, а не о человеке, который её туда вернул.
+    source = (
+        statuses.SOURCE_ROBOT if patch.status == statuses.NEW else statuses.SOURCE_HUMAN
+    )
+    repo.set_status(vacancy_id, patch.status, source, datetime.now())
+    return {"status": "saved", "found": _hh_view(repo.get(vacancy_id))}

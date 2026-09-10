@@ -133,6 +133,9 @@ def test_app_js_no_longer_polls_the_per_worker_status_endpoints() -> None:
     assert "/state" in code
     assert "/tg/status" not in code
     assert "/hh/status" not in code
+    assert "/hh/vacancies" not in code, (
+        "роут снят: очередь читается из GET /api/found/hh"
+    )
     assert "/tg/logs?lines=200" not in code, "the dashboard log feed comes from /api/state"
     assert "/hh/logs?lines=50" not in code, "the dashboard log feed comes from /api/state"
 

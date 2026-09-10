@@ -1100,7 +1100,7 @@ function vacancyStatusClass(status) {
 }
 
 async function loadHHVacancies() {
-  const vacs = await apiGet('/hh/vacancies');
+  const vacs = await apiGet('/found/hh');
   const vacEl = document.getElementById('hhRecentVacancies');
   if (!vacEl) return;
   if (!vacs || !vacs.length) {

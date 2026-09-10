@@ -149,3 +149,124 @@ def test_patching_a_missing_post_is_404(client, tg_post) -> None:
     assert client.patch(
         "/api/found/tg/999999", json={"status": statuses.DISMISSED}
     ).status_code == 404
+
+
+# ── hh.ru ─────────────────────────────────────────────────────────────
+
+from job_monitor.db.repositories import HhRepo  # noqa: E402
+
+
+@pytest.fixture
+def hh_vacancy(client):
+    conn = get_connection()
+    conn.execute("DELETE FROM hh_applications")
+    HhRepo(conn).record_found({
+        "vacancy_id": "1",
+        "title": "QA Engineer",
+        "company": "ООО Ромашка",
+        "salary": "от 400 000 ₸",
+        "city": "Алматы",
+        "url": "https://hh.ru/vacancy/1",
+        "found_at": "2026-09-10T10:00:00",
+        "status": statuses.NEW,
+        "status_source": statuses.SOURCE_ROBOT,
+    })
+    return "1"
+
+
+def test_the_hh_list_carries_everything_the_card_shows(client, hh_vacancy) -> None:
+    rows = client.get("/api/found/hh").json()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["url"] == "https://hh.ru/vacancy/1", "ссылка у hh.ru уже есть в базе"
+    assert row["title"] == "QA Engineer"
+    assert row["company"] == "ООО Ромашка"
+    assert row["city"] == "Алматы"
+    assert row["salary"] == "от 400 000 ₸"
+    assert row["status"] == statuses.NEW
+    assert row["status_source"] == statuses.SOURCE_ROBOT
+
+
+def test_the_hh_list_filters_by_status(client, hh_vacancy) -> None:
+    assert len(client.get("/api/found/hh?status=new").json()) == 1
+    client.patch(f"/api/found/hh/{hh_vacancy}", json={"status": statuses.DISMISSED})
+    assert client.get("/api/found/hh?status=new").json() == []
+    assert len(client.get("/api/found/hh?status=decided").json()) == 1
+
+
+def test_a_manual_hh_answer_names_the_human(client, hh_vacancy) -> None:
+    reply = client.patch(
+        f"/api/found/hh/{hh_vacancy}", json={"status": statuses.MANUAL_APPLIED}
+    )
+    assert reply.status_code == 200
+    row = HhRepo(get_connection()).get(hh_vacancy)
+    assert row["status"] == statuses.MANUAL_APPLIED
+    assert row["status_source"] == statuses.SOURCE_HUMAN
+
+
+def test_a_manual_hh_answer_stays_out_of_the_counter(client, hh_vacancy) -> None:
+    """Решение D16 на самом счётчике. Тест не вакуумен: `set_status`
+    ПРОСТАВЛЯЕТ `applied_at` ручному отклику (он нужен для сортировки), так
+    что счётчик молчит только благодаря фильтру по статусу."""
+    from datetime import date
+
+    client.patch(f"/api/found/hh/{hh_vacancy}", json={"status": statuses.MANUAL_APPLIED})
+    repo = HhRepo(get_connection())
+    assert repo.get(hh_vacancy)["applied_at"] is not None
+    assert repo.applied_on(date.today()) == 0
+    assert repo.applied_total() == 0
+
+
+def test_the_robot_hh_status_cannot_be_set_by_hand(client, hh_vacancy) -> None:
+    reply = client.patch(
+        f"/api/found/hh/{hh_vacancy}", json={"status": statuses.AUTO_APPLIED}
+    )
+    assert reply.status_code == 400
+    assert HhRepo(get_connection()).get(hh_vacancy)["status"] == statuses.NEW
+
+
+def test_an_applied_hh_vacancy_cannot_be_returned_to_the_queue(client, hh_vacancy) -> None:
+    """Для hh.ru у этого запрета нет второго рубежа: дедупликации контактов,
+    которая спасает Telegram, здесь не существует — робот просто кликнул бы
+    «Откликнуться» второй раз."""
+    HhRepo(get_connection()).set_status(
+        hh_vacancy, statuses.AUTO_APPLIED, statuses.SOURCE_ROBOT, datetime.now()
+    )
+    reply = client.patch(f"/api/found/hh/{hh_vacancy}", json={"status": statuses.NEW})
+    assert reply.status_code == 400
+    assert HhRepo(get_connection()).get(hh_vacancy)["status"] == statuses.AUTO_APPLIED
+
+
+def test_a_skipped_hh_vacancy_can_be_returned_to_the_queue(client, hh_vacancy) -> None:
+    """«Пропущено» значит «кнопка отклика не нашлась». Клика не было —
+    пусть попробует снова."""
+    HhRepo(get_connection()).set_status(
+        hh_vacancy, statuses.SKIPPED, statuses.SOURCE_ROBOT, datetime.now()
+    )
+    assert client.patch(
+        f"/api/found/hh/{hh_vacancy}", json={"status": statuses.NEW}
+    ).status_code == 200
+    assert HhRepo(get_connection()).get(hh_vacancy)["status"] == statuses.NEW
+
+
+def test_a_broken_scenario_cannot_be_returned_to_the_queue(client, hh_vacancy) -> None:
+    """Выглядит как «робот не смог», но кнопка уже нажата: сценарий
+    ломается ПОСЛЕ клика (см. `_process_one` в workers/hh.py)."""
+    HhRepo(get_connection()).set_status(
+        hh_vacancy, statuses.SCENARIO_ERROR, statuses.SOURCE_ROBOT, datetime.now()
+    )
+    reply = client.patch(f"/api/found/hh/{hh_vacancy}", json={"status": statuses.NEW})
+    assert reply.status_code == 400
+    assert "после клика" in reply.json()["detail"]
+
+
+def test_patching_a_missing_vacancy_is_404(client, hh_vacancy) -> None:
+    assert client.patch(
+        "/api/found/hh/нет-такой", json={"status": statuses.DISMISSED}
+    ).status_code == 404
+
+
+def test_the_old_vacancies_route_is_gone(client, hh_vacancy) -> None:
+    """Единственным его потребителем был наш же фронтенд. Два роута с одним
+    смыслом — это два места, которые разойдутся."""
+    assert client.get("/api/hh/vacancies").status_code == 404
