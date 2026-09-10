@@ -35,7 +35,8 @@ async def upload_resume(request: Request) -> dict[str, Any]:
     Клиентское имя НЕ участвует в построении пути: из него берётся только
     расширение, а имя на диске генерирует `resume_store`. Запись в базу идёт
     после успешной записи на диск — иначе строка могла бы указывать на файл,
-    которого нет.
+    которого нет; а если вставка строки не удалась, файл стирается обратно,
+    иначе он остался бы в каталоге навсегда и невидимым для интерфейса.
     """
     raw_name = request.headers.get(FILENAME_HEADER, "")
     if not raw_name:
@@ -65,9 +66,16 @@ async def upload_resume(request: Request) -> dict[str, Any]:
     except resume_store.ResumeRejected as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
-    resume_id = ResumesRepo(get_connection()).add(
-        original_name, stored_name, size, datetime.now()
-    )
+    try:
+        resume_id = ResumesRepo(get_connection()).add(
+            original_name, stored_name, size, datetime.now()
+        )
+    except Exception:
+        # Строки нет — значит файла быть не должно. Иначе он остаётся в
+        # каталоге навсегда: в списке его нет, а удалить из интерфейса
+        # нечем, потому что интерфейс ходит по идентификаторам строк.
+        resume_store.remove(stored_name)
+        raise
     return {"id": resume_id, "original_name": original_name, "size_bytes": size}
 
 
@@ -123,6 +131,11 @@ async def delete_resume(resume_id: int) -> dict[str, str]:
             status_code=400,
             detail="резюме используется пресетами: " + ", ".join(used_by),
         )
-    resume_store.remove(row["stored_name"])
+    # Сначала строка, потом файл. Обратный порядок оставлял запись,
+    # указывающую в пустоту: скачивание такой записи даёт 404, и починить
+    # её нечем. Отказ на удалении файла (права, занятость) оставляет файл
+    # без строки — это тоже мусор, но безвредный и невидимый, тогда как
+    # запись без файла ломает интерфейс.
     repo.delete(resume_id)
+    resume_store.remove(row["stored_name"])
     return {"status": "deleted"}

@@ -253,3 +253,61 @@ def test_the_active_preset_cannot_be_switched_through_the_config_route(
 
     still = next(p for p in client.get("/api/presets").json() if p["is_active"])["id"]
     assert still == before, "активный пресет сменился в обход остановки воркеров"
+
+
+# ── M-2: PATCH применяется целиком или никак ──────────────────────────
+
+
+def test_a_rejected_patch_changes_nothing_at_all(client) -> None:
+    """M-2: запрос с новым именем и негодным критерием возвращал 422, но имя
+    уже было сохранено. Клиент видит отказ и не знает, что переименование
+    прошло, — и следующий его запрос идёт к пресету, которого «нет»."""
+    created = client.post("/api/presets", json={"name": "До правки"}).json()
+    preset_id = created["id"]
+
+    reply = client.patch(
+        f"/api/presets/{preset_id}",
+        json={"name": "После правки", "hh_experience": "такого кода нет"},
+    )
+    assert reply.status_code == 422
+
+    assert client.get(f"/api/presets/{preset_id}").json()["name"] == "До правки"
+
+
+def test_a_rejected_patch_does_not_move_the_preset_either(client) -> None:
+    """Позиция — вторая половина той же проблемы: её тоже писали до
+    валидации критериев."""
+    created = client.post("/api/presets", json={"name": "Порядок"}).json()
+    preset_id = created["id"]
+    before = next(
+        row["position"] for row in client.get("/api/presets").json()
+        if row["id"] == preset_id
+    )
+
+    client.patch(
+        f"/api/presets/{preset_id}",
+        json={"position": before + 5, "hh_experience": "такого кода нет"},
+    )
+
+    after = next(
+        row["position"] for row in client.get("/api/presets").json()
+        if row["id"] == preset_id
+    )
+    assert after == before
+
+
+def test_a_valid_patch_still_applies_everything(client) -> None:
+    """Страховка от вакуумности: если бы отказ стал тотальным, эта
+    проверка поймала бы и то, что перестало работать успешное сохранение."""
+    created = client.post("/api/presets", json={"name": "Было"}).json()
+    preset_id = created["id"]
+
+    reply = client.patch(
+        f"/api/presets/{preset_id}",
+        json={"name": "Стало", "hh_experience": "between1And3"},
+    )
+    assert reply.status_code == 200
+
+    preset = client.get(f"/api/presets/{preset_id}").json()
+    assert preset["name"] == "Стало"
+    assert preset["criteria"]["hh_experience"] == "between1And3"
