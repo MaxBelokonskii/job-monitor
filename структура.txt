@@ -40,6 +40,9 @@ JobMonitor/
 │       ├── telegram.py         TG-воркер
 │       ├── hh.py               HH-воркер и машина состояний входа
 │       └── hh_steps.py         исполнитель сценария Selenium (белый список шагов)
+├── .github/
+│   └── workflows/
+│       └── tests.yml           CI: прогон на 3.11 и 3.13, обязательный Node
 ├── scripts/
 │   └── check_no_secrets.py     pre-commit хук
 ├── tests/
