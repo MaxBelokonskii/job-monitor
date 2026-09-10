@@ -381,3 +381,61 @@ def test_a_rejected_status_change_is_not_reported_as_success() -> None:
         ["node", "-e", script], capture_output=True, text=True, timeout=10
     )
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+
+# ── Экран «Обзор» ─────────────────────────────────────────────────────
+
+
+def test_the_metrics_are_three_tiles_not_six() -> None:
+    """Шесть плиток с тремя повторяющимися подписями — это и есть
+    «загруженность экрана разными блоками», от которой уходим."""
+    index = _index()
+    overview = index[index.index('id="page-overview"'):index.index('id="page-found"')]
+    assert overview.count('class="metric"') == 3, (
+        "на «Обзоре» должно быть ровно три плитки метрик с переключателем "
+        "источника, а не по тройке на источник"
+    )
+
+
+def test_the_duplicated_metric_ids_are_gone() -> None:
+    for gone in ("tgSentToday", "tgFoundToday", "tgSentTotal", "tgMetricBar",
+                 "hhSentToday", "hhFoundToday", "hhTotalSent", "hhMetricBar"):
+        assert f'id="{gone}"' not in _index(), f"{gone} остался в разметке"
+        assert f"'{gone}'" not in _app(), f"{gone} остался в app.js"
+
+
+def test_the_dashboard_no_longer_duplicates_the_found_screen() -> None:
+    """Блок «последние вакансии» на дашборде был предшественником экрана
+    «Найдено». Оставить оба — значит держать два списка одного и того же."""
+    assert 'id="hhRecentVacancies"' not in _index()
+    assert "loadHHVacancies" not in _app()
+
+
+@skip_without_node
+def test_the_combined_source_sums_both_workers() -> None:
+    """«Все» — это сумма, а не Telegram по умолчанию. Ошибка тут не видна
+    глазом: цифра выглядит правдоподобной ровно до того дня, когда второй
+    воркер что-то нашёл."""
+    source = _extract_function_source("metricValues")
+    script = source + """
+const tg = { found: 3, sent: 2, total: 10, limit: 25 };
+const hh = { found: 4, sent: 1, total: 20, limit: 20 };
+const cases = [
+  ['tg',  { found: 3, sent: 2, total: 10, limit: 25 }],
+  ['hh',  { found: 4, sent: 1, total: 20, limit: 20 }],
+  ['all', { found: 7, sent: 3, total: 30, limit: 45 }],
+];
+for (const [source, expected] of cases) {
+  const actual = metricValues(source, tg, hh);
+  for (const key of Object.keys(expected)) {
+    if (actual[key] !== expected[key]) {
+      console.error(source, key, actual[key], '!=', expected[key]);
+      process.exitCode = 1;
+    }
+  }
+}
+"""
+    result = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=10
+    )
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"

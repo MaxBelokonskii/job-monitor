@@ -47,9 +47,45 @@
 
   <!-- ОБЗОР -->
   <div class="page active" id="page-overview">
-    <div class="page-title">Обзор</div>
+    <div class="page-header">
+      <div class="page-title">Обзор</div>
+      <div class="seg" id="metricsSource">
+        <button class="seg-btn active" data-action="metricsSource" data-arg="all">Все</button>
+        <button class="seg-btn" data-action="metricsSource" data-arg="tg">Telegram</button>
+        <button class="seg-btn" data-action="metricsSource" data-arg="hh">hh.ru</button>
+      </div>
+    </div>
 
     <div id="dataDirWarning" class="restart-banner" style="display:none"></div>
+
+    <!-- Кнопки пустые: подпись целиком рисует updateWorkerButton через
+         fill(). Текст в разметке был мёртвым дублем, который показывался
+         долю секунды до первого опроса и мог ему противоречить. -->
+    <div class="worker-bar">
+      <button class="btn-toggle btn-toggle-tg" id="btnToggleTG" data-action="toggleTG"></button>
+      <button class="btn-toggle btn-toggle-hh" id="btnToggleHH" data-action="toggleHH"></button>
+    </div>
+    <div class="worker-alert" id="tgWorkerAlert" style="display:none"></div>
+    <div class="worker-alert" id="hhWorkerAlert" style="display:none"></div>
+
+    <div class="metrics-grid">
+      <div class="metric">
+        <div class="metric-label">Найдено сегодня</div>
+        <div class="metric-value" id="mFound">0</div>
+        <div class="metric-sub" id="mFoundSub"></div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Откликов сегодня</div>
+        <div class="metric-value" id="mSent">0</div>
+        <div class="metric-bar"><div class="metric-bar-fill tg" id="mBar" style="width:0%"></div></div>
+        <div class="metric-sub" id="mSub">из 0 в день</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Всего откликов</div>
+        <div class="metric-value" id="mTotal">0</div>
+        <div class="metric-sub">за всё время</div>
+      </div>
+    </div>
 
     <div class="card" id="presetCard">
       <div class="card-title">Пресет поиска</div>
@@ -64,83 +100,6 @@
         <button class="btn btn-primary" data-action="createPreset">Создать</button>
         <button class="btn btn-secondary" data-action="copyPreset">Копировать активный</button>
       </div>
-    </div>
-
-    <!-- TG Section -->
-    <div class="section-split">
-      <div class="section-split-label tg">
-        <!-- Telegram logo -->
-        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.289c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.17 13.617l-2.96-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.978.942z" fill="#2AABEE"/>
-        </svg>
-        Telegram
-      </div>
-      <div class="section-split-line"></div>
-      <button class="btn-toggle btn-toggle-tg" id="btnToggleTG" data-action="toggleTG">
-        <span class="status-dot stopped" id="dotTG"></span> Запустить TG
-      </button>
-    </div>
-
-    <div class="worker-alert" id="tgWorkerAlert" style="display:none"></div>
-
-    <div class="metrics-grid">
-      <div class="metric">
-        <div class="metric-label">Откликов сегодня</div>
-        <div class="metric-value" id="tgSentToday">0</div>
-        <div class="metric-bar"><div class="metric-bar-fill tg" id="tgMetricBar" style="width:0%"></div></div>
-        <div class="metric-sub" id="tgMetricSub">из 25 в день</div>
-      </div>
-      <div class="metric">
-        <div class="metric-label">Вакансий найдено</div>
-        <div class="metric-value" id="tgFoundToday">0</div>
-        <div class="metric-sub">за сегодня</div>
-      </div>
-      <div class="metric">
-        <div class="metric-label">Всего откликов</div>
-        <div class="metric-value" id="tgSentTotal">0</div>
-        <div class="metric-sub">за всё время</div>
-      </div>
-    </div>
-
-    <!-- HH Section -->
-    <div class="section-split">
-      <div class="section-split-label hh">
-        <!-- HH logo -->
-        <svg viewBox="0 0 40 20" xmlns="http://www.w3.org/2000/svg">
-          <text x="0" y="17" font-family="Arial Black,sans-serif" font-weight="900" font-size="18" fill="#D6001C">hh</text>
-        </svg>
-        HH.ru
-      </div>
-      <div class="section-split-line"></div>
-      <button class="btn-toggle btn-toggle-hh" id="btnToggleHH" data-action="toggleHH">
-        <span class="status-dot stopped" id="dotHH"></span> Запустить HH
-      </button>
-    </div>
-
-    <div class="worker-alert" id="hhWorkerAlert" style="display:none"></div>
-
-    <div class="metrics-grid">
-      <div class="metric">
-        <div class="metric-label">Откликов сегодня</div>
-        <div class="metric-value" id="hhSentToday" style="color:var(--hh)">0</div>
-        <div class="metric-bar"><div class="metric-bar-fill hh" id="hhMetricBar" style="width:0%"></div></div>
-        <div class="metric-sub" id="hhMetricSub">из 20 в день</div>
-      </div>
-      <div class="metric">
-        <div class="metric-label">Вакансий найдено</div>
-        <div class="metric-value" id="hhFoundToday">0</div>
-        <div class="metric-sub">за сегодня</div>
-      </div>
-      <div class="metric">
-        <div class="metric-label">Всего откликов</div>
-        <div class="metric-value" id="hhTotalSent">0</div>
-        <div class="metric-sub">за всё время</div>
-      </div>
-    </div>
-
-    <!-- HH recent vacancies -->
-    <div id="hhRecentVacancies" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">
-      <div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--muted);font-size:13px">Запустите HH монитор</div>
     </div>
 
     <!-- Bottom row: channels + recent log -->

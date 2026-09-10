@@ -263,7 +263,6 @@ body { font-family: 'Manrope', sans-serif; background: var(--bg); color: var(--t
 .msg-wrap.in { align-items: flex-start; }
 
 /* ── HH vacancies ──────────────────────────────────────────────────── */
-.vac-card { background: var(--card-bg); border: 1px solid var(--border); border-left: 3px solid var(--hh); border-radius: var(--radius); padding: 12px; box-shadow: var(--shadow); }
 .status-badge { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 10px; font-weight: 600; }
 .status-sent { background: var(--green-light); color: var(--green-text); }
 .status-skip { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
@@ -331,3 +330,5 @@ body { font-family: 'Manrope', sans-serif; background: var(--bg); color: var(--t
 .found-link { font-size: 11px; color: var(--accent); text-decoration: none; }
 .found-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
 .found-empty { padding: 24px; text-align: center; color: var(--muted); font-size: 13px; }
+
+.worker-bar { display: flex; gap: 10px; flex-wrap: wrap; }

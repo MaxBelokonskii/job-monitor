@@ -411,49 +411,59 @@ function updateHHButton() {
   updateStatusBar();
 }
 
+// ── Метрики ───────────────────────────────────────────────────────────
+const metricsState = { source: 'all' };
+
+// Чистая функция от трёх аргументов, а не от модульного состояния: только
+// так её можно исполнить в тесте. «Все» — это сумма обоих источников;
+// ошибка здесь не видна глазом, потому что цифра выглядит правдоподобной
+// ровно до того дня, когда второй воркер что-то нашёл.
+function metricValues(source, tg, hh) {
+  if (source === 'tg') return tg;
+  if (source === 'hh') return hh;
+  return {
+    found: tg.found + hh.found,
+    sent: tg.sent + hh.sent,
+    total: tg.total + hh.total,
+    limit: tg.limit + hh.limit,
+  };
+}
+
+function metricsSource(source) {
+  metricsState.source = source;
+  setSegActive('metricsSource', source);
+  updateMetrics();
+}
+
 function updateMetrics() {
-  // TG
-  const tgSent = document.getElementById('tgSentToday');
-  const tgFound = document.getElementById('tgFoundToday');
-  const tgTotal = document.getElementById('tgSentTotal');
-  const tgBar = document.getElementById('tgMetricBar');
-  const tgSub = document.getElementById('tgMetricSub');
-  if (tgSent) tgSent.textContent = tgState.sentToday;
-  if (tgFound) tgFound.textContent = tgState.foundToday;
-  if (tgTotal) tgTotal.textContent = tgState.sentTotal;
-  if (tgBar) tgBar.style.width = tgState.maxPerDay > 0
-    ? Math.min(Math.round((tgState.sentToday / tgState.maxPerDay) * 100), 100) + '%' : '0%';
-  if (tgSub) tgSub.textContent = `из ${tgState.maxPerDay} в день`;
-
-  // HH
-  const hhSent = document.getElementById('hhSentToday');
-  const hhFound = document.getElementById('hhFoundToday');
-  const hhTotal = document.getElementById('hhTotalSent');
-  const hhBar = document.getElementById('hhMetricBar');
-  const hhSub = document.getElementById('hhMetricSub');
-  if (hhSent) hhSent.textContent = hhState.sentToday;
-  if (hhFound) hhFound.textContent = hhState.foundToday;
-  if (hhTotal) hhTotal.textContent = hhState.totalSent;
-  if (hhBar) hhBar.style.width = hhState.maxPerDay > 0
-    ? Math.min(Math.round((hhState.sentToday / hhState.maxPerDay) * 100), 100) + '%' : '0%';
-  if (hhSub) hhSub.textContent = `из ${hhState.maxPerDay} в день`;
+  const values = metricValues(
+    metricsState.source,
+    {
+      found: tgState.foundToday, sent: tgState.sentToday,
+      total: tgState.sentTotal, limit: tgState.maxPerDay,
+    },
+    {
+      found: hhState.foundToday, sent: hhState.sentToday,
+      total: hhState.totalSent, limit: hhState.maxPerDay,
+    },
+  );
+  const put = (id, text) => {
+    const node = document.getElementById(id);
+    if (node) node.textContent = text;
+  };
+  put('mFound', values.found);
+  put('mSent', values.sent);
+  put('mTotal', values.total);
+  put('mSub', `из ${values.limit} в день`);
+  put('mFoundSub', metricsState.source === 'all' ? 'Telegram и hh.ru' : 'за сегодня');
+  const bar = document.getElementById('mBar');
+  if (bar) {
+    bar.style.width = values.limit > 0
+      ? Math.min(Math.round((values.sent / values.limit) * 100), 100) + '%'
+      : '0%';
+  }
 }
 
-function updateDashboard() {
-  const chanList = document.getElementById('dashChannelList');
-  const chanCount = document.getElementById('dashChannelCount');
-  if (chanList) fill(chanList, tgState.channels.map(ch => el('div', {
-    class: 'channel-row',
-    style: 'display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:12px',
-  }, [
-    el('span', { style: "font-family:'JetBrains Mono',monospace;font-weight:500", text: '@' + ch }),
-  ])));
-  if (chanCount) chanCount.textContent = tgState.channels.length;
-  const kwTags = document.getElementById('kwTags');
-  const exTags = document.getElementById('exTags');
-  if (kwTags) fill(kwTags, tgState.keywords.map(k => el('span', { class: 'tag tag-blue', text: k })));
-  if (exTags) fill(exTags, tgState.exclude.map(k => el('span', { class: 'tag tag-red', text: k })));
-}
 
 // ── TG Script control ─────────────────────────────────────────────────
 function setWorkerState(worker, state, lastError, canStart) {
@@ -593,9 +603,9 @@ function addChannel() {
   if (!val) return;
   if (tgState.channels.map(c => c.toLowerCase()).includes(val)) { showToast('Канал уже есть'); return; }
   tgState.channels.push(val); inp.value = '';
-  renderChannelEdit(); updateDashboard();
+  renderChannelEdit();
 }
-function removeChannel(i) { tgState.channels.splice(i, 1); renderChannelEdit(); updateDashboard(); }
+function removeChannel(i) { tgState.channels.splice(i, 1); renderChannelEdit(); }
 async function saveChannels() {
   if (!await patchCriteria({ channels: tgState.channels })) return;
   if (tgState.running) { showToast('Сохранено — перезапустите TG'); showRestartBanner(); }
@@ -612,7 +622,6 @@ function renderKeywords() {
     el('span', { text: k }),
     el('button', { class: 'btn-del', text: '×', onclick: () => removeEx(i) }),
   ])));
-  updateDashboard();
 }
 function addKw() { const v = document.getElementById('newKw').value.trim().toLowerCase(); if (!v) return; if (tgState.keywords.includes(v)) { showToast('Уже есть'); return; } tgState.keywords.push(v); document.getElementById('newKw').value = ''; renderKeywords(); }
 function removeKw(i) { tgState.keywords.splice(i, 1); renderKeywords(); }
@@ -622,7 +631,6 @@ async function saveKeywords() {
   if (!await patchCriteria({
     tg_keywords: tgState.keywords, tg_exclude: tgState.exclude,
   })) return;
-  updateDashboard();
   if (tgState.running) { showToast('Сохранено — перезапустите TG'); showRestartBanner(); }
   else showToast('Ключевые слова сохранены');
 }
@@ -1194,19 +1202,6 @@ function hhVacancyCard(v) {
   ]);
 }
 
-async function loadHHVacancies() {
-  const vacs = await apiGet('/found/hh');
-  const vacEl = document.getElementById('hhRecentVacancies');
-  if (!vacEl) return;
-  if (!vacs || !vacs.length) {
-    fill(vacEl, el('div', {
-      style: 'grid-column:1/-1;text-align:center;padding:16px;color:var(--muted);font-size:13px',
-      text: 'Вакансий пока нет',
-    }));
-    return;
-  }
-  fill(vacEl, vacs.slice(0, 4).map(v => el('div', { class: 'vac-card' }, [hhVacancyCard(v)])));
-}
 
 // ── Очередь найденного ────────────────────────────────────────────────
 const foundState = { source: 'tg', filter: 'new', rows: [] };
@@ -1548,9 +1543,7 @@ async function init() {
   updateTGButton();
   updateHHButton();
   updateMetrics();
-  updateDashboard();
   loadResumes();
-  loadHHVacancies();
   pollStatus();
 }
 
@@ -1641,6 +1634,7 @@ const ACTIONS = {
   addHHKw,
   addHHEx,
   addStep,
+  metricsSource,
   showLog,
   clearConsole,
   refreshLogs,
