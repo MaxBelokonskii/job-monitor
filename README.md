@@ -1,5 +1,7 @@
 # 🤖 Job Monitor v2.1.0
 
+[![tests](https://github.com/MaxBelokonskii/job-monitor/actions/workflows/tests.yml/badge.svg)](https://github.com/MaxBelokonskii/job-monitor/actions/workflows/tests.yml)
+
 ![GUI](docs/images/v2.0(Dashboard).png)
 
 > Автоматизированная система поиска вакансий и отправки откликов для Junior QA / стажёров  
