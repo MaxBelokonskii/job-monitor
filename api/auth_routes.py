@@ -21,15 +21,22 @@ class MessageRequest(BaseModel):
 
 @router.get("/status")
 async def auth_status() -> dict[str, Any]:
-    client = get_client()
+    """«Вошёл ли пользователь в Telegram» — всегда 200, даже когда нет.
+
+    `get_client()` раньше стоял ВНЕ `try`, хотя `try` заводился ровно под
+    этот отказ: без `TG_API_ID`/`TG_API_HASH` он бросает `RuntimeError`, и
+    роут отдавал 500. Состояние при этом не исключительное, а СТАРТОВОЕ —
+    у нового пользователя ключей ещё нет, он как раз пришёл их ввести.
+    Экран настроек показывал «Проверка…» навсегда и ронял ошибку в консоль
+    браузера вместо того, чтобы сказать «не авторизован» и открыть форму.
+    """
     try:
+        client = get_client()
         await client.connect()
         authorized = await client.is_user_authorized()
         return {"authorized": authorized}
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — «не смогли проверить» это тоже «не авторизован»
         return {"authorized": False, "error": str(e)}
-    finally:
-        pass  # singleton — не отключаем
 
 @router.post("/send-code")
 async def send_code(body: AuthRequest) -> dict[str, str]:

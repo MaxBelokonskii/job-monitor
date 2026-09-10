@@ -360,3 +360,31 @@ def test_no_auth_response_carries_the_telegram_credentials(client, monkeypatch, 
         assert planted_hash not in body
         assert "12345" not in body
         assert "api_hash" not in body
+
+
+def test_status_without_api_keys_is_not_a_server_error(client, monkeypatch) -> None:
+    """`get_client()` стоял ВНЕ `try`, хотя `try` заводился ровно под этот
+    отказ: без `TG_API_ID`/`TG_API_HASH` он бросает `RuntimeError`, и роут
+    отдавал 500.
+
+    Это состояние не исключительное, а стартовое: у нового пользователя
+    ключей ещё нет — он как раз пришёл в «Настройки» их ввести. Экран при
+    этом показывал «Проверка…» навсегда и ронял ошибку в консоль браузера,
+    вместо того чтобы сказать «не авторизован» и открыть форму входа.
+    """
+    from job_monitor import telegram_client
+
+    def no_keys():
+        raise RuntimeError("TG_API_ID и TG_API_HASH не заданы")
+
+    monkeypatch.setattr(telegram_client, "get_client", no_keys)
+    monkeypatch.setattr("api.auth_routes.get_client", no_keys)
+
+    reply = client.get("/api/auth/status")
+    assert reply.status_code == 200
+    body = reply.json()
+    assert body["authorized"] is False
+    assert "TG_API_ID" in body["error"], (
+        "причина должна доехать до интерфейса: без неё человек не поймёт, "
+        "что не хватает именно ключей"
+    )

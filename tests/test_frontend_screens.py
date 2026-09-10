@@ -597,3 +597,91 @@ def test_the_sent_screen_shows_manual_answers_too() -> None:
     прятать половину истории от человека, который её и создал."""
     source = _without_comments(_extract_function_source("loadSentHh"))
     assert "APPLIED_STATUSES" in source
+
+
+# ── Экран «Настройки» ─────────────────────────────────────────────────
+
+
+def test_the_settings_are_four_groups() -> None:
+    settings = _settings()
+    for group in ("settingsMode", "settingsAccess",
+                  "settingsResumes", "settingsAdvanced"):
+        assert f'id="{group}"' in settings, f"группа {group} не найдена"
+
+
+def test_the_settings_have_one_save_button() -> None:
+    settings = _settings()
+    assert settings.count('data-action="saveGlobalSettings"') == 1
+    for gone in ("saveTGSettings", "saveHHSettings"):
+        assert gone not in _index(), f"кнопка {gone} осталась"
+        assert gone not in _app(), f"обработчик {gone} остался"
+
+
+def test_the_telegram_login_card_is_named_after_what_it_does() -> None:
+    """«Авторизация чатов (session_web)» названа по файлу сессии, которого
+    в приложении больше нет: имя обещало то, чего не существует."""
+    index = _index()
+    assert "session_web" not in index
+    assert "Вход в Telegram" in index
+
+
+def test_no_tg_hh_dividers_are_left() -> None:
+    """Шесть разделителей «TG / HH» были следствием нарезки по источнику.
+    Источник теперь переключатель, делить пополам нечего."""
+    assert "section-split" not in _index()
+
+
+def test_the_safe_mode_label_covers_both_workers() -> None:
+    """Решение D17: один переключатель на оба воркера. Подпись, говорящая
+    только про Telegram, была бы прямой неправдой — hh.ru теперь тоже его
+    слушает."""
+    index = _index()
+    safe = index[index.index('id="toggleSafe"') - 900:index.index('id="toggleSafe"')]
+    assert "hh.ru" in safe, (
+        "подпись безопасного режима не говорит, что он действует и на hh.ru"
+    )
+
+
+@skip_without_node
+def test_an_emptied_limit_is_not_silently_replaced_with_a_default() -> None:
+    """Пин дефекта I4 в новой форме. У критерия «пусто» имеет смысл
+    («зарплата от» без числа = не важно), у лимита отправок — нет: он
+    существует, чтобы не забанили аккаунт, и выбрать его за человека
+    молча значит соврать ему о том, сколько сообщений уйдёт сегодня.
+    Пустое поле обязано уехать как null и получить 422 с объяснением."""
+    source = _extract_function_source("saveGlobalSettings")
+    script = """
+const fields = {
+  toggleSafe: { checked: true }, toggleHistory: { checked: false },
+  toggleTGAutostart: { checked: false }, toggleHHAutostart: { checked: false },
+  maxPerDay: { value: '' }, historyLimit: { value: '50' },
+  hhMaxPerDayInput: { value: '20' }, hhCheckInterval: { value: '30' },
+};
+global.document = { getElementById: id => fields[id] || null };
+const hhState = { seleniumSteps: [], running: false, maxPerDay: 20 };
+const tgState = { safeMode: true, running: false, maxPerDay: 25 };
+let __sent = null;
+async function apiPatch(path, body) { __sent = body; return { status: 'saved' }; }
+function configPatchOk(r) { return !!r && r.status === 'saved'; }
+function configErrorDetail() { return 'ошибка'; }
+function showToast() {}
+function updateStatusBar() {}
+function updateMetrics() {}
+function showRestartBanner() {}
+""" + source + """
+(async () => {
+  await saveGlobalSettings();
+  if (__sent.max_per_day !== null) {
+    console.error('очищенный лимит подменён значением', __sent.max_per_day);
+    process.exitCode = 1;
+  }
+  if (__sent.history_limit !== 50) {
+    console.error('заполненное поле не доехало', __sent.history_limit);
+    process.exitCode = 1;
+  }
+})();
+"""
+    result = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=10
+    )
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"

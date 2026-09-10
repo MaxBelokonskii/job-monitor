@@ -198,14 +198,19 @@ def test_markup_carries_the_converted_handlers() -> None:
     перечисленное имя присутствовало в разметке, а
     `test_every_handler_is_reachable` — чтобы в ACTIONS не осталось
     мёртвых записей.
+
+    `saveTGSettings` и `saveHHSettings` слились в `saveGlobalSettings` по
+    той же причине: критериев в них не осталось, обе патчили `/api/config`
+    одинаково, и две кнопки для одного запроса — это приглашение сохранить
+    половину.
     """
     expected = {
         "showAbout", "hideAbout", "toggleTG", "toggleHH",
         "reloadChat", "sendChatMessage",
         "addChannel", "addKw", "addEx", "saveCriteria",
         "pickFile",
-        "saveTGSettings", "saveApiKeys", "sendAuthCode", "verifyAuthCode",
-        "saveHHSettings", "addHHKw", "addHHEx", "addStep",
+        "saveGlobalSettings", "saveApiKeys", "sendAuthCode", "verifyAuthCode",
+        "addHHKw", "addHHEx", "addStep",
         "showLog", "clearConsole", "refreshLogs",
         "uploadResume",
     }

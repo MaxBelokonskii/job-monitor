@@ -806,22 +806,55 @@ async function loadSettings() {
   await checkWebAuth();
 }
 
-async function saveTGSettings() {
-  const data = {
-    safe_mode: document.getElementById('toggleSafe').checked,
-    parse_history: document.getElementById('toggleHistory').checked,
-    max_per_day: parseInt(document.getElementById('maxPerDay').value),
-    history_limit: parseInt(document.getElementById('historyLimit').value),
-    tg_autostart: document.getElementById('toggleTGAutostart').checked,
+async function saveGlobalSettings() {
+  // Пустое поле уезжает как null и получает 422 с объяснением — умолчание
+  // сюда НЕ подставляется. Это разница между лимитом и критерием: у
+  // критерия «пусто» имеет смысл («зарплата от» без числа значит «не
+  // важно», см. collectCriteria), а лимит существует, чтобы не забанили
+  // аккаунт, и выбрать его за человека молча — значит соврать ему о том,
+  // сколько сообщений уйдёт сегодня. Это пин дефекта I4: до него
+  // очищенное поле давало «сохранено» и не сохранялось.
+  const number = id => {
+    const node = document.getElementById(id);
+    const value = parseInt(node ? node.value : '', 10);
+    return Number.isNaN(value) ? null : value;
   };
-  const r = await apiPatch('/config', data);
-  if (!configPatchOk(r)) { showToast(configErrorDetail(r)); return; }
-  tgState.safeMode = data.safe_mode;
-  tgState.parseHistory = data.parse_history;
-  tgState.maxPerDay = data.max_per_day;
+  const checked = id => {
+    const node = document.getElementById(id);
+    return !!(node && node.checked);
+  };
+  const interval = number('hhCheckInterval');
+  const patch = {
+    safe_mode: checked('toggleSafe'),
+    parse_history: checked('toggleHistory'),
+    tg_autostart: checked('toggleTGAutostart'),
+    hh_autostart: checked('toggleHHAutostart'),
+    max_per_day: number('maxPerDay'),
+    history_limit: number('historyLimit'),
+    hh_max_per_day: number('hhMaxPerDayInput'),
+    // В поле минуты, в настройках секунды.
+    hh_check_interval: interval === null ? null : interval * 60,
+    hh_selenium_steps: hhState.seleniumSteps,
+  };
+  const reply = await apiPatch('/config', patch);
+  if (!configPatchOk(reply)) { showToast(configErrorDetail(reply)); return; }
+
+  tgState.safeMode = patch.safe_mode;
+  tgState.parseHistory = patch.parse_history;
+  tgState.maxPerDay = patch.max_per_day;
+  hhState.maxPerDay = patch.hh_max_per_day;
   updateMetrics();
-  if (tgState.running) { showToast('Сохранено — перезапустите TG'); showRestartBanner(); }
-  else showToast('TG настройки сохранены');
+  // Полоса состояния — единственное место, где написано, отправляет
+  // приложение что-нибудь наружу или нет. Она обязана перестать врать в
+  // тот же миг, а не через три секунды до следующего опроса.
+  updateStatusBar();
+
+  if (tgState.running || hhState.running) {
+    showToast('Сохранено — перезапустите воркеры');
+    showRestartBanner();
+  } else {
+    showToast('Настройки сохранены');
+  }
 }
 
 async function saveApiKeys() {
@@ -904,34 +937,6 @@ function removeHHKw(i) { hhState.keywords.splice(i, 1); renderHHKeywords(); }
 function addHHEx() { const v = document.getElementById('newHHEx').value.trim().toLowerCase(); if (!v || hhState.exclude.includes(v)) { if (v) showToast('Уже есть'); return; } hhState.exclude.push(v); document.getElementById('newHHEx').value = ''; renderHHKeywords(); }
 function removeHHEx(i) { hhState.exclude.splice(i, 1); renderHHKeywords(); }
 
-async function saveHHSettings() {
-  // Сохранение расходится по двум адресатам, потому что настройки теперь
-  // тоже двух видов: критерии поиска — в активный пресет, лимиты и
-  // расписание проверок — в глобальные настройки. Регион не отправляется
-  // вовсе: он константа приложения (решение D8).
-  const criteria = {
-    professions: hhState.keywords,
-    hh_exclude: hhState.exclude,
-    hh_experience: document.getElementById('hhExperience').value,
-    hh_salary_from: parseInt(document.getElementById('hhSalaryFrom').value) || 0,
-    hh_search_period: parseInt(document.getElementById('hhSearchPeriod').value),
-    hh_schedule: chosenCodes('hh-schedule'),
-    hh_employment: chosenCodes('hh-employment'),
-    hh_resume_id: document.getElementById('hhResumeId').value.trim(),
-    hh_cover_letter: document.getElementById('hhCoverLetter').value,
-  };
-  const global = {
-    hh_max_per_day: parseInt(document.getElementById('hhMaxPerDayInput').value),
-    hh_check_interval: parseInt(document.getElementById('hhCheckInterval').value) * 60,
-    hh_autostart: document.getElementById('toggleHHAutostart').checked,
-    hh_selenium_steps: hhState.seleniumSteps,
-  };
-  if (!await patchCriteria(criteria)) return;
-  const r = await apiPatch('/config', global);
-  if (!configPatchOk(r)) { showToast(configErrorDetail(r)); return; }
-  await loadPresets();
-  showToast('HH настройки сохранены');
-}
 
 // ── HH Login (L4: два вызова вместо блокирующего input()) ──────────────
 const HH_LOGIN_LABELS = {
@@ -1690,11 +1695,10 @@ const ACTIONS = {
   copyPreset,
   deletePreset,
   hhLoginCancel,
-  saveTGSettings,
+  saveGlobalSettings,
   saveApiKeys,
   sendAuthCode,
   verifyAuthCode,
-  saveHHSettings,
   addHHKw,
   addHHEx,
   addStep,

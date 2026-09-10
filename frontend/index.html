@@ -269,20 +269,64 @@
 
   <!-- НАСТРОЙКИ -->
   <div class="page" id="page-settings">
-    <div class="page-header"><div class="page-title">Настройки</div></div>
+    <div class="page-header">
+      <div class="page-title">Настройки</div>
+      <button class="btn btn-primary" data-action="saveGlobalSettings">Сохранить</button>
+    </div>
+    <p class="page-hint">
+      Здесь только то, что общее для всех пресетов. Что искать — на
+      «Обзоре», рядом с пресетом, к которому относится.
+    </p>
 
-    <!-- TG Settings -->
-    <div class="section-split">
-      <div class="section-split-label tg">
-        <svg viewBox="0 0 24 24" fill="none"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.289c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.17 13.617l-2.96-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.978.942z" fill="#2AABEE"/></svg>
-        Telegram
+    <div class="card" id="settingsMode">
+      <div class="card-title">Режим и лимиты</div>
+      <div class="toggle-row">
+        <div>Безопасный режим
+          <div class="toggle-desc">
+            Ищу вакансии и складываю в очередь, но ничего не отправляю —
+            ни в Telegram, ни на hh.ru. Отклик остаётся за вами, на экране
+            «Найдено».
+          </div>
+        </div>
+        <label class="toggle"><input type="checkbox" id="toggleSafe" checked><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
       </div>
-      <div class="section-split-line"></div>
-      <button class="btn btn-primary" style="font-size:12px" data-action="saveTGSettings">Сохранить TG</button>
+      <div class="toggle-row">
+        <div>Читать историю каналов
+          <div class="toggle-desc">При запуске просматривать прошлые сообщения, а не только новые</div>
+        </div>
+        <label class="toggle"><input type="checkbox" id="toggleHistory"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
+      </div>
+      <div class="toggle-row">
+        <div>Откликов в день, Telegram
+          <div class="toggle-desc">Защита от блокировки аккаунта: банят аккаунт, а не пресет</div>
+        </div>
+        <input type="number" id="maxPerDay" value="25" min="1" max="100" class="num-input">
+      </div>
+      <div class="toggle-row">
+        <div>Откликов в день, hh.ru</div>
+        <input type="number" id="hhMaxPerDayInput" value="20" min="1" max="50" class="num-input">
+      </div>
+      <div class="toggle-row">
+        <div>Сообщений из истории канала</div>
+        <input type="number" id="historyLimit" value="50" min="10" max="500" class="num-input">
+      </div>
+      <div class="toggle-row">
+        <div>Интервал проверки hh.ru, мин</div>
+        <input type="number" id="hhCheckInterval" value="30" min="10" max="240" class="num-input">
+      </div>
+      <div class="toggle-row">
+        <div>Автозапуск Telegram<div class="toggle-desc">Запускать воркер при старте приложения</div></div>
+        <label class="toggle"><input type="checkbox" id="toggleTGAutostart"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
+      </div>
+      <div class="toggle-row">
+        <div>Автозапуск hh.ru</div>
+        <label class="toggle"><input type="checkbox" id="toggleHHAutostart"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
+      </div>
     </div>
 
-    <div class="card">
-      <div class="card-title">Telegram API</div>
+    <div class="card" id="settingsAccess">
+      <div class="card-title">Доступы</div>
+      <div class="field-label">Ключи Telegram API</div>
       <div class="api-hint">
         <div class="api-hint-title">Как получить API ключи</div>
         <ol>
@@ -297,10 +341,8 @@
       <div style="display:flex;gap:8px;margin-top:4px">
         <button class="btn btn-primary" data-action="saveApiKeys">Сохранить ключи</button>
       </div>
-    </div>
 
-    <div class="card">
-      <div class="card-title">Авторизация чатов (session_web)</div>
+      <div class="field-label">Вход в Telegram</div>
       <div id="authStatus" style="font-size:13px;color:var(--muted);margin-bottom:10px">Проверка...</div>
       <div id="authForm" style="display:none">
         <div class="api-input-row"><label>Номер телефона</label><input class="api-input" type="text" id="authPhone" placeholder="+77001234567"></div>
@@ -314,71 +356,15 @@
           <button class="btn btn-primary" data-action="verifyAuthCode">Подтвердить</button>
         </div>
       </div>
+
+      <div class="field-label">Вход в hh.ru</div>
+      <div id="hhLoginStatus" style="font-size:13px;color:var(--muted);margin-bottom:10px"></div>
+      <div id="hhLoginButtons" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+      <button class="btn btn-secondary" id="btnHhLoginCancel" style="margin-top:8px"
+              data-action="hhLoginCancel">Закрыть окно входа</button>
     </div>
 
-    <div class="card">
-      <div class="card-title">Режим работы</div>
-      <div class="toggle-row">
-        <div>Safe Mode — Live Mode
-          <div class="toggle-desc">Safe = тестовый, не отправляет. Live = боевой режим</div>
-        </div>
-        <label class="toggle"><input type="checkbox" id="toggleSafe" checked><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
-      </div>
-      <div class="toggle-row">
-        <div>Parse History
-          <div class="toggle-desc">Читать историю каналов при запуске</div>
-        </div>
-        <label class="toggle"><input type="checkbox" id="toggleHistory"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
-      </div>
-      <div class="toggle-row">
-        <div>Автозапуск TG
-          <div class="toggle-desc">Запускать TG скрипт при старте приложения</div>
-        </div>
-        <label class="toggle"><input type="checkbox" id="toggleTGAutostart"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">Лимиты Telegram</div>
-      <div class="toggle-row">
-        <div>Макс. откликов в день<div class="toggle-desc">Защита от блокировки аккаунта</div></div>
-        <input type="number" id="maxPerDay" value="25" min="1" max="100" class="num-input">
-      </div>
-      <div class="toggle-row">
-        <div>История: кол-во сообщений<div class="toggle-desc">Сколько сообщений читать из каждого канала</div></div>
-        <input type="number" id="historyLimit" value="50" min="10" max="500" class="num-input">
-      </div>
-    </div>
-
-    <!-- HH Settings -->
-    <div class="section-split" style="margin-top:8px">
-      <div class="section-split-label hh">
-        <svg viewBox="0 0 40 20"><text x="0" y="17" font-family="Arial Black,sans-serif" font-weight="900" font-size="18" fill="#D6001C">hh</text></svg>
-        HH.ru
-      </div>
-      <div class="section-split-line"></div>
-      <button class="btn btn-primary" style="font-size:12px;background:var(--hh)" data-action="saveHHSettings">Сохранить HH</button>
-    </div>
-
-    <div class="two-col">
-      <div class="card">
-        <div class="card-title">Параметры HH</div>
-        <div class="toggle-row">
-          <div>Макс. откликов/день</div>
-          <input type="number" id="hhMaxPerDayInput" value="20" min="1" max="50" class="num-input">
-        </div>
-        <div class="toggle-row">
-          <div>Интервал проверки (мин)</div>
-          <input type="number" id="hhCheckInterval" value="30" min="10" max="240" class="num-input">
-        </div>
-        <div class="toggle-row">
-          <div>Автозапуск HH<div class="toggle-desc">Запускать HH при старте приложения</div></div>
-          <label class="toggle"><input type="checkbox" id="toggleHHAutostart"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
-        </div>
-      </div>
-    </div>
-
-    <div class="card" id="resumeLibrary">
+    <div class="card" id="settingsResumes">
       <div class="card-title">Библиотека резюме</div>
       <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
         Файлы лежат в каталоге данных, а не в каталоге проекта: в резюме
@@ -395,18 +381,9 @@
       <div id="resumeList" style="margin-top:10px"></div>
     </div>
 
-    <!-- HH Login (L4: вход без блокировки процесса, две отдельных кнопки вместо input()) -->
-    <div class="card">
-      <div class="card-title">Вход в hh.ru</div>
-      <div id="hhLoginStatus" style="font-size:13px;color:var(--muted);margin-bottom:10px"></div>
-      <div id="hhLoginButtons" style="display:flex;gap:8px;flex-wrap:wrap"></div>
-      <button class="btn btn-secondary" id="btnHhLoginCancel" style="margin-top:8px"
-              data-action="hhLoginCancel">Закрыть окно входа</button>
-    </div>
-
-    <!-- Selenium Steps Editor -->
-    <div class="card">
-      <div class="card-title">Редактор сценария автокликания (Selenium)</div>
+    <div class="card" id="settingsAdvanced">
+      <div class="card-title">Продвинутое</div>
+      <div class="field-label">Сценарий автокликания (Selenium)</div>
       <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Шаги выполняются после нажатия кнопки отклика на каждой вакансии</div>
       <div id="seleniumStepsList"></div>
       <div style="display:grid;grid-template-columns:auto 1fr 1fr auto;gap:8px;margin-top:12px;align-items:center">
@@ -423,27 +400,22 @@
         <input type="text" id="newStepValue" placeholder="Значение / текст / сек" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;font-family:'JetBrains Mono',monospace;background:var(--bg);color:var(--text);outline:none">
         <button class="btn btn-primary" style="font-size:12px;background:var(--hh)" data-action="addStep">+ Добавить</button>
       </div>
-    </div>
-    <div class="page-header">
-      <div class="page-title">Логи</div>
-      <div style="display:flex;gap:8px;align-items:center">
+
+      <div class="field-label">Журнал работы</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
         <div class="log-tabs">
           <button class="log-tab active-tg" id="logTabTG" data-action="showLog" data-arg="tg">Telegram</button>
-          <button class="log-tab" id="logTabHH" data-action="showLog" data-arg="hh">HH.ru</button>
+          <button class="log-tab" id="logTabHH" data-action="showLog" data-arg="hh">hh.ru</button>
         </div>
-        <button class="btn btn-secondary" data-action="clearConsole">Очистить</button>
+        <button class="btn btn-secondary" style="margin-left:auto" data-action="clearConsole">Очистить</button>
         <button class="btn btn-secondary" data-action="refreshLogs">↻ Обновить</button>
       </div>
-    </div>
-    <div class="card" style="padding:0;overflow:hidden">
       <div class="log-console" id="logConsole">
-        <span class="info">// Загрузка...</span>
+        <span class="info">// Ожидание данных...</span>
       </div>
     </div>
   </div>
-
 </div>
-
 
 <!-- About modal -->
 <div id="aboutModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;align-items:center;justify-content:center">
