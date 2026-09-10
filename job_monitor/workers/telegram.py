@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from job_monitor import statuses
 from job_monitor.criteria import SearchCriteria
 from job_monitor.db.repositories import EventsRepo, TgFoundRepo, TgRepo
 from job_monitor.settings import GlobalSettings
@@ -103,6 +104,24 @@ def render_template(
     )
 
 
+def counts_as_a_find(
+    post: IncomingPost, criteria: SearchCriteria, found_repo: TgFoundRepo
+) -> bool:
+    """Считать ли этот пост находкой для метрики «вакансий найдено».
+
+    Отдельная функция, а не два условия в адаптере Telethon: адаптеру
+    нужен живой клиент, поэтому проверить его в тесте нельзя, а свойство
+    здесь нетривиальное. Событие пишется ДО `process_post`, который сам
+    дедуплицирует пост, — без проверки на повтор пост, перечитанный на
+    следующем круге или пришедший повторным событием, считался бы
+    найденным заново, и за сутки метрика состояла бы из одной вакансии,
+    посчитанной сто раз.
+    """
+    if post_matches(post, criteria) is None:
+        return False
+    return not found_repo.exists(post.channel, post.message_id)
+
+
 async def process_post(
     post: IncomingPost,
     criteria: SearchCriteria,
@@ -136,14 +155,20 @@ async def process_post(
     # перечитанный на следующем круге или пришедший повторным событием,
     # обрабатывался заново — и человек получал второе сообщение.
     preview = post.text[:80].strip()
+    # Контакты пишутся в очередь, а не только используются для отправки:
+    # без них экран «Найдено» не может сказать, кому писать. Гранулярность
+    # статуса при этом — пост целиком, а не отдельный контакт: пост это
+    # единица находки, и решение «не подходит» принимается по вакансии, а
+    # не по человеку.
+    contacts = extract_usernames(post.text)
     first_time = found_repo.record(
-        post.channel, post.message_id, None, preview, keyword, clock()
+        post.channel, post.message_id, contacts, preview, keyword, clock()
     )
     if not first_time:
         return []
 
     if settings.safe_mode:
-        for username in extract_usernames(post.text):
+        for username in contacts:
             log.info("[SAFE MODE] найден контакт: %s", username)
         return []
     if not criteria.template:
@@ -154,7 +179,7 @@ async def process_post(
     text = render_template(criteria.template, post.channel, keyword, profession)
 
     sent: list[str] = []
-    for username in extract_usernames(post.text):
+    for username in contacts:
         # Лимит перечитывается из БД на каждой итерации: смена суток
         # обрабатывается сама собой, отдельная задача сброса не нужна.
         if repo.sent_on(clock().date()) >= settings.max_per_day:
@@ -168,6 +193,18 @@ async def process_post(
         repo.record_send(username, post.channel, post.text[:80].strip(), clock())
         sent.append(username)
         await asyncio.sleep(random.randint(settings.delay_min, settings.delay_max))
+
+    if sent:
+        # Пост, на который робот уже написал, не должен оставаться в
+        # очереди «новым»: человек увидел бы его как неотвеченный и написал
+        # бы тому же контакту второй раз. Если отправить не удалось никому
+        # (все контакты уже написаны раньше, либо ни один не прошёл отбор),
+        # статус остаётся «новая» — робот ничего не решил, значит решать
+        # человеку. «Пропущено» здесь было бы неправдой: это слово робота о
+        # вакансии, которую он рассмотрел и отверг.
+        found_repo.set_post_status(
+            post.channel, post.message_id, statuses.AUTO_APPLIED, clock()
+        )
     return sent
 
 
@@ -236,8 +273,10 @@ async def run_worker() -> None:
         )
         settings = load_settings(conn)
         criteria = active_criteria(conn)
-        if post_matches(post, criteria) is not None:
-            # Метрика «вакансий найдено» берётся отсюда, а не из текста логов (L2).
+        # Метрика «вакансий найдено» берётся отсюда, а не из текста логов (L2).
+        # Правило «что считать находкой» живёт в `counts_as_a_find`, потому
+        # что здесь его не проверить: адаптеру нужен живой Telethon.
+        if counts_as_a_find(post, criteria, found_repo):
             EventsRepo(conn).add("tg", "vacancy", post.text[:80].strip(), datetime.now())
         for username in await process_post(
             post,

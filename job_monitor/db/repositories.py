@@ -620,6 +620,23 @@ class TgFoundRepo:
             )
         return cursor.rowcount == 1
 
+    def set_post_status(
+        self, channel: str, message_id: int, status: str, now: datetime
+    ) -> bool:
+        """Смена статуса по паре (канал, сообщение), а не по `id`.
+
+        Воркер знает пост именно этой парой — она же и есть ключ
+        уникальности таблицы. Просить у него `id` означало бы лишний SELECT
+        ровно затем, чтобы тут же сделать UPDATE.
+        """
+        with transaction(self._conn):
+            cursor = self._conn.execute(
+                "UPDATE tg_found SET status = ?, status_at = ?"
+                " WHERE channel = ? AND message_id = ?",
+                (status, now.isoformat(timespec="seconds"), channel, message_id),
+            )
+        return cursor.rowcount == 1
+
     def list(
         self, *, decided: bool | None = None, limit: int = 50, offset: int = 0
     ) -> list[dict]:

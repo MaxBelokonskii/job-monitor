@@ -158,11 +158,12 @@ async def test_a_send_after_midnight_is_dated_today_not_yesterday(conn, criteria
     """
     before_midnight = datetime(2026, 9, 8, 23, 59, 30)
     after_midnight = datetime(2026, 9, 9, 0, 0, 30)
-    # Пять тиков, а не четыре: первый уходит на запись поста в `tg_found`
-    # (время находки), остальные четыре — по два на каждую отправку.
+    # Шесть тиков: первый — запись поста в `tg_found` (время находки), затем
+    # по два на каждую отправку (проверка лимита и `record_send`), и
+    # последний — отметка «отклик отправлен» на самом посте.
     ticks = iter([
         before_midnight, before_midnight, before_midnight,
-        after_midnight, after_midnight,
+        after_midnight, after_midnight, after_midnight,
     ])
 
     repo, sender = TgRepo(conn), Sender()
@@ -177,3 +178,97 @@ async def test_a_send_after_midnight_is_dated_today_not_yesterday(conn, criteria
     assert repo.sent_on(date(2026, 9, 9)) == 1, (
         "вторая отправка случилась после полуночи и обязана считаться сегодняшней"
     )
+
+
+# ── Очередь найденного ────────────────────────────────────────────────
+
+
+async def test_the_post_lands_in_the_queue_with_its_contacts(conn, criteria, settings):
+    """Колонка контактов до этой задачи всегда была пуста: таблица
+    заводилась на запись, и `process_post` передавал туда `None`. Для
+    очереди контакт нужен — иначе непонятно, кому писать."""
+    from job_monitor import statuses
+
+    repo, sender = TgRepo(conn), Sender()
+    post = IncomingPost("itvacancykz", "Нужен QA, пишите @hr_anna или @lead_qa", 21)
+    await call(post, criteria, GlobalSettings(safe_mode=True), repo, conn, sender, FROZEN)
+
+    row = TgFoundRepo(conn).list()[0]
+    assert row["usernames"] == ["@hr_anna", "@lead_qa"]
+    assert row["matched_keyword"] == "qa"
+    assert row["status"] == statuses.NEW
+
+
+async def test_safe_mode_leaves_the_post_new(conn, criteria):
+    """Смысл безопасного режима: пост попал в очередь и ждёт человека."""
+    from job_monitor import statuses
+
+    repo, sender = TgRepo(conn), Sender()
+    post = IncomingPost("itvacancykz", "Нужен QA, пишите @hr_anna", 22)
+    sent = await call(
+        post, criteria, GlobalSettings(safe_mode=True), repo, conn, sender, FROZEN
+    )
+
+    assert sent == []
+    assert sender.sent == []
+    assert TgFoundRepo(conn).list()[0]["status"] == statuses.NEW
+
+
+async def test_a_sent_post_is_marked_as_answered_by_the_robot(conn, criteria, settings):
+    """Без этого пост, на который робот уже написал, остался бы в очереди
+    «новым» — и человек написал бы тому же контакту второй раз."""
+    from job_monitor import statuses
+
+    repo, sender = TgRepo(conn), Sender()
+    post = IncomingPost("itvacancykz", "Нужен QA, пишите @hr_anna", 23)
+    await call(post, criteria, settings, repo, conn, sender, FROZEN)
+
+    assert sender.sent == ["@hr_anna"]
+    row = TgFoundRepo(conn).list()[0]
+    assert row["status"] == statuses.AUTO_APPLIED
+    assert row["status_at"] == NOW.isoformat(timespec="seconds")
+
+
+async def test_a_post_nobody_could_be_written_to_stays_new(conn, criteria, settings):
+    """Все контакты уже написаны раньше — робот ничего не решил, значит
+    решать человеку. «Пропущено» здесь было бы неправдой: это слово робота
+    о вакансии, которую он рассмотрел и отверг."""
+    from job_monitor import statuses
+
+    repo, sender = TgRepo(conn), Sender()
+    repo.ensure_contact("@hr_anna", datetime(2026, 9, 1, 12, 0, 0))
+    post = IncomingPost("itvacancykz", "Нужен QA, пишите @hr_anna", 24)
+
+    sent = await call(post, criteria, settings, repo, conn, sender, FROZEN)
+
+    assert sent == []
+    assert sender.sent == []
+    assert TgFoundRepo(conn).list()[0]["status"] == statuses.NEW, (
+        "робот ничего не решил — статус не его дело"
+    )
+
+
+async def test_a_repeated_post_is_not_counted_as_a_second_find(conn, criteria, settings):
+    """Метрика «вакансий найдено» пишется ДО `process_post`, который сам
+    дедуплицирует пост. Без проверки на повтор один и тот же пост,
+    перечитанный на следующем круге, считался бы находкой каждый раз — и за
+    сутки метрика состояла бы из одной вакансии, посчитанной сто раз."""
+    from job_monitor.workers.telegram import counts_as_a_find
+
+    found_repo = TgFoundRepo(conn)
+    post = IncomingPost("itvacancykz", "Нужен QA, пишите @hr_anna", 31)
+
+    assert counts_as_a_find(post, criteria, found_repo) is True
+
+    await call(post, criteria, settings, TgRepo(conn), conn, Sender(), FROZEN)
+
+    assert counts_as_a_find(post, criteria, found_repo) is False
+
+
+async def test_a_post_that_does_not_match_is_never_a_find(conn, criteria):
+    """Обратная сторона: проверка на повтор не должна подменить собой
+    проверку на совпадение — иначе в метрику попал бы любой пост канала."""
+    from job_monitor.workers.telegram import counts_as_a_find
+
+    off_topic = IncomingPost("itvacancykz", "Продам гараж, @seller", 32)
+    assert counts_as_a_find(off_topic, criteria, TgFoundRepo(conn)) is False
