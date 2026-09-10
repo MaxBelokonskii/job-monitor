@@ -560,3 +560,40 @@ check('пустая зарплата', empty.hh_salary_from, 0);
         ["node", "-e", script], capture_output=True, text=True, timeout=10
     )
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+
+# ── Экран «Отправлено» ────────────────────────────────────────────────
+
+
+def _sent() -> str:
+    index = _index()
+    return index[index.index('id="page-sent"'):index.index('id="page-settings"')]
+
+
+def test_the_sent_screen_switches_between_sources() -> None:
+    sent = _sent()
+    assert 'data-action="sentSource"' in sent
+    assert 'id="sentTg"' in sent
+    assert 'id="sentHh"' in sent
+
+
+def test_the_applied_vocabulary_matches_the_backend() -> None:
+    """Список «что считать отправленным» есть и на бэкенде, и здесь. Два
+    списка, которые разошлись, — это пустой экран «Отправлено» при полной
+    базе откликов."""
+    from job_monitor import statuses
+
+    match = re.search(r"const APPLIED_STATUSES = \[(.*?)\];", _app(), re.DOTALL)
+    assert match, "APPLIED_STATUSES не найдена в app.js"
+    known = set(re.findall(r"['\"]([^'\"]+)['\"]", match.group(1)))
+    assert known == set(statuses.APPLIED), (
+        f"фронтенд считает отправленным {sorted(known)}, "
+        f"бэкенд — {sorted(statuses.APPLIED)}"
+    )
+
+
+def test_the_sent_screen_shows_manual_answers_too() -> None:
+    """Ручной отклик — тоже отклик. Показывать только робота значило бы
+    прятать половину истории от человека, который её и создал."""
+    source = _without_comments(_extract_function_source("loadSentHh"))
+    assert "APPLIED_STATUSES" in source

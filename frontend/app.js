@@ -1328,6 +1328,37 @@ const foundApply = key => patchFound(key, 'откликнулся сам');
 const foundDismiss = key => patchFound(key, 'не подходит');
 const foundReopen = key => patchFound(key, 'новая');
 
+// ── Отправленное ──────────────────────────────────────────────────────
+// Что считать отправленным. Зеркалит job_monitor/statuses.py::APPLIED;
+// tests/test_frontend_screens.py сторожит, что списки не разошлись —
+// разойдись они, экран был бы пуст при полной базе откликов.
+const APPLIED_STATUSES = ['отклик отправлен', 'откликнулся сам'];
+
+function sentSource(source) {
+  setSegActive('sentSource', source);
+  const tg = document.getElementById('sentTg');
+  const hh = document.getElementById('sentHh');
+  if (tg) tg.style.display = source === 'tg' ? '' : 'none';
+  if (hh) hh.style.display = source === 'hh' ? '' : 'none';
+  return source === 'tg' ? renderChats() : loadSentHh();
+}
+
+async function loadSentHh() {
+  const rows = await apiGet('/found/hh?status=decided');
+  const box = document.getElementById('sentHhList');
+  if (!box) return;
+  // Ручной отклик — тоже отклик: показывать только роботный значило бы
+  // прятать от человека половину его собственной истории. Отсюда же и
+  // фильтр: «решённые» включают «не подходит», а это не отправка.
+  const applied = (Array.isArray(rows) ? rows : [])
+    .filter(row => APPLIED_STATUSES.includes(row.status));
+  if (!applied.length) {
+    fill(box, el('div', { class: 'found-empty', text: 'Откликов пока нет' }));
+    return;
+  }
+  fill(box, applied.map(row => el('div', { class: 'found-row' }, [hhVacancyCard(row)])));
+}
+
 // ── Logs ──────────────────────────────────────────────────────────────
 let currentLogType = 'tg';
 
@@ -1668,6 +1699,7 @@ const ACTIONS = {
   addHHEx,
   addStep,
   metricsSource,
+  sentSource,
   showLog,
   clearConsole,
   refreshLogs,
