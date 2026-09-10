@@ -145,6 +145,7 @@ api/                    (пакет верхнего уровня, не подп
   main.py               сборка FastAPI, middleware, lifespan
   config_routes.py      tg_routes.py  hh_routes.py  auth_routes.py  routes_state.py
   presets_routes.py     dictionaries_routes.py  resumes_routes.py
+  found_routes.py
 frontend/               index.html, app.js, style.css
 tests/                  pytest
 docs/superpowers/       specs/ и plans/

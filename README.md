@@ -119,7 +119,8 @@ JobMonitor/
 │   ├── routes_state.py         # /api/state — агрегированное состояние дашборда
 │   ├── presets_routes.py       # /api/presets — пресеты поиска
 │   ├── dictionaries_routes.py  # /api/dictionaries — справочники hh.ru
-│   └── resumes_routes.py       # /api/resumes — библиотека резюме
+│   ├── resumes_routes.py       # /api/resumes — библиотека резюме
+│   └── found_routes.py         # /api/found — очередь найденного и ручные статусы
 ├── job_monitor/                # Пакет приложения
 │   ├── paths.py                # Каталог данных, все пути к состоянию
 │   ├── security.py             # Токен приложения, проверка Host, CSP
