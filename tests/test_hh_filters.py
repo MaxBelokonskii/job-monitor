@@ -148,7 +148,7 @@ def test_an_empty_exclude_list_drops_nothing():
 def test_the_vacancy_id_comes_from_the_url_without_query(monkeypatch):
     """Соседний инвариант, который иначе некому проверить: ключ дедупа.
 
-    `HhRepo.exists()`/`upsert()` ждут `vacancy_id`; ошибись здесь — и
+    `HhRepo.is_decided()`/`record_found()` ждут `vacancy_id`; ошибись здесь — и
     приложение начнёт откликаться на одни и те же вакансии по кругу.
     """
     driver = FakeSearchDriver([_vacancy_card("QA", "987654")])

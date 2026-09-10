@@ -134,11 +134,6 @@ async def hh_login_cancel() -> dict:
     return {"state": login.state.value}
 
 
-@router.get("/vacancies")
-async def hh_vacancies() -> list[dict]:
-    return HhRepo(get_connection()).recent(50)
-
-
 @router.get("/logs")
 async def hh_logs(lines: int = 100) -> dict[str, str]:
     return {"log": get_hh_log(lines)}

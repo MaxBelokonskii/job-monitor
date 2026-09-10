@@ -136,3 +136,59 @@ def test_a_preset_can_point_at_an_uploaded_resume(client) -> None:
         f"/api/presets/{active}", json={"resume_id": resume_id}
     ).status_code == 200
     assert client.get(f"/api/presets/{active}").json()["criteria"]["resume_id"] == resume_id
+
+
+# ── M-3: файл и строка появляются и исчезают вместе ───────────────────
+
+
+def test_a_failed_insert_leaves_no_orphan_file(client, monkeypatch) -> None:
+    """M-3: файл писался до вставки строки. Отказ вставки оставлял его в
+    каталоге навсегда — в списке его нет, удалить из интерфейса нечем."""
+    import sqlite3
+
+    from job_monitor import paths
+    from job_monitor.db import repositories
+
+    def boom(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(repositories.ResumesRepo, "add", boom)
+
+    before = set(paths.resume_dir().iterdir())
+    with pytest.raises(sqlite3.OperationalError):
+        client.post(
+            "/api/resumes", content=b"%PDF-1.4 fake", headers={"X-Filename": "cv.pdf"}
+        )
+
+    assert set(paths.resume_dir().iterdir()) == before, (
+        "файл остался в каталоге, а строки в базе нет — удалить его из "
+        "интерфейса невозможно"
+    )
+
+
+def test_a_failed_row_delete_keeps_the_file(client, monkeypatch) -> None:
+    """Зеркальная половина: файл стирался ДО строки, поэтому отказ на
+    удалении строки оставлял запись, указывающую в пустоту."""
+    import sqlite3
+
+    from job_monitor import resume_store
+    from job_monitor.db import repositories
+
+    created = client.post(
+        "/api/resumes", content=b"%PDF-1.4 fake", headers={"X-Filename": "cv.pdf"}
+    ).json()
+
+    def boom(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(repositories.ResumesRepo, "delete", boom)
+    with pytest.raises(sqlite3.OperationalError):
+        client.delete(f"/api/resumes/{created['id']}")
+
+    row = next(
+        item for item in client.get("/api/resumes").json() if item["id"] == created["id"]
+    )
+    assert resume_store.path_of(row["stored_name"]).exists(), (
+        "строка осталась, а файл стёрт — скачивание такой записи даёт 404 "
+        "без единого способа починить"
+    )

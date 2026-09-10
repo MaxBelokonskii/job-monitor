@@ -4,7 +4,7 @@
 `parse_steps` бросает `ValueError` внутри `apply_to_vacancy`; `_process_one`
 обязан поймать его, записать событие в `worker_events`, пометить вакансию
 отдельным статусом (не HH_STATUS_APPLIED) и вернуть False, не подняв
-исключение дальше. А дедуп в `_blocking_loop` (через `repo.exists()`) не
+исключение дальше. А дедуп в `_blocking_loop` (через `repo.is_decided()`) не
 должен снова кликать по той же вакансии, пока сценарий не поправят.
 
 Второе свойство проверяется на НАСТОЯЩЕМ `_blocking_loop`. Прежняя версия
@@ -100,7 +100,11 @@ def broken_scenario_loop(monkeypatch):
     между вакансиями.
     """
     conn = connect(":memory:")
-    settings = GlobalSettings(hh_delay_min=1, hh_delay_max=1)
+    # `safe_mode=False` теперь обязателен явно: с решения D17 безопасный
+    # режим действует и на hh.ru, а по умолчанию он ВКЛЮЧЁН — воркер в нём
+    # только собирает и до `apply_to_vacancy` не доходит вовсе. Этот тест
+    # про сломанный сценарий отклика, значит отклик должен быть разрешён.
+    settings = GlobalSettings(hh_delay_min=1, hh_delay_max=1, safe_mode=False)
     SettingsRepo(conn).save(settings.model_dump())
     # Профессии переехали в пресет: две — чтобы цикл прошёл по одной и той же
     # вакансии дважды и дедуп было на чём проверить.
@@ -163,7 +167,7 @@ def broken_scenario_loop(monkeypatch):
 
 
 def test_the_loop_clicks_a_broken_vacancy_once_and_then_skips_it(broken_scenario_loop):
-    """Дедуп `repo.exists()` живёт в `_blocking_loop`, до вызова
+    """Дедуп `repo.is_decided()` живёт в `_blocking_loop`, до вызова
     `_process_one`. Первый провал уже записан в базу, поэтому второй проход
     по той же вакансии обязан пропустить её целиком: ни повторного клика по
     «Откликнуться» на живом hh.ru, ни второй записи в worker_events."""
@@ -177,8 +181,11 @@ def test_the_loop_clicks_a_broken_vacancy_once_and_then_skips_it(broken_scenario
     events = conn.execute(
         "SELECT kind, detail FROM worker_events WHERE worker = 'hh'"
     ).fetchall()
-    assert [row["kind"] for row in events] == ["steps_invalid"]
-    assert events[0]["detail"] == "неизвестный тип шага: 'execute_script'"
+    # `found` идёт первым: цикл кладёт вакансию в очередь в момент находки,
+    # до всякой попытки отклика. Обоих событий ровно по одному — второй
+    # проход по той же вакансии не должен ни кликать, ни писать в журнал.
+    assert [row["kind"] for row in events] == ["found", "steps_invalid"]
+    assert events[1]["detail"] == "неизвестный тип шага: 'execute_script'"
 
     stored = HhRepo(conn).recent(10)
     assert len(stored) == 1

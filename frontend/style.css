@@ -263,7 +263,6 @@ body { font-family: 'Manrope', sans-serif; background: var(--bg); color: var(--t
 .msg-wrap.in { align-items: flex-start; }
 
 /* ── HH vacancies ──────────────────────────────────────────────────── */
-.vac-card { background: var(--card-bg); border: 1px solid var(--border); border-left: 3px solid var(--hh); border-radius: var(--radius); padding: 12px; box-shadow: var(--shadow); }
 .status-badge { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 10px; font-weight: 600; }
 .status-sent { background: var(--green-light); color: var(--green-text); }
 .status-skip { background: var(--bg); color: var(--muted); border: 1px solid var(--border); }
@@ -304,3 +303,49 @@ body { font-family: 'Manrope', sans-serif; background: var(--bg); color: var(--t
 .resume-row:last-child { border-bottom: none; }
 .resume-name { flex: 1; word-break: break-all; }
 .resume-row.chosen .resume-name { font-weight: 700; color: var(--accent); }
+
+/* ── Полоса состояния ─────────────────────────────────────────────── */
+.statusbar { display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  padding: 8px 22px; background: var(--sidebar-bg); border-bottom: 1px solid var(--border);
+  font-size: 12px; color: var(--text); flex-shrink: 0; }
+.statusbar-item { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.statusbar-mode { font-weight: 600; }
+.statusbar-preset { margin-left: auto; color: var(--muted); }
+
+/* ── Переключатели и очередь найденного ───────────────────────────── */
+.seg { display: inline-flex; gap: 2px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 2px; }
+.seg-btn { padding: 5px 12px; border: none; background: none; border-radius: 4px;
+  font-size: 12.5px; font-weight: 600; font-family: 'Manrope', sans-serif;
+  color: var(--muted); cursor: pointer; }
+.seg-btn.active { background: var(--card-bg); color: var(--text); box-shadow: var(--shadow); }
+.seg-quiet { align-self: flex-start; }
+
+.found-row { display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px;
+  border-bottom: 1px solid var(--border); }
+.found-row:last-child { border-bottom: none; }
+.found-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.found-title { font-size: 13px; font-weight: 600; }
+.found-meta { font-size: 11px; color: var(--muted); }
+.found-link { font-size: 11px; color: var(--accent); text-decoration: none; }
+.found-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
+.found-empty { padding: 24px; text-align: center; color: var(--muted); font-size: 13px; }
+
+.worker-bar { display: flex; gap: 10px; flex-wrap: wrap; }
+
+/* ── Поля критериев ───────────────────────────────────────────────── */
+.field-label { font-size: 11px; font-weight: 600; color: var(--muted);
+  margin: 14px 0 5px; }
+.field-label:first-of-type { margin-top: 0; }
+.field-hint { font-size: 11px; color: var(--muted); margin: -2px 0 6px; line-height: 1.4; }
+.field-hint-inline { font-weight: 400; text-transform: none; letter-spacing: 0; }
+.field-select { width: 100%; padding: 6px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); font-size: 12px; background: var(--bg); color: var(--text); }
+.choice-box { display: flex; gap: 12px; flex-wrap: wrap; }
+
+/* ── Экран «Отправлено» ───────────────────────────────────────────── */
+.sent-pane { flex: 1; min-height: 0; }
+.chat-layout { display: flex; height: calc(100vh - 170px); overflow: hidden;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--card-bg); }
+
+.page-hint { font-size: 12px; color: var(--muted); margin: -6px 0 4px; line-height: 1.5; }

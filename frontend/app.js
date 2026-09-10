@@ -5,6 +5,13 @@ const APP_TOKEN = document.querySelector('meta[name="app-token"]').content;
 function el(tag, props = {}, children = []) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(props)) {
+    // `null`/`undefined` — это «атрибута нет», как `null` среди детей это
+    // «узла нет». Без этой строки `setAttribute` записывал строку "null",
+    // и для булева атрибута присутствие оказывалось истиной: чип
+    // НЕАКТИВНОГО пресета получал `disabled="null"` и блокировался
+    // наравне с активным — переключить пресет кликом было нельзя вовсе.
+    // Найдено в браузере; ни один тест этого не показывал.
+    if (value === null || value === undefined) continue;
     if (key === 'class') node.className = value;
     else if (key === 'text') node.textContent = value;
     else if (key === 'style') node.style.cssText = value;
@@ -117,7 +124,9 @@ function configErrorDetail(r) {
 // только глобальное (лимиты, задержки, безопасный режим). Патч критерия,
 // отправленный на /config, теперь отвергается с 422 — поэтому все экраны
 // критериев ходят через `patchCriteria`.
-const presetState = { list: [], activeId: null, criteria: {} };
+// `loadedId` — чей набор критериев сейчас лежит в форме. Отличается от
+// `activeId` ровно между переключением пресета и перечитыванием полей.
+const presetState = { list: [], activeId: null, loadedId: null, criteria: {} };
 let dictionaries = null;
 
 async function patchCriteria(patch) {
@@ -161,6 +170,9 @@ function renderPresetBar() {
       'data-arg': String(preset.id),
     }),
   ])));
+  // Активный пресет назван и в полосе состояния — она обязана меняться
+  // вместе с этим списком, а не через три секунды до следующего опроса.
+  updateStatusBar();
 }
 
 async function activatePreset(id) {
@@ -175,7 +187,14 @@ async function activatePreset(id) {
   }
   const stopped = (r.stopped || []).join(', ');
   showToast(stopped ? `Пресет переключён, остановлено: ${stopped}` : 'Пресет переключён');
+  // Порядок обязателен: `loadPresets()` обновляет `activeId`, и только
+  // после этого `loadActiveCriteria()` видит, что пресет сменился, и
+  // перечитывает поля. Без второй строки в форме остаются значения
+  // ПРЕДЫДУЩЕГО пресета — чипы живут НА «Обзоре», перехода между
+  // экранами не случается, — и «Сохранить критерии» запишет их поверх
+  // нового, уничтожив его настройку без единого предупреждения.
   await loadPresets();
+  await loadActiveCriteria();
   await loadSettings();
 }
 
@@ -251,6 +270,22 @@ const hhState = {
 };
 
 // ── Navigation ────────────────────────────────────────────────────────
+// Что подгрузить при открытии экрана. Единственное место, где это
+// решается: раньше это была лестница из шести `if (page === ...)`, куда
+// новый экран забывали дописать — и он открывался пустым, без ошибки.
+const PAGE_LOADERS = {
+  overview: async () => { await loadActiveCriteria(); },
+  found: async () => { await loadFound(); },
+  // Через выбранный источник, а не всегда через Telegram: панель
+  // остаётся видимой между заходами, и обновление скрытой соседней
+  // оставляло бы на экране старые данные.
+  sent: async () => { await sentSource(sentState.source); },
+  settings: async () => {
+    await loadSettings();
+    refreshLogs();
+  },
+};
+
 document.querySelectorAll('.nav-item[data-page]').forEach(item => {
   item.addEventListener('click', async () => {
     const page = item.dataset.page;
@@ -258,16 +293,50 @@ document.querySelectorAll('.nav-item[data-page]').forEach(item => {
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
     document.getElementById('page-' + page).classList.add('active');
     item.classList.add('active');
-    if (page === 'channels') renderChannelEdit();
-    if (page === 'keywords') renderKeywords();
-    if (page === 'template') {
-      document.getElementById('templateText').value = tgState.template;
-    }
-    if (page === 'settings') await loadSettings();
-    if (page === 'logs') refreshLogs();
-    if (page === 'chats') await renderChats();
+    const load = PAGE_LOADERS[page];
+    if (load) await load();
   });
 });
+
+// ── Полоса состояния ──────────────────────────────────────────────────
+// Состояние воркеров, режим и активный пресет были разбросаны по дашборду
+// и настройкам, а смысл безопасного режима не написан нигде: только
+// галочка, до которой надо дойти и вспомнить, что она значит.
+const WORKER_STATE_WORDS = {
+  stopped: 'остановлен',
+  starting: 'запускается',
+  running: 'работает',
+  stopping: 'останавливается',
+  error: 'ошибка',
+};
+
+function workerWord(state) {
+  return WORKER_STATE_WORDS[state] || WORKER_STATE_WORDS.stopped;
+}
+
+function safeModeWords(on) {
+  return on
+    ? 'Безопасный режим: собираю, не отправляю'
+    : 'Отправка включена';
+}
+
+function updateStatusBar() {
+  const rows = [
+    ['sbDotTG', 'sbTG', tgState, 'Telegram'],
+    ['sbDotHH', 'sbHH', hhState, 'hh.ru'],
+  ];
+  for (const [dotId, textId, worker, name] of rows) {
+    const dot = document.getElementById(dotId);
+    const label = document.getElementById(textId);
+    if (dot) dot.className = 'status-dot ' + workerView(worker.state, name, worker.canStart).dot;
+    if (label) label.textContent = `${name}: ${workerWord(worker.state)}`;
+  }
+  const mode = document.getElementById('sbMode');
+  if (mode) mode.textContent = safeModeWords(tgState.safeMode);
+  const preset = document.getElementById('sbPreset');
+  const active = presetState.list.find(item => item.is_active);
+  if (preset) preset.textContent = active ? `Пресет: ${active.name}` : 'Пресет не выбран';
+}
 
 // ── Worker status UI ──────────────────────────────────────────────────
 // A worker is not simply running-or-not. `error` means its task either
@@ -349,55 +418,67 @@ function updateWorkerButton(worker, name, btnId, dotId, alertId, toggleClass) {
 
 function updateTGButton() {
   updateWorkerButton(tgState, 'TG', 'btnToggleTG', 'dotTG', 'tgWorkerAlert', 'btn-toggle-tg');
+  updateStatusBar();
 }
 
 function updateHHButton() {
   updateWorkerButton(hhState, 'HH', 'btnToggleHH', 'dotHH', 'hhWorkerAlert', 'btn-toggle-hh');
+  updateStatusBar();
+}
+
+// ── Метрики ───────────────────────────────────────────────────────────
+const metricsState = { source: 'all' };
+
+// Чистая функция от трёх аргументов, а не от модульного состояния: только
+// так её можно исполнить в тесте. «Все» — это сумма обоих источников;
+// ошибка здесь не видна глазом, потому что цифра выглядит правдоподобной
+// ровно до того дня, когда второй воркер что-то нашёл.
+function metricValues(source, tg, hh) {
+  if (source === 'tg') return tg;
+  if (source === 'hh') return hh;
+  return {
+    found: tg.found + hh.found,
+    sent: tg.sent + hh.sent,
+    total: tg.total + hh.total,
+    limit: tg.limit + hh.limit,
+  };
+}
+
+function metricsSource(source) {
+  metricsState.source = source;
+  setSegActive('metricsSource', source);
+  updateMetrics();
 }
 
 function updateMetrics() {
-  // TG
-  const tgSent = document.getElementById('tgSentToday');
-  const tgFound = document.getElementById('tgFoundToday');
-  const tgTotal = document.getElementById('tgSentTotal');
-  const tgBar = document.getElementById('tgMetricBar');
-  const tgSub = document.getElementById('tgMetricSub');
-  if (tgSent) tgSent.textContent = tgState.sentToday;
-  if (tgFound) tgFound.textContent = tgState.foundToday;
-  if (tgTotal) tgTotal.textContent = tgState.sentTotal;
-  if (tgBar) tgBar.style.width = tgState.maxPerDay > 0
-    ? Math.min(Math.round((tgState.sentToday / tgState.maxPerDay) * 100), 100) + '%' : '0%';
-  if (tgSub) tgSub.textContent = `из ${tgState.maxPerDay} в день`;
-
-  // HH
-  const hhSent = document.getElementById('hhSentToday');
-  const hhFound = document.getElementById('hhFoundToday');
-  const hhTotal = document.getElementById('hhTotalSent');
-  const hhBar = document.getElementById('hhMetricBar');
-  const hhSub = document.getElementById('hhMetricSub');
-  if (hhSent) hhSent.textContent = hhState.sentToday;
-  if (hhFound) hhFound.textContent = hhState.foundToday;
-  if (hhTotal) hhTotal.textContent = hhState.totalSent;
-  if (hhBar) hhBar.style.width = hhState.maxPerDay > 0
-    ? Math.min(Math.round((hhState.sentToday / hhState.maxPerDay) * 100), 100) + '%' : '0%';
-  if (hhSub) hhSub.textContent = `из ${hhState.maxPerDay} в день`;
+  const values = metricValues(
+    metricsState.source,
+    {
+      found: tgState.foundToday, sent: tgState.sentToday,
+      total: tgState.sentTotal, limit: tgState.maxPerDay,
+    },
+    {
+      found: hhState.foundToday, sent: hhState.sentToday,
+      total: hhState.totalSent, limit: hhState.maxPerDay,
+    },
+  );
+  const put = (id, text) => {
+    const node = document.getElementById(id);
+    if (node) node.textContent = text;
+  };
+  put('mFound', values.found);
+  put('mSent', values.sent);
+  put('mTotal', values.total);
+  put('mSub', `из ${values.limit} в день`);
+  put('mFoundSub', metricsState.source === 'all' ? 'Telegram и hh.ru' : 'за сегодня');
+  const bar = document.getElementById('mBar');
+  if (bar) {
+    bar.style.width = values.limit > 0
+      ? Math.min(Math.round((values.sent / values.limit) * 100), 100) + '%'
+      : '0%';
+  }
 }
 
-function updateDashboard() {
-  const chanList = document.getElementById('dashChannelList');
-  const chanCount = document.getElementById('dashChannelCount');
-  if (chanList) fill(chanList, tgState.channels.map(ch => el('div', {
-    class: 'channel-row',
-    style: 'display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--border);font-size:12px',
-  }, [
-    el('span', { style: "font-family:'JetBrains Mono',monospace;font-weight:500", text: '@' + ch }),
-  ])));
-  if (chanCount) chanCount.textContent = tgState.channels.length;
-  const kwTags = document.getElementById('kwTags');
-  const exTags = document.getElementById('exTags');
-  if (kwTags) fill(kwTags, tgState.keywords.map(k => el('span', { class: 'tag tag-blue', text: k })));
-  if (exTags) fill(exTags, tgState.exclude.map(k => el('span', { class: 'tag tag-red', text: k })));
-}
 
 // ── TG Script control ─────────────────────────────────────────────────
 function setWorkerState(worker, state, lastError, canStart) {
@@ -537,15 +618,9 @@ function addChannel() {
   if (!val) return;
   if (tgState.channels.map(c => c.toLowerCase()).includes(val)) { showToast('Канал уже есть'); return; }
   tgState.channels.push(val); inp.value = '';
-  renderChannelEdit(); updateDashboard();
+  renderChannelEdit();
 }
-function removeChannel(i) { tgState.channels.splice(i, 1); renderChannelEdit(); updateDashboard(); }
-async function saveChannels() {
-  if (!await patchCriteria({ channels: tgState.channels })) return;
-  if (tgState.running) { showToast('Сохранено — перезапустите TG'); showRestartBanner(); }
-  else showToast('Каналы сохранены');
-}
-
+function removeChannel(i) { tgState.channels.splice(i, 1); renderChannelEdit(); }
 // ── Keywords ──────────────────────────────────────────────────────────
 function renderKeywords() {
   fill(document.getElementById('kwList'), tgState.keywords.map((k, i) => el('div', { class: 'list-item' }, [
@@ -556,33 +631,13 @@ function renderKeywords() {
     el('span', { text: k }),
     el('button', { class: 'btn-del', text: '×', onclick: () => removeEx(i) }),
   ])));
-  updateDashboard();
 }
 function addKw() { const v = document.getElementById('newKw').value.trim().toLowerCase(); if (!v) return; if (tgState.keywords.includes(v)) { showToast('Уже есть'); return; } tgState.keywords.push(v); document.getElementById('newKw').value = ''; renderKeywords(); }
 function removeKw(i) { tgState.keywords.splice(i, 1); renderKeywords(); }
 function addEx() { const v = document.getElementById('newEx').value.trim().toLowerCase(); if (!v) return; if (tgState.exclude.includes(v)) { showToast('Уже есть'); return; } tgState.exclude.push(v); document.getElementById('newEx').value = ''; renderKeywords(); }
 function removeEx(i) { tgState.exclude.splice(i, 1); renderKeywords(); }
-async function saveKeywords() {
-  if (!await patchCriteria({
-    tg_keywords: tgState.keywords, tg_exclude: tgState.exclude,
-  })) return;
-  updateDashboard();
-  if (tgState.running) { showToast('Сохранено — перезапустите TG'); showRestartBanner(); }
-  else showToast('Ключевые слова сохранены');
-}
 
 // ── Templates ─────────────────────────────────────────────────────────
-async function saveTemplate() {
-  tgState.template = document.getElementById('templateText').value;
-  if (!await patchCriteria({ template: tgState.template })) return;
-  if (tgState.running) { showToast('Сохранено — перезапустите TG'); showRestartBanner(); }
-  else showToast('Шаблон сохранён');
-}
-async function saveHHCoverLetter() {
-  const letter = document.getElementById('hhCoverLetter').value;
-  if (!await patchCriteria({ hh_cover_letter: letter })) return;
-  showToast('Сопроводительное письмо сохранено');
-}
 // ── Библиотека резюме ─────────────────────────────────────────────────
 //
 // Раньше здесь жил мёртвый обработчик выбора файла: он обновлял три
@@ -617,6 +672,7 @@ async function loadResumes() {
   const items = await apiGet('/resumes');
   if (!Array.isArray(items)) return;
   const chosen = presetState.criteria.resume_id ?? null;
+  renderResumePicker(items);
   if (items.length === 0) {
     fill(box, el('div', {
       style: 'font-size:12px;color:var(--muted)',
@@ -635,13 +691,8 @@ async function loadResumes() {
       text: `${Math.max(1, Math.round(item.size_bytes / 1024))} КБ`,
     }),
     item.id === chosen
-      ? el('span', { class: 'preset-meta', text: 'выбрано' })
-      : el('button', {
-          class: 'btn btn-secondary',
-          text: 'Выбрать',
-          'data-action': 'chooseResume',
-          'data-arg': String(item.id),
-        }),
+      ? el('span', { class: 'preset-meta', text: 'выбрано в пресете' })
+      : null,
     el('button', {
       class: 'btn-del',
       text: '×',
@@ -651,11 +702,6 @@ async function loadResumes() {
   ])));
 }
 
-async function chooseResume(id) {
-  if (!await patchCriteria({ resume_id: parseInt(id, 10) })) return;
-  showToast('Резюме выбрано для активного пресета');
-  await loadResumes();
-}
 
 async function deleteResume(id) {
   const r = await apiSend('DELETE', `/resumes/${id}`);
@@ -664,6 +710,86 @@ async function deleteResume(id) {
   if (!r || r.status !== 'deleted') { showToast(configErrorDetail(r)); return; }
   showToast('Резюме удалено');
   await loadResumes();
+}
+
+// Выпадающий список резюме на «Обзоре»: выбор принадлежит пресету и
+// сохраняется вместе с остальными критериями. Сама библиотека (загрузка и
+// удаление файлов) живёт в настройках — она общая для всех пресетов.
+function renderResumePicker(rows) {
+  const box = document.getElementById('criteriaResume');
+  if (!box) return;
+  const chosen = presetState.criteria.resume_id ?? null;
+  fill(box, [
+    el('option', { value: '', text: '— без вложения —' }),
+    ...rows.map(row => {
+      const option = el('option', { value: String(row.id), text: row.original_name });
+      if (chosen === row.id) option.selected = true;
+      return option;
+    }),
+  ]);
+}
+
+// Сборка патча критериев из полей формы. Чистая функция от документа и уже
+// собранных списков — поэтому её можно исполнить в тесте.
+//
+// Числа приводятся здесь: пустое числовое поле даёт пустую строку, и
+// JSON.stringify кладёт в тело null, который pydantic отвергает с 422.
+// У критерия «пусто» имеет смысл — «зарплата от» без числа значит «не
+// важно», — и это НЕ то же самое, что лимит отправок, где выбрать
+// значение за человека нельзя (см. saveGlobalSettings).
+//
+// `Number('')` — это 0, поэтому зарплате запасное значение не нужно. А
+// периоду нужно: ноль не проходит проверку `ge=1`, и сохранение упало бы
+// с 422 на поле, которого человек не трогал.
+function collectCriteria(lists) {
+  const value = id => {
+    const node = document.getElementById(id);
+    return node ? node.value : '';
+  };
+  const patch = {
+    ...lists,
+    hh_experience: value('hhExperience'),
+    hh_salary_from: Number(value('hhSalaryFrom')),
+    hh_search_period: Number(value('hhSearchPeriod')) || 1,
+    hh_resume_id: value('hhResumeId').trim(),
+    template: value('templateText'),
+    hh_cover_letter: value('hhCoverLetter'),
+  };
+  // Незагруженный список — это «не знаю», а не «без вложения».
+  // `renderResumePicker` вызывается только после успешного GET
+  // /api/resumes; если запрос не удался, селект пуст, и без этой
+  // проверки следующее сохранение молча отвязало бы резюме от пресета,
+  // отрапортовав «Критерии сохранены».
+  const picker = document.getElementById('criteriaResume');
+  if (picker) {
+    patch.resume_id = picker.value === '' ? null : Number(picker.value);
+  }
+  return patch;
+}
+
+async function saveCriteria() {
+  const patch = collectCriteria({
+    channels: tgState.channels,
+    tg_keywords: tgState.keywords,
+    tg_exclude: tgState.exclude,
+    professions: hhState.keywords,
+    hh_exclude: hhState.exclude,
+    hh_schedule: chosenCodes('hh-schedule'),
+    hh_employment: chosenCodes('hh-employment'),
+  });
+  // Один PATCH на всё: с задачи 7 он применяется целиком или никак,
+  // поэтому отказ на любом поле не оставляет остальные сохранёнными. Пять
+  // отдельных кнопок означали пять частичных сохранений.
+  // `patchCriteria` сам показывает причину отказа и возвращает false —
+  // говорить «сохранено» можно только по его слову.
+  if (!await patchCriteria(patch)) return;
+  tgState.template = patch.template;
+  if (tgState.running || hhState.running) {
+    showToast('Критерии сохранены — перезапустите воркеры');
+    showRestartBanner();
+  } else {
+    showToast('Критерии сохранены');
+  }
 }
 
 // ── Settings ──────────────────────────────────────────────────────────
@@ -694,31 +820,8 @@ async function loadSettings() {
     document.getElementById('apiHash').placeholder = 'abcdef1234567890abcdef1234567890';
   }
 
-  // HH: критерии — из активного пресета, лимиты и расписание — из настроек.
-  const criteria = presetState.criteria;
-  hhState.keywords = criteria.professions || [];
-  hhState.exclude = criteria.hh_exclude || [];
-  renderHHKeywords();
-
-  const dict = await loadDictionaries();
-  if (dict) {
-    const areaLabel = document.getElementById('hhAreaLabel');
-    if (areaLabel) areaLabel.textContent = `код ${dict.area_id}`;
-    const experience = document.getElementById('hhExperience');
-    if (experience) {
-      fill(experience, Object.entries(dict.experience).map(
-        ([code, label]) => el('option', { value: code, text: label }),
-      ));
-      experience.value = criteria.hh_experience || 'noExperience';
-    }
-    renderChoiceBox('hhScheduleBox', dict.schedule, criteria.hh_schedule || [], 'hh-schedule');
-    renderChoiceBox('hhEmploymentBox', dict.employment, criteria.hh_employment || [], 'hh-employment');
-  }
-
-  document.getElementById('hhSalaryFrom').value = criteria.hh_salary_from || 0;
-  if (criteria.hh_search_period) document.getElementById('hhSearchPeriod').value = criteria.hh_search_period;
-  document.getElementById('hhResumeId').value = criteria.hh_resume_id || '';
-  document.getElementById('hhCoverLetter').value = criteria.hh_cover_letter || '';
+  // Критериев здесь больше нет: они принадлежат пресету и заполняются в
+  // loadActiveCriteria(). «Настройки» — только про общее для всех пресетов.
   if (cfg.hh_max_per_day) document.getElementById('hhMaxPerDayInput').value = cfg.hh_max_per_day;
   if (cfg.hh_check_interval) document.getElementById('hhCheckInterval').value = cfg.hh_check_interval / 60;
   if (cfg.hh_autostart !== undefined) document.getElementById('toggleHHAutostart').checked = cfg.hh_autostart;
@@ -730,22 +833,55 @@ async function loadSettings() {
   await checkWebAuth();
 }
 
-async function saveTGSettings() {
-  const data = {
-    safe_mode: document.getElementById('toggleSafe').checked,
-    parse_history: document.getElementById('toggleHistory').checked,
-    max_per_day: parseInt(document.getElementById('maxPerDay').value),
-    history_limit: parseInt(document.getElementById('historyLimit').value),
-    tg_autostart: document.getElementById('toggleTGAutostart').checked,
+async function saveGlobalSettings() {
+  // Пустое поле уезжает как null и получает 422 с объяснением — умолчание
+  // сюда НЕ подставляется. Это разница между лимитом и критерием: у
+  // критерия «пусто» имеет смысл («зарплата от» без числа значит «не
+  // важно», см. collectCriteria), а лимит существует, чтобы не забанили
+  // аккаунт, и выбрать его за человека молча — значит соврать ему о том,
+  // сколько сообщений уйдёт сегодня. Это пин дефекта I4: до него
+  // очищенное поле давало «сохранено» и не сохранялось.
+  const number = id => {
+    const node = document.getElementById(id);
+    const value = parseInt(node ? node.value : '', 10);
+    return Number.isNaN(value) ? null : value;
   };
-  const r = await apiPatch('/config', data);
-  if (!configPatchOk(r)) { showToast(configErrorDetail(r)); return; }
-  tgState.safeMode = data.safe_mode;
-  tgState.parseHistory = data.parse_history;
-  tgState.maxPerDay = data.max_per_day;
+  const checked = id => {
+    const node = document.getElementById(id);
+    return !!(node && node.checked);
+  };
+  const interval = number('hhCheckInterval');
+  const patch = {
+    safe_mode: checked('toggleSafe'),
+    parse_history: checked('toggleHistory'),
+    tg_autostart: checked('toggleTGAutostart'),
+    hh_autostart: checked('toggleHHAutostart'),
+    max_per_day: number('maxPerDay'),
+    history_limit: number('historyLimit'),
+    hh_max_per_day: number('hhMaxPerDayInput'),
+    // В поле минуты, в настройках секунды.
+    hh_check_interval: interval === null ? null : interval * 60,
+    hh_selenium_steps: hhState.seleniumSteps,
+  };
+  const reply = await apiPatch('/config', patch);
+  if (!configPatchOk(reply)) { showToast(configErrorDetail(reply)); return; }
+
+  tgState.safeMode = patch.safe_mode;
+  tgState.parseHistory = patch.parse_history;
+  tgState.maxPerDay = patch.max_per_day;
+  hhState.maxPerDay = patch.hh_max_per_day;
   updateMetrics();
-  if (tgState.running) { showToast('Сохранено — перезапустите TG'); showRestartBanner(); }
-  else showToast('TG настройки сохранены');
+  // Полоса состояния — единственное место, где написано, отправляет
+  // приложение что-нибудь наружу или нет. Она обязана перестать врать в
+  // тот же миг, а не через три секунды до следующего опроса.
+  updateStatusBar();
+
+  if (tgState.running || hhState.running) {
+    showToast('Сохранено — перезапустите воркеры');
+    showRestartBanner();
+  } else {
+    showToast('Настройки сохранены');
+  }
 }
 
 async function saveApiKeys() {
@@ -828,34 +964,6 @@ function removeHHKw(i) { hhState.keywords.splice(i, 1); renderHHKeywords(); }
 function addHHEx() { const v = document.getElementById('newHHEx').value.trim().toLowerCase(); if (!v || hhState.exclude.includes(v)) { if (v) showToast('Уже есть'); return; } hhState.exclude.push(v); document.getElementById('newHHEx').value = ''; renderHHKeywords(); }
 function removeHHEx(i) { hhState.exclude.splice(i, 1); renderHHKeywords(); }
 
-async function saveHHSettings() {
-  // Сохранение расходится по двум адресатам, потому что настройки теперь
-  // тоже двух видов: критерии поиска — в активный пресет, лимиты и
-  // расписание проверок — в глобальные настройки. Регион не отправляется
-  // вовсе: он константа приложения (решение D8).
-  const criteria = {
-    professions: hhState.keywords,
-    hh_exclude: hhState.exclude,
-    hh_experience: document.getElementById('hhExperience').value,
-    hh_salary_from: parseInt(document.getElementById('hhSalaryFrom').value) || 0,
-    hh_search_period: parseInt(document.getElementById('hhSearchPeriod').value),
-    hh_schedule: chosenCodes('hh-schedule'),
-    hh_employment: chosenCodes('hh-employment'),
-    hh_resume_id: document.getElementById('hhResumeId').value.trim(),
-    hh_cover_letter: document.getElementById('hhCoverLetter').value,
-  };
-  const global = {
-    hh_max_per_day: parseInt(document.getElementById('hhMaxPerDayInput').value),
-    hh_check_interval: parseInt(document.getElementById('hhCheckInterval').value) * 60,
-    hh_autostart: document.getElementById('toggleHHAutostart').checked,
-    hh_selenium_steps: hhState.seleniumSteps,
-  };
-  if (!await patchCriteria(criteria)) return;
-  const r = await apiPatch('/config', global);
-  if (!configPatchOk(r)) { showToast(configErrorDetail(r)); return; }
-  await loadPresets();
-  showToast('HH настройки сохранены');
-}
 
 // ── HH Login (L4: два вызова вместо блокирующего input()) ──────────────
 const HH_LOGIN_LABELS = {
@@ -1085,59 +1193,207 @@ function isHttpUrl(url) {
   return /^https?:\/\//i.test(url || '');
 }
 
-// hh.ru vacancy statuses are written by job_monitor/workers/hh.py:
-// HH_STATUS_APPLIED ("отклик отправлен"), "пропущено", and
-// HH_STATUS_SCENARIO_ERROR ("ошибка сценария") — the last one added when a
-// broken Selenium scenario is made terminal. It used to fall through to the
-// neutral "waiting" badge, so a permanently failed vacancy looked like one
-// still in the queue.
+// Словарь статусов зеркалит job_monitor/statuses.py. Раньше класс бейджа
+// выбирался вхождением подстроки — и «откликнулся сам» не совпадал ни с
+// чем, поэтому ручной отклик рисовался как ожидание. Таблица по точным
+// значениям исключает это по построению, а tests/test_frontend_screens.py
+// сторожит, что она не разошлась с бэкендом.
+const STATUS_CLASS = {
+  'новая': 'status-wait',
+  'отклик отправлен': 'status-sent',
+  'откликнулся сам': 'status-sent',
+  'не подходит': 'status-skip',
+  'пропущено': 'status-skip',
+  'ошибка сценария': 'status-error',
+};
+
 function vacancyStatusClass(status) {
-  const st = status || '';
-  if (st.includes('ошибка')) return 'status-error';
-  if (st.includes('отправлен')) return 'status-sent';
-  if (st.includes('пропущено')) return 'status-skip';
-  return 'status-wait';
+  return STATUS_CLASS[status] || 'status-wait';
 }
 
-async function loadHHVacancies() {
-  const vacs = await apiGet('/hh/vacancies');
-  const vacEl = document.getElementById('hhRecentVacancies');
-  if (!vacEl) return;
-  if (!vacs || !vacs.length) {
-    fill(vacEl, el('div', {
-      style: 'grid-column:1/-1;text-align:center;padding:16px;color:var(--muted);font-size:13px',
-      text: 'Вакансий пока нет',
-    }));
+// Информационная часть карточки вакансии — без кнопок. Отдельно от них
+// потому, что кнопки нужны только в очереди, а карточка нужна и там, и на
+// «Обзоре»; а ещё потому, что `tests/test_stored_columns_are_read.py`
+// сторожит именно её: каждая колонка hh_applications обязана либо попасть
+// сюда, либо быть названной в NOT_ON_THE_CARD с объяснением.
+function hhVacancyCard(v) {
+  const st = v.status || '';
+  const meta = [v.company, v.city, v.salary || 'з/п не указана'].filter(Boolean).join(' · ');
+  return el('div', { class: 'found-main' }, [
+    el('div', { style: 'display:flex;align-items:flex-start;justify-content:space-between;gap:8px' }, [
+      el('div', {}, [
+        el('div', { class: 'found-title', text: v.title || '' }),
+        el('div', { class: 'found-meta', text: meta }),
+      ]),
+      // `status_source` отвечает на вопрос «это я откликнулся или робот»:
+      // с появлением ручных статусов бейдж без него врал бы наполовину.
+      el('span', {
+        class: `status-badge ${vacancyStatusClass(st)}`,
+        style: 'flex-shrink:0',
+        text: (st || 'ожидание') + (v.status_source === 'человек' ? ' · вручную' : ''),
+      }),
+    ]),
+    // Текст причины, а не только красный бейдж: для «ошибки сценария»
+    // бейдж говорит, ЧТО случилось, а починить сценарий можно, только
+    // зная, КАКОЙ шаг не разобрался. Значение недоверенное — только `text:`.
+    v.error ? el('div', { class: 'vac-error', text: v.error }) : null,
+    // Проверки схемы здесь нет намеренно: el() валидирует href сам, по
+    // построению, поэтому плохая схема в v.url просто не прикрепится.
+    v.url ? el('a', {
+      href: v.url, target: '_blank', rel: 'noopener noreferrer',
+      class: 'found-link', text: 'Открыть на hh.ru →',
+    }) : null,
+  ]);
+}
+
+
+// ── Очередь найденного ────────────────────────────────────────────────
+const foundState = { source: 'tg', filter: 'new', rows: [] };
+
+function setSegActive(containerId, value) {
+  const box = document.getElementById(containerId);
+  if (!box) return;
+  for (const btn of box.querySelectorAll('.seg-btn')) {
+    btn.classList.toggle('active', btn.dataset.arg === value);
+  }
+}
+
+async function foundSource(source) {
+  foundState.source = source;
+  setSegActive('foundSource', source);
+  await loadFound();
+}
+
+async function foundFilter(filter) {
+  foundState.filter = filter;
+  setSegActive('foundFilter', filter);
+  await loadFound();
+}
+
+async function loadFound() {
+  const rows = await apiGet(`/found/${foundState.source}?status=${foundState.filter}`);
+  foundState.rows = Array.isArray(rows) ? rows : [];
+  renderFound();
+}
+
+function foundKey(row) {
+  return foundState.source === 'tg' ? String(row.id) : row.vacancy_id;
+}
+
+function foundButtons(row) {
+  const key = foundKey(row);
+  if (row.status === 'новая') {
+    return [
+      el('button', {
+        class: 'btn btn-primary', style: 'font-size:11.5px',
+        text: 'Откликнулся', 'data-action': 'foundApply', 'data-arg': key,
+      }),
+      el('button', {
+        class: 'btn btn-secondary', style: 'font-size:11.5px',
+        text: 'Не подходит', 'data-action': 'foundDismiss', 'data-arg': key,
+      }),
+    ];
+  }
+  // Вернуть в очередь можно только оттуда, откуда это безопасно: «не
+  // подходит» (передумал) и «пропущено» (клика не было). Бэкенд отвергает
+  // остальное с 400 — здесь мы просто не предлагаем нажать то, что будет
+  // отвергнуто: обещание, которого интерфейс не может сдержать, хуже
+  // отсутствующей кнопки.
+  if (row.status === 'не подходит' || row.status === 'пропущено') {
+    return [el('button', {
+      class: 'btn btn-secondary', style: 'font-size:11.5px',
+      text: 'Вернуть в очередь', 'data-action': 'foundReopen', 'data-arg': key,
+    })];
+  }
+  return [];
+}
+
+function tgFoundCard(row) {
+  const meta = ['@' + row.channel, row.matched_keyword, (row.usernames || []).join(' ')]
+    .filter(Boolean).join(' · ');
+  return el('div', { class: 'found-main' }, [
+    el('div', { style: 'display:flex;align-items:flex-start;justify-content:space-between;gap:8px' }, [
+      el('div', {}, [
+        el('div', { class: 'found-title', text: row.preview || '(без текста)' }),
+        el('div', { class: 'found-meta', text: meta }),
+      ]),
+      el('span', {
+        class: `status-badge ${vacancyStatusClass(row.status)}`,
+        style: 'flex-shrink:0', text: row.status || '',
+      }),
+    ]),
+    // Ссылку собрал бэкенд (api/found_routes.py). el() всё равно проверит
+    // схему — это его работа, а не работа места вызова.
+    row.link ? el('a', {
+      href: row.link, target: '_blank', rel: 'noopener noreferrer',
+      class: 'found-link', text: 'Открыть в Telegram →',
+    }) : null,
+  ]);
+}
+
+function renderFound() {
+  const box = document.getElementById('foundList');
+  if (!box) return;
+  if (!foundState.rows.length) {
+    fill(box, el('div', { class: 'found-empty', text: 'Здесь пока пусто' }));
     return;
   }
-  fill(vacEl, vacs.slice(0, 4).map(v => {
-    const st = v.status || '';
-    const cls = vacancyStatusClass(st);
-    // Всё, что бэкенд знает о вакансии и что помещается в карточку. `city`
-    // писался в hh_applications с самого начала и не показывался нигде —
-    // одна из «мёртвых колонок» финального ревью.
-    const meta = [v.company, v.city, v.salary || 'з/п не указана'].filter(Boolean).join(' · ');
-    // No isHttpUrl() check here on purpose: el() validates href/src itself,
-    // by construction, so a bad scheme in v.url just never gets attached.
-    return el('div', { class: 'vac-card' }, [
-      el('div', { style: 'display:flex;align-items:flex-start;justify-content:space-between;gap:8px' }, [
-        el('div', {}, [
-          el('div', { style: 'font-size:13px;font-weight:600', text: v.title || '' }),
-          el('div', { style: 'font-size:11px;color:var(--muted);margin-top:2px', text: meta }),
-        ]),
-        el('span', { class: `status-badge ${cls}`, style: 'flex-shrink:0', text: st || 'ожидание' }),
-      ]),
-      // Текст причины, а не только красный бейдж: для HH_STATUS_SCENARIO_ERROR
-      // («ошибка сценария») бейдж говорит, ЧТО случилось, а починить сценарий
-      // можно, только зная, КАКОЙ шаг не разобрался. Значение недоверенное
-      // (в него попадает содержимое hh_selenium_steps), поэтому — `text:`,
-      // то есть textContent, как и всё остальное в этом файле.
-      v.error ? el('div', { class: 'vac-error', text: v.error }) : null,
-      v.url ? el('div', { style: 'margin-top:8px' }, [
-        el('a', { href: v.url, target: '_blank', rel: 'noopener noreferrer', style: 'font-size:11px;color:var(--hh);text-decoration:none', text: 'Открыть на HH →' }),
-      ]) : null,
-    ]);
-  }));
+  const card = foundState.source === 'tg' ? tgFoundCard : hhVacancyCard;
+  fill(box, foundState.rows.map(row => el('div', { class: 'found-row' }, [
+    card(row),
+    el('div', { class: 'found-actions' }, foundButtons(row)),
+  ])));
+}
+
+async function patchFound(key, status) {
+  const reply = await apiPatch(`/found/${foundState.source}/${encodeURIComponent(key)}`, { status });
+  if (!reply || reply.status !== 'saved') {
+    // Отвергнутое сохранение нигде не показывается как успешное — то же
+    // правило, что у configPatchOk во всех остальных экранах.
+    showToast(configErrorDetail(reply));
+    return;
+  }
+  await loadFound();
+}
+
+const foundApply = key => patchFound(key, 'откликнулся сам');
+const foundDismiss = key => patchFound(key, 'не подходит');
+const foundReopen = key => patchFound(key, 'новая');
+
+// ── Отправленное ──────────────────────────────────────────────────────
+// Своего списка «что считать отправленным» здесь нет намеренно: его
+// знает бэкенд (`STATUS_FILTERS` в api/found_routes.py, поверх
+// job_monitor/statuses.py). Копия на фронтенде была ровно тем вторым
+// местом, которое однажды отстаёт, — и отстав, показывала бы пустой
+// экран при полной таблице откликов.
+const sentState = { source: 'tg' };
+
+function sentSource(source) {
+  sentState.source = source;
+  setSegActive('sentSource', source);
+  const tg = document.getElementById('sentTg');
+  const hh = document.getElementById('sentHh');
+  if (tg) tg.style.display = source === 'tg' ? '' : 'none';
+  if (hh) hh.style.display = source === 'hh' ? '' : 'none';
+  return source === 'tg' ? renderChats() : loadSentHh();
+}
+
+async function loadSentHh() {
+  // Отбор делает запрос, а не мы. С `status=decided` и отбором здесь
+  // страница в 50 строк могла целиком состоять из отброшенных вакансий —
+  // и экран говорил «откликов пока нет» при полной таблице откликов.
+  // Ручной отклик входит в `applied` наравне с роботным: показывать
+  // только роботный значило бы прятать от человека половину его
+  // собственной истории.
+  const rows = await apiGet('/found/hh?status=applied');
+  const box = document.getElementById('sentHhList');
+  if (!box) return;
+  const applied = Array.isArray(rows) ? rows : [];
+  if (!applied.length) {
+    fill(box, el('div', { class: 'found-empty', text: 'Откликов пока нет' }));
+    return;
+  }
+  fill(box, applied.map(row => el('div', { class: 'found-row' }, [hhVacancyCard(row)])));
 }
 
 // ── Logs ──────────────────────────────────────────────────────────────
@@ -1367,29 +1623,58 @@ async function init() {
   updateTGButton();
   updateHHButton();
   updateMetrics();
-  updateDashboard();
-  loadResumes();
-  loadHHVacancies();
   pollStatus();
 }
 
 async function loadActiveCriteria() {
   if (presetState.activeId === null) return;
+  // Поля перезаписываются, только если пресет сменился. Иначе возврат на
+  // «Обзор» стирал бы несохранённую правку: набрал длинное
+  // сопроводительное, ушёл на «Найдено» посмотреть вакансию, вернулся —
+  // текста нет и никто об этом не предупредил.
+  if (presetState.loadedId === presetState.activeId) return;
   const preset = await apiGet(`/presets/${presetState.activeId}`);
   if (!preset || !preset.criteria) return;
-  presetState.criteria = preset.criteria;
+  const criteria = preset.criteria;
+  presetState.criteria = criteria;
+  presetState.loadedId = presetState.activeId;
 
-  tgState.channels = preset.criteria.channels || [];
-  tgState.keywords = preset.criteria.tg_keywords || [];
-  tgState.exclude = preset.criteria.tg_exclude || [];
-  tgState.template = preset.criteria.template || '';
-  hhState.keywords = preset.criteria.professions || [];
-  hhState.exclude = preset.criteria.hh_exclude || [];
+  tgState.channels = criteria.channels || [];
+  tgState.keywords = criteria.tg_keywords || [];
+  tgState.exclude = criteria.tg_exclude || [];
+  tgState.template = criteria.template || '';
+  hhState.keywords = criteria.professions || [];
+  hhState.exclude = criteria.hh_exclude || [];
 
-  const tpl = document.getElementById('templateText');
-  if (tpl) tpl.value = tgState.template;
-  const letter = document.getElementById('hhCoverLetter');
-  if (letter) letter.value = preset.criteria.hh_cover_letter || '';
+  renderChannelEdit();
+  renderKeywords();
+  renderHHKeywords();
+
+  const put = (id, value) => {
+    const node = document.getElementById(id);
+    if (node) node.value = value;
+  };
+  put('templateText', tgState.template);
+  put('hhCoverLetter', criteria.hh_cover_letter || '');
+  put('hhResumeId', criteria.hh_resume_id || '');
+  put('hhSalaryFrom', criteria.hh_salary_from || 0);
+  if (criteria.hh_search_period) put('hhSearchPeriod', criteria.hh_search_period);
+
+  // Справочники hh.ru — константы приложения (job_monitor/criteria.py), а
+  // не данные с hh.ru: официальное API им не нужно.
+  const dict = await loadDictionaries();
+  if (dict) {
+    const experience = document.getElementById('hhExperience');
+    if (experience) {
+      fill(experience, Object.entries(dict.experience).map(
+        ([code, label]) => el('option', { value: code, text: label }),
+      ));
+      experience.value = criteria.hh_experience || 'noExperience';
+    }
+    renderChoiceBox('hhScheduleBox', dict.schedule, criteria.hh_schedule || [], 'hh-schedule');
+    renderChoiceBox('hhEmploymentBox', dict.employment, criteria.hh_employment || [], 'hh-employment');
+  }
+  await loadResumes();
 }
 
 // ── About modal ───────────────────────────────────────────────────────
@@ -1436,33 +1721,35 @@ const ACTIONS = {
   toggleHH,
   reloadChat,
   sendChatMessage,
-  saveChannels,
   addChannel,
-  saveKeywords,
+  saveCriteria,
   addKw,
   addEx,
-  saveTemplate,
   pickFile,
   uploadResume,
-  chooseResume,
   deleteResume,
   activatePreset,
   createPreset,
   copyPreset,
   deletePreset,
   hhLoginCancel,
-  saveHHCoverLetter,
-  saveTGSettings,
+  saveGlobalSettings,
   saveApiKeys,
   sendAuthCode,
   verifyAuthCode,
-  saveHHSettings,
   addHHKw,
   addHHEx,
   addStep,
+  metricsSource,
+  sentSource,
   showLog,
   clearConsole,
   refreshLogs,
+  foundSource,
+  foundFilter,
+  foundApply,
+  foundDismiss,
+  foundReopen,
 };
 
 function runAction(name, target, event) {

@@ -133,6 +133,9 @@ def test_app_js_no_longer_polls_the_per_worker_status_endpoints() -> None:
     assert "/state" in code
     assert "/tg/status" not in code
     assert "/hh/status" not in code
+    assert "/hh/vacancies" not in code, (
+        "роут снят: очередь читается из GET /api/found/hh"
+    )
     assert "/tg/logs?lines=200" not in code, "the dashboard log feed comes from /api/state"
     assert "/hh/logs?lines=50" not in code, "the dashboard log feed comes from /api/state"
 
@@ -185,14 +188,29 @@ def test_markup_carries_the_converted_handlers() -> None:
     `onFileSelect` из списка ушёл осознанно: обработчик был мёртвым — он
     обновлял подписи и никогда не отправлял файл (дефект L14). На его месте
     `uploadResume`, который действительно загружает резюме в библиотеку.
+
+    `saveChannels`, `saveKeywords`, `saveTemplate`, `saveHHCoverLetter` и
+    `chooseResume` ушли тоже осознанно: пять кнопок сохранения критериев
+    стали одной (`saveCriteria`), а выбор резюме — выпадающим списком,
+    который сохраняется вместе с остальными критериями. Пять кнопок
+    означали пять частичных сохранений; один PATCH пресета применяется
+    целиком или никак. Множество ниже по-прежнему требует, чтобы каждое
+    перечисленное имя присутствовало в разметке, а
+    `test_every_handler_is_reachable` — чтобы в ACTIONS не осталось
+    мёртвых записей.
+
+    `saveTGSettings` и `saveHHSettings` слились в `saveGlobalSettings` по
+    той же причине: критериев в них не осталось, обе патчили `/api/config`
+    одинаково, и две кнопки для одного запроса — это приглашение сохранить
+    половину.
     """
     expected = {
         "showAbout", "hideAbout", "toggleTG", "toggleHH",
         "reloadChat", "sendChatMessage",
-        "saveChannels", "addChannel", "saveKeywords", "addKw", "addEx",
-        "saveTemplate", "pickFile", "saveHHCoverLetter",
-        "saveTGSettings", "saveApiKeys", "sendAuthCode", "verifyAuthCode",
-        "saveHHSettings", "addHHKw", "addHHEx", "addStep",
+        "addChannel", "addKw", "addEx", "saveCriteria",
+        "pickFile",
+        "saveGlobalSettings", "saveApiKeys", "sendAuthCode", "verifyAuthCode",
+        "addHHKw", "addHHEx", "addStep",
         "showLog", "clearConsole", "refreshLogs",
         "uploadResume",
     }
@@ -246,7 +264,15 @@ def test_vacancy_status_class_marks_scenario_errors_as_errors() -> None:
         "process.exitCode = 1; }"
         for status, cls in cases
     )
-    result = _run_node(f"{_extract_function_source('vacancyStatusClass')}\n{checks}")
+    # Функция читает модульную таблицу STATUS_CLASS (она зеркалит
+    # job_monitor/statuses.py), поэтому под node нужно подать и её: раньше
+    # соответствие статус → класс жило внутри самой функции цепочкой
+    # `includes`, и «откликнулся сам» не совпадал ни с чем.
+    table = re.search(r"const STATUS_CLASS = \{.*?\n\};", _app_source(), re.DOTALL)
+    assert table, "STATUS_CLASS не найдена в app.js"
+    result = _run_node(
+        f"{table.group(0)}\n{_extract_function_source('vacancyStatusClass')}\n{checks}"
+    )
     assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
 
 

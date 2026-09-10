@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+from collections.abc import Callable
 
 MIGRATION_001 = """
 CREATE TABLE IF NOT EXISTS settings (
@@ -102,10 +103,68 @@ CREATE TABLE IF NOT EXISTS tg_found (
 CREATE INDEX IF NOT EXISTS idx_tg_found_at ON tg_found(found_at);
 """
 
-MIGRATIONS: list[tuple[int, str]] = [
+# Умолчания записаны литералами, а не через `job_monitor.statuses`, и это
+# не небрежность: SQL-текст миграции уже применён у пользователя, и он
+# обязан остаться неизменным, даже если константу в Python однажды
+# перепишут. Миграция — запись в истории, а не вычисляемое значение.
+#
+# `usernames` хранит JSON-массив, а не одно имя: контактов в посте бывает
+# несколько, а гранулярность статуса — пост целиком (пост это единица
+# находки, и решение «не подходит» принимается по вакансии, а не по
+# человеку). Старая колонка `username` остаётся пустой — удалить её значило
+# бы пересоздать таблицу, см. докстринг модуля.
+MIGRATION_004_COLUMNS: list[tuple[str, str, str]] = [
+    ("tg_found", "status", "TEXT NOT NULL DEFAULT 'новая'"),
+    ("tg_found", "status_at", "TEXT"),
+    ("tg_found", "usernames", "TEXT"),
+    ("hh_applications", "status_source", "TEXT NOT NULL DEFAULT 'робот'"),
+]
+
+MIGRATION_004_INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_tg_found_status ON tg_found(status);
+CREATE INDEX IF NOT EXISTS idx_hh_status       ON hh_applications(status);
+"""
+
+
+def _add_column_if_missing(
+    conn: sqlite3.Connection, table: str, column: str, definition: str
+) -> None:
+    """`ALTER TABLE … ADD COLUMN`, но безопасный при повторном применении.
+
+    У SQLite нет `ADD COLUMN IF NOT EXISTS`, и это ломает свойство, которое
+    все предыдущие миграции этого файла имели по построению: каждая из них
+    состоит из `CREATE … IF NOT EXISTS` и потому переживает повторный
+    запуск. Голый `ALTER` — нет, а цена разницы не косметическая.
+
+    `executescript` коммитит по ходу дела, поэтому сбой на середине
+    миграции (диск кончился, процесс убили) оставляет часть колонок
+    добавленными, а версию — неподнятой. Следующий запуск приложения
+    падает на «duplicate column name» и падает так всегда: починить это
+    изнутри приложения нечем, нужна ручная операция над базой
+    пользователя. Проверка через `PRAGMA table_info` возвращает миграции
+    то же свойство, что у остальных.
+    """
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column in existing:
+        return
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def migration_004(conn: sqlite3.Connection) -> None:
+    for table, column, definition in MIGRATION_004_COLUMNS:
+        _add_column_if_missing(conn, table, column, definition)
+    conn.executescript(MIGRATION_004_INDEXES)
+
+
+# Шаг миграции — либо SQL-скрипт, либо функция. Функция понадобилась там,
+# где идемпотентность нельзя выразить в SQL: см. `_add_column_if_missing`.
+Migration = str | Callable[[sqlite3.Connection], None]
+
+MIGRATIONS: list[tuple[int, Migration]] = [
     (1, MIGRATION_001),
     (2, MIGRATION_002),
     (3, MIGRATION_003),
+    (4, migration_004),
 ]
 SCHEMA_VERSION = MIGRATIONS[-1][0]
 
@@ -164,7 +223,10 @@ def migrate(conn: sqlite3.Connection) -> int:
     for target, script in MIGRATIONS:
         if target <= version:
             continue
-        conn.executescript(script)
+        if callable(script):
+            script(conn)
+        else:
+            conn.executescript(script)
         conn.execute("DELETE FROM schema_version")
         conn.execute("INSERT INTO schema_version (version) VALUES (?)", (target,))
         version = target

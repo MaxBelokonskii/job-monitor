@@ -41,10 +41,21 @@ NOT_ON_THE_CARD = {
 
 
 def _vacancy_card_source() -> str:
-    """Тело `loadHHVacancies()` — единственного места, которое строит карточку."""
+    """Тело `hhVacancyCard()` — единственного места, которое строит
+    информационную часть карточки вакансии.
+
+    Раньше здесь стояла `loadHHVacancies()`. Карточка переехала в
+    собственную функцию, потому что её показывают два экрана — очередь
+    «Найдено» и «Обзор», — а кнопки решения нужны только очереди. Набор
+    проверок при этом не изменился: каждая колонка `hh_applications`
+    по-прежнему обязана либо попасть в карточку, либо быть названной в
+    `NOT_ON_THE_CARD`. Разделение к тому же и сохраняет проверку на
+    вакуумность: `vacancy_id` уезжает в `data-arg` кнопок, то есть в
+    строку очереди, а не в карточку.
+    """
     source = APP_JS.read_text(encoding="utf-8")
-    match = re.search(r"async function loadHHVacancies\(.*?\n\}", source, re.DOTALL)
-    assert match, "loadHHVacancies() не найдена в app.js"
+    match = re.search(r"function hhVacancyCard\(.*?\n\}", source, re.DOTALL)
+    assert match, "hhVacancyCard() не найдена в app.js"
     return match.group(0)
 
 

@@ -99,6 +99,16 @@ def save_criteria(
     return SearchCriteria(**PresetsRepo(conn).update_criteria(preset_id, mutate))
 
 
+def parse_criteria(raw: dict) -> SearchCriteria:
+    """Разбор сохранённых критериев, терпимый к полям, не прошедшим проверку.
+
+    Публичное имя для `_tolerant`: сухой прогон валидации в
+    `api/presets_routes.py` — законный внешний потребитель, и тянуть туда
+    подчёркнутое имя через границу модуля не стоит.
+    """
+    return _tolerant(raw)
+
+
 def import_legacy_criteria(conn: sqlite3.Connection, now: datetime) -> int | None:
     """Переносит критерии из единой строки настроек в первый пресет.
 

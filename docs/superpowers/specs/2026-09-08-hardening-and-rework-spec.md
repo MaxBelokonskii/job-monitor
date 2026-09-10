@@ -124,6 +124,7 @@ job_monitor/            пакет приложения
   security.py           токен приложения, проверка Host, CSP
   settings.py           модель настроек, секреты из окружения
   criteria.py           критерии поиска в пресете и константы hh.ru
+  statuses.py           словарь статусов найденного (общий на TG и hh.ru)
   presets.py            активный пресет: чтение, переключение, перенос
   resume_store.py       файлы библиотеки резюме в каталоге данных
   envfile.py            атомарная запись .env (0600)
@@ -144,6 +145,7 @@ api/                    (пакет верхнего уровня, не подп
   main.py               сборка FastAPI, middleware, lifespan
   config_routes.py      tg_routes.py  hh_routes.py  auth_routes.py  routes_state.py
   presets_routes.py     dictionaries_routes.py  resumes_routes.py
+  found_routes.py
 frontend/               index.html, app.js, style.css
 tests/                  pytest
 docs/superpowers/       specs/ и plans/

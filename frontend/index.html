@@ -20,26 +20,72 @@
     <button class="btn-about" data-action="showAbout" title="О приложении">ⓘ</button>
   </div>
   <nav class="nav">
-    <div class="nav-item active" data-page="dashboard"><div class="nav-dot"></div>Дашборд</div>
-    <div class="nav-item" data-page="chats"><div class="nav-dot"></div>Отправленные</div>
-    <div class="nav-sep"></div>
-    <div class="nav-item" data-page="channels"><div class="nav-dot"></div>Каналы</div>
-    <div class="nav-item" data-page="keywords"><div class="nav-dot"></div>Ключевые слова</div>
-    <div class="nav-item" data-page="template"><div class="nav-dot"></div>Шаблоны</div>
-    <div class="nav-sep"></div>
+    <div class="nav-item active" data-page="overview"><div class="nav-dot"></div>Обзор</div>
+    <div class="nav-item" data-page="found"><div class="nav-dot"></div>Найдено</div>
+    <div class="nav-item" data-page="sent"><div class="nav-dot"></div>Отправлено</div>
     <div class="nav-item" data-page="settings"><div class="nav-dot"></div>Настройки</div>
-    <div class="nav-item" data-page="logs"><div class="nav-dot"></div>Логи</div>
   </nav>
 </div>
 
 <!-- ── MAIN ────────────────────────────────────────────────────────── -->
 <div class="main">
+  <!-- Полоса состояния: видна на любом экране. Состояние воркеров, режим и
+       активный пресет были разбросаны по дашборду и настройкам, а смысл
+       безопасного режима не написан нигде — только галочка. -->
+  <div class="statusbar" id="statusBar">
+    <span class="statusbar-item">
+      <span class="status-dot stopped" id="sbDotTG"></span>
+      <span id="sbTG"></span>
+    </span>
+    <span class="statusbar-item">
+      <span class="status-dot stopped" id="sbDotHH"></span>
+      <span id="sbHH"></span>
+    </span>
+    <span class="statusbar-item statusbar-mode" id="sbMode"></span>
+    <span class="statusbar-item statusbar-preset" id="sbPreset"></span>
+  </div>
 
-  <!-- DASHBOARD -->
-  <div class="page active" id="page-dashboard">
-    <div class="page-title">Дашборд</div>
+  <!-- ОБЗОР -->
+  <div class="page active" id="page-overview">
+    <div class="page-header">
+      <div class="page-title">Обзор</div>
+      <div class="seg" id="metricsSource">
+        <button class="seg-btn active" data-action="metricsSource" data-arg="all">Все</button>
+        <button class="seg-btn" data-action="metricsSource" data-arg="tg">Telegram</button>
+        <button class="seg-btn" data-action="metricsSource" data-arg="hh">hh.ru</button>
+      </div>
+    </div>
 
     <div id="dataDirWarning" class="restart-banner" style="display:none"></div>
+
+    <!-- Кнопки пустые: подпись целиком рисует updateWorkerButton через
+         fill(). Текст в разметке был мёртвым дублем, который показывался
+         долю секунды до первого опроса и мог ему противоречить. -->
+    <div class="worker-bar">
+      <button class="btn-toggle btn-toggle-tg" id="btnToggleTG" data-action="toggleTG"></button>
+      <button class="btn-toggle btn-toggle-hh" id="btnToggleHH" data-action="toggleHH"></button>
+    </div>
+    <div class="worker-alert" id="tgWorkerAlert" style="display:none"></div>
+    <div class="worker-alert" id="hhWorkerAlert" style="display:none"></div>
+
+    <div class="metrics-grid">
+      <div class="metric">
+        <div class="metric-label">Найдено сегодня</div>
+        <div class="metric-value" id="mFound">0</div>
+        <div class="metric-sub" id="mFoundSub"></div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Откликов сегодня</div>
+        <div class="metric-value" id="mSent">0</div>
+        <div class="metric-bar"><div class="metric-bar-fill tg" id="mBar" style="width:0%"></div></div>
+        <div class="metric-sub" id="mSub">из 0 в день</div>
+      </div>
+      <div class="metric">
+        <div class="metric-label">Всего откликов</div>
+        <div class="metric-value" id="mTotal">0</div>
+        <div class="metric-sub">за всё время</div>
+      </div>
+    </div>
 
     <div class="card" id="presetCard">
       <div class="card-title">Пресет поиска</div>
@@ -56,253 +102,231 @@
       </div>
     </div>
 
-    <!-- TG Section -->
-    <div class="section-split">
-      <div class="section-split-label tg">
-        <!-- Telegram logo -->
-        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.289c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.17 13.617l-2.96-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.978.942z" fill="#2AABEE"/>
-        </svg>
-        Telegram
-      </div>
-      <div class="section-split-line"></div>
-      <button class="btn-toggle btn-toggle-tg" id="btnToggleTG" data-action="toggleTG">
-        <span class="status-dot stopped" id="dotTG"></span> Запустить TG
-      </button>
+    <div class="page-header" style="margin-top:6px">
+      <div class="card-title" style="margin:0">Критерии активного пресета</div>
+      <button class="btn btn-primary" data-action="saveCriteria">Сохранить критерии</button>
     </div>
 
-    <div class="worker-alert" id="tgWorkerAlert" style="display:none"></div>
-
-    <div class="metrics-grid">
-      <div class="metric">
-        <div class="metric-label">Откликов сегодня</div>
-        <div class="metric-value" id="tgSentToday">0</div>
-        <div class="metric-bar"><div class="metric-bar-fill tg" id="tgMetricBar" style="width:0%"></div></div>
-        <div class="metric-sub" id="tgMetricSub">из 25 в день</div>
-      </div>
-      <div class="metric">
-        <div class="metric-label">Вакансий найдено</div>
-        <div class="metric-value" id="tgFoundToday">0</div>
-        <div class="metric-sub">за сегодня</div>
-      </div>
-      <div class="metric">
-        <div class="metric-label">Всего откликов</div>
-        <div class="metric-value" id="tgSentTotal">0</div>
-        <div class="metric-sub">за всё время</div>
-      </div>
-    </div>
-
-    <!-- HH Section -->
-    <div class="section-split">
-      <div class="section-split-label hh">
-        <!-- HH logo -->
-        <svg viewBox="0 0 40 20" xmlns="http://www.w3.org/2000/svg">
-          <text x="0" y="17" font-family="Arial Black,sans-serif" font-weight="900" font-size="18" fill="#D6001C">hh</text>
-        </svg>
-        HH.ru
-      </div>
-      <div class="section-split-line"></div>
-      <button class="btn-toggle btn-toggle-hh" id="btnToggleHH" data-action="toggleHH">
-        <span class="status-dot stopped" id="dotHH"></span> Запустить HH
-      </button>
-    </div>
-
-    <div class="worker-alert" id="hhWorkerAlert" style="display:none"></div>
-
-    <div class="metrics-grid">
-      <div class="metric">
-        <div class="metric-label">Откликов сегодня</div>
-        <div class="metric-value" id="hhSentToday" style="color:var(--hh)">0</div>
-        <div class="metric-bar"><div class="metric-bar-fill hh" id="hhMetricBar" style="width:0%"></div></div>
-        <div class="metric-sub" id="hhMetricSub">из 20 в день</div>
-      </div>
-      <div class="metric">
-        <div class="metric-label">Вакансий найдено</div>
-        <div class="metric-value" id="hhFoundToday">0</div>
-        <div class="metric-sub">за сегодня</div>
-      </div>
-      <div class="metric">
-        <div class="metric-label">Всего откликов</div>
-        <div class="metric-value" id="hhTotalSent">0</div>
-        <div class="metric-sub">за всё время</div>
-      </div>
-    </div>
-
-    <!-- HH recent vacancies -->
-    <div id="hhRecentVacancies" style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px">
-      <div style="grid-column:1/-1;text-align:center;padding:16px;color:var(--muted);font-size:13px">Запустите HH монитор</div>
-    </div>
-
-    <!-- Bottom row: channels + recent log -->
-    <div class="two-col">
-      <div class="card">
-        <div class="card-title">
-          TG Каналы
-          <span style="font-family:'JetBrains Mono',monospace;font-weight:700;color:var(--tg);margin-left:6px" id="dashChannelCount">0</span>
+    <div class="three-col">
+      <div class="card" id="criteriaWhere">
+        <div class="card-title">Где искать</div>
+        <div class="field-label">Каналы Telegram</div>
+        <div id="channelEditList"></div>
+        <div class="add-row">
+          <input type="text" id="newChannel" placeholder="@username или username">
+          <button class="btn btn-secondary" data-action="addChannel">+</button>
         </div>
-        <div id="dashChannelList"></div>
-        <div style="margin-top:12px">
-          <div class="card-title">Ключевые слова</div>
-          <div class="tags" id="kwTags"></div>
+        <div class="field-label">Профессии на hh.ru</div>
+        <div id="hhKwList"></div>
+        <div class="add-row">
+          <input type="text" id="newHHKw" placeholder="Название профессии">
+          <button class="btn btn-secondary" data-action="addHHKw">+</button>
         </div>
-        <div style="margin-top:10px">
-          <div class="card-title">Исключения</div>
-          <div class="tags" id="exTags"></div>
+        <div class="field-hint">
+          Регион поиска — константа приложения, а не настройка: поиск
+          ведётся только по нему.
         </div>
       </div>
-      <div class="card">
-        <div class="card-title">Последние действия</div>
-        <div id="recentLog">
-          <div class="log-row">
-            <span class="log-time">—</span>
-            <span class="log-source tg">TG</span>
-            <span class="log-badge badge-skip">WAIT</span>
-            <span style="color:var(--muted);font-size:12px">Ожидание данных...</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
 
-  <!-- CHATS -->
-  <div class="page" id="page-chats" style="padding:0;flex-direction:row;height:100vh;gap:0">
-    <div style="width:270px;flex-shrink:0;border-right:1px solid var(--border);display:flex;flex-direction:column;background:var(--card-bg)">
-      <div style="padding:14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
-        <div style="font-size:14px;font-weight:700">Отправленные</div>
-        <div style="font-size:12px;color:var(--muted)" id="chatCount">0</div>
-      </div>
-      <div id="chatList" style="flex:1;overflow-y:auto"></div>
-    </div>
-    <div style="flex:1;display:flex;flex-direction:column;background:var(--bg)">
-      <div id="chatEmpty" style="flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;color:var(--muted)">
-        <div style="font-size:36px">💬</div>
-        <div style="font-size:13px;font-weight:500">Выберите контакт слева</div>
-      </div>
-      <div id="chatView" style="display:none;flex-direction:column;height:100%">
-        <div style="padding:12px 18px;border-bottom:1px solid var(--border);background:var(--card-bg);display:flex;align-items:center;gap:10px">
-          <div id="chatViewAvatar" style="width:34px;height:34px;border-radius:50%;background:var(--tg-light);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--tg);flex-shrink:0;font-family:'JetBrains Mono',monospace"></div>
-          <div>
-            <div id="chatViewName" style="font-size:13px;font-weight:600;font-family:'JetBrains Mono',monospace"></div>
-            <div style="font-size:11px;color:var(--muted)">Telegram</div>
-          </div>
-          <button class="btn btn-secondary" style="margin-left:auto;font-size:11px" data-action="reloadChat">↻</button>
-        </div>
-        <div id="chatMessages" style="flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:8px"></div>
-        <div style="padding:10px 14px;border-top:1px solid var(--border);background:var(--card-bg);display:flex;gap:8px">
-          <input type="text" id="chatInput" placeholder="Написать сообщение..."
-            style="flex:1;padding:8px 13px;border:1px solid var(--border);border-radius:20px;font-size:12.5px;font-family:'Manrope',sans-serif;background:var(--bg);color:var(--text);outline:none"
-            data-enter-action="sendChatMessage">
-          <button class="btn btn-primary" style="border-radius:20px;padding:8px 16px;font-size:12.5px" data-action="sendChatMessage">Отправить</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- CHANNELS -->
-  <div class="page" id="page-channels">
-    <div class="page-header">
-      <div class="page-title">Каналы</div>
-      <button class="btn btn-primary" data-action="saveChannels">Сохранить</button>
-    </div>
-    <div class="card">
-      <div class="card-title">Telegram каналы для мониторинга</div>
-      <div id="channelEditList"></div>
-      <div class="add-row">
-        <input type="text" id="newChannel" placeholder="@username или username">
-        <button class="btn btn-secondary" data-action="addChannel">+ Добавить</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- KEYWORDS -->
-  <div class="page" id="page-keywords">
-    <div class="page-header">
-      <div class="page-title">Ключевые слова</div>
-      <button class="btn btn-primary" data-action="saveKeywords">Сохранить</button>
-    </div>
-    <div class="two-col">
-      <div class="card">
-        <div class="card-title">Искать вакансии с</div>
+      <div class="card" id="criteriaWhat">
+        <div class="card-title">Что искать</div>
+        <div class="field-label">Ключевые слова Telegram</div>
         <div id="kwList"></div>
         <div class="add-row">
           <input type="text" id="newKw" placeholder="Ключевое слово">
           <button class="btn btn-secondary" data-action="addKw">+</button>
         </div>
-      </div>
-      <div class="card">
-        <div class="card-title">Исключать вакансии с</div>
+        <div class="field-label">Стоп-слова Telegram</div>
         <div id="exList"></div>
         <div class="add-row">
           <input type="text" id="newEx" placeholder="Слово для исключения">
           <button class="btn btn-secondary" data-action="addEx">+</button>
         </div>
+        <div class="field-label">Стоп-слова hh.ru</div>
+        <div id="hhExList"></div>
+        <div class="add-row">
+          <input type="text" id="newHHEx" placeholder="senior, lead...">
+          <button class="btn btn-secondary" data-action="addHHEx">+</button>
+        </div>
+        <div class="field-label">Опыт</div>
+        <select id="hhExperience" class="field-select"></select>
+        <div class="field-label">Зарплата от <span class="field-hint-inline">0 — не фильтровать</span></div>
+        <input type="number" id="hhSalaryFrom" value="0" min="0" step="10000" class="num-input">
+        <div class="field-label">Период поиска</div>
+        <select id="hhSearchPeriod" class="field-select">
+          <option value="1">Сегодня</option>
+          <option value="3">3 дня</option>
+          <option value="7">Неделя</option>
+          <option value="30">Месяц</option>
+        </select>
+        <div class="field-label">График работы</div>
+        <div id="hhScheduleBox" class="choice-box"></div>
+        <div class="field-label">Тип занятости <span class="field-hint-inline">можно несколько</span></div>
+        <div id="hhEmploymentBox" class="choice-box"></div>
+      </div>
+
+      <div class="card" id="criteriaHow">
+        <div class="card-title">Чем отвечать</div>
+        <div class="field-label">Текст отклика в Telegram</div>
+        <div class="field-hint">Подстановки: {канал}, {ключевое_слово}, {профессия}</div>
+        <textarea class="template-area" id="templateText" rows="7"></textarea>
+        <div class="field-label">Сопроводительное письмо на hh.ru</div>
+        <div class="field-hint">Первые 500 символов уходят как сопроводительное</div>
+        <textarea class="template-area" id="hhCoverLetter" rows="7"
+                  placeholder="Здравствуйте! Откликаюсь на вашу вакансию..."></textarea>
+        <div class="field-label">Резюме из библиотеки</div>
+        <div class="field-hint">Прикладывается к отклику в Telegram</div>
+        <select id="criteriaResume" class="field-select"></select>
+        <div class="field-label">ID резюме на hh.ru</div>
+        <input class="api-input" type="text" id="hhResumeId"
+               placeholder="Найти в URL: hh.ru/resume/XXXXXXXX">
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Последние действия</div>
+      <div id="recentLog">
+        <div class="log-row">
+          <span class="log-time">—</span>
+          <span class="log-source tg">TG</span>
+          <span class="log-badge badge-skip">WAIT</span>
+          <span style="color:var(--muted);font-size:12px">Ожидание данных...</span>
+        </div>
       </div>
     </div>
   </div>
 
-  <!-- TEMPLATES -->
-  <div class="page" id="page-template">
-    <div class="page-header"><div class="page-title">Шаблоны</div></div>
-
-    <div class="section-split">
-      <div class="section-split-label tg">
-        <svg viewBox="0 0 24 24" fill="none"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.289c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.17 13.617l-2.96-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.978.942z" fill="#2AABEE"/></svg>
-        Telegram
+  <!-- НАЙДЕНО -->
+  <div class="page" id="page-found">
+    <div class="page-header">
+      <div class="page-title">Найдено</div>
+      <div class="seg" id="foundSource">
+        <button class="seg-btn active" data-action="foundSource" data-arg="tg">Telegram</button>
+        <button class="seg-btn" data-action="foundSource" data-arg="hh">hh.ru</button>
       </div>
-      <div class="section-split-line"></div>
-      <button class="btn btn-primary" style="font-size:12px" data-action="saveTemplate">Сохранить</button>
     </div>
-    <div class="card">
-      <div class="card-title">Текст отклика в Telegram</div>
-      <textarea class="template-area" id="templateText" rows="10"></textarea>
+    <div class="seg seg-quiet" id="foundFilter">
+      <button class="seg-btn" data-action="foundFilter" data-arg="all">Все</button>
+      <button class="seg-btn active" data-action="foundFilter" data-arg="new">Новые</button>
+      <button class="seg-btn" data-action="foundFilter" data-arg="decided">Решённые</button>
     </div>
-    <div class="card">
-      <div class="card-title">Резюме</div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
-        Файл прикладывается к отклику в Telegram. Хранится в каталоге данных,
-        а не в каталоге проекта.
-      </div>
-      <div class="file-zone" id="fileZone" data-action="pickFile" data-enter-action="pickFile"
-           role="button" tabindex="0" aria-label="Загрузить файл резюме">
-        <input type="file" id="fileInput" accept=".pdf,.doc,.docx,.rtf,.odt"
-               style="display:none" data-change-action="uploadResume">
-        <div style="font-size:20px;margin-bottom:6px">📎</div>
-        <div id="fileZoneLabel" style="font-size:12.5px;color:var(--muted);font-weight:500">Нажмите чтобы загрузить файл</div>
-      </div>
-      <div id="resumeList" style="margin-top:10px"></div>
-    </div>
-
-    <div class="section-split">
-      <div class="section-split-label hh">
-        <svg viewBox="0 0 40 20"><text x="0" y="17" font-family="Arial Black,sans-serif" font-weight="900" font-size="18" fill="#D6001C">hh</text></svg>
-        HH.ru
-      </div>
-      <div class="section-split-line"></div>
-      <button class="btn btn-primary" style="font-size:12px;background:var(--hh)" data-action="saveHHCoverLetter">Сохранить</button>
-    </div>
-    <div class="card">
-      <div class="card-title">Сопроводительное письмо</div>
-      <textarea class="template-area" id="hhCoverLetter" rows="10" placeholder="Здравствуйте! Откликаюсь на вашу вакансию..."></textarea>
-      <div style="font-size:12px;color:var(--muted);margin-top:6px">Первые 500 символов отправляются как сопроводительное письмо</div>
+    <div class="card" style="padding:0;overflow:hidden">
+      <div id="foundList"></div>
     </div>
   </div>
 
-  <!-- SETTINGS -->
+  <!-- ОТПРАВЛЕНО -->
+  <div class="page" id="page-sent">
+    <div class="page-header">
+      <div class="page-title">Отправлено</div>
+      <div class="seg" id="sentSource">
+        <button class="seg-btn active" data-action="sentSource" data-arg="tg">Telegram</button>
+        <button class="seg-btn" data-action="sentSource" data-arg="hh">hh.ru</button>
+      </div>
+    </div>
+
+    <div id="sentTg" class="sent-pane">
+      <div class="chat-layout">
+      <div style="width:270px;flex-shrink:0;border-right:1px solid var(--border);display:flex;flex-direction:column;background:var(--card-bg)">
+        <div style="padding:14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+          <div style="font-size:14px;font-weight:700">Отправленные</div>
+          <div style="font-size:12px;color:var(--muted)" id="chatCount">0</div>
+        </div>
+        <div id="chatList" style="flex:1;overflow-y:auto"></div>
+      </div>
+      <div style="flex:1;display:flex;flex-direction:column;background:var(--bg)">
+        <div id="chatEmpty" style="flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;color:var(--muted)">
+          <div style="font-size:36px">💬</div>
+          <div style="font-size:13px;font-weight:500">Выберите контакт слева</div>
+        </div>
+        <div id="chatView" style="display:none;flex-direction:column;height:100%">
+          <div style="padding:12px 18px;border-bottom:1px solid var(--border);background:var(--card-bg);display:flex;align-items:center;gap:10px">
+            <div id="chatViewAvatar" style="width:34px;height:34px;border-radius:50%;background:var(--tg-light);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--tg);flex-shrink:0;font-family:'JetBrains Mono',monospace"></div>
+            <div>
+              <div id="chatViewName" style="font-size:13px;font-weight:600;font-family:'JetBrains Mono',monospace"></div>
+              <div style="font-size:11px;color:var(--muted)">Telegram</div>
+            </div>
+            <button class="btn btn-secondary" style="margin-left:auto;font-size:11px" data-action="reloadChat">↻</button>
+          </div>
+          <div id="chatMessages" style="flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:8px"></div>
+          <div style="padding:10px 14px;border-top:1px solid var(--border);background:var(--card-bg);display:flex;gap:8px">
+            <input type="text" id="chatInput" placeholder="Написать сообщение..."
+              style="flex:1;padding:8px 13px;border:1px solid var(--border);border-radius:20px;font-size:12.5px;font-family:'Manrope',sans-serif;background:var(--bg);color:var(--text);outline:none"
+              data-enter-action="sendChatMessage">
+            <button class="btn btn-primary" style="border-radius:20px;padding:8px 16px;font-size:12.5px" data-action="sendChatMessage">Отправить</button>
+          </div>
+        </div>
+      </div>
+      </div>
+    </div>
+
+    <div id="sentHh" class="sent-pane" style="display:none">
+      <div class="card" style="padding:0;overflow:hidden">
+        <div id="sentHhList"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- НАСТРОЙКИ -->
   <div class="page" id="page-settings">
-    <div class="page-header"><div class="page-title">Настройки</div></div>
+    <div class="page-header">
+      <div class="page-title">Настройки</div>
+      <button class="btn btn-primary" data-action="saveGlobalSettings">Сохранить</button>
+    </div>
+    <p class="page-hint">
+      Здесь только то, что общее для всех пресетов. Что искать — на
+      «Обзоре», рядом с пресетом, к которому относится.
+    </p>
 
-    <!-- TG Settings -->
-    <div class="section-split">
-      <div class="section-split-label tg">
-        <svg viewBox="0 0 24 24" fill="none"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.289c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.17 13.617l-2.96-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.978.942z" fill="#2AABEE"/></svg>
-        Telegram
+    <div class="card" id="settingsMode">
+      <div class="card-title">Режим и лимиты</div>
+      <div class="toggle-row">
+        <div>Безопасный режим
+          <div class="toggle-desc">
+            Ищу вакансии и складываю в очередь, но ничего не отправляю —
+            ни в Telegram, ни на hh.ru. Отклик остаётся за вами, на экране
+            «Найдено».
+          </div>
+        </div>
+        <label class="toggle"><input type="checkbox" id="toggleSafe" checked><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
       </div>
-      <div class="section-split-line"></div>
-      <button class="btn btn-primary" style="font-size:12px" data-action="saveTGSettings">Сохранить TG</button>
+      <div class="toggle-row">
+        <div>Читать историю каналов
+          <div class="toggle-desc">При запуске просматривать прошлые сообщения, а не только новые</div>
+        </div>
+        <label class="toggle"><input type="checkbox" id="toggleHistory"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
+      </div>
+      <div class="toggle-row">
+        <div>Откликов в день, Telegram
+          <div class="toggle-desc">Защита от блокировки аккаунта: банят аккаунт, а не пресет</div>
+        </div>
+        <input type="number" id="maxPerDay" value="25" min="1" max="100" class="num-input">
+      </div>
+      <div class="toggle-row">
+        <div>Откликов в день, hh.ru</div>
+        <input type="number" id="hhMaxPerDayInput" value="20" min="1" max="50" class="num-input">
+      </div>
+      <div class="toggle-row">
+        <div>Сообщений из истории канала</div>
+        <input type="number" id="historyLimit" value="50" min="10" max="500" class="num-input">
+      </div>
+      <div class="toggle-row">
+        <div>Интервал проверки hh.ru, мин</div>
+        <input type="number" id="hhCheckInterval" value="30" min="10" max="240" class="num-input">
+      </div>
+      <div class="toggle-row">
+        <div>Автозапуск Telegram<div class="toggle-desc">Запускать воркер при старте приложения</div></div>
+        <label class="toggle"><input type="checkbox" id="toggleTGAutostart"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
+      </div>
+      <div class="toggle-row">
+        <div>Автозапуск hh.ru</div>
+        <label class="toggle"><input type="checkbox" id="toggleHHAutostart"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
+      </div>
     </div>
 
-    <div class="card">
-      <div class="card-title">Telegram API</div>
+    <div class="card" id="settingsAccess">
+      <div class="card-title">Доступы</div>
+      <div class="field-label">Ключи Telegram API</div>
       <div class="api-hint">
         <div class="api-hint-title">Как получить API ключи</div>
         <ol>
@@ -317,10 +341,8 @@
       <div style="display:flex;gap:8px;margin-top:4px">
         <button class="btn btn-primary" data-action="saveApiKeys">Сохранить ключи</button>
       </div>
-    </div>
 
-    <div class="card">
-      <div class="card-title">Авторизация чатов (session_web)</div>
+      <div class="field-label">Вход в Telegram</div>
       <div id="authStatus" style="font-size:13px;color:var(--muted);margin-bottom:10px">Проверка...</div>
       <div id="authForm" style="display:none">
         <div class="api-input-row"><label>Номер телефона</label><input class="api-input" type="text" id="authPhone" placeholder="+77001234567"></div>
@@ -334,145 +356,34 @@
           <button class="btn btn-primary" data-action="verifyAuthCode">Подтвердить</button>
         </div>
       </div>
-    </div>
 
-    <div class="card">
-      <div class="card-title">Режим работы</div>
-      <div class="toggle-row">
-        <div>Safe Mode — Live Mode
-          <div class="toggle-desc">Safe = тестовый, не отправляет. Live = боевой режим</div>
-        </div>
-        <label class="toggle"><input type="checkbox" id="toggleSafe" checked><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
-      </div>
-      <div class="toggle-row">
-        <div>Parse History
-          <div class="toggle-desc">Читать историю каналов при запуске</div>
-        </div>
-        <label class="toggle"><input type="checkbox" id="toggleHistory"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
-      </div>
-      <div class="toggle-row">
-        <div>Автозапуск TG
-          <div class="toggle-desc">Запускать TG скрипт при старте приложения</div>
-        </div>
-        <label class="toggle"><input type="checkbox" id="toggleTGAutostart"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">Лимиты Telegram</div>
-      <div class="toggle-row">
-        <div>Макс. откликов в день<div class="toggle-desc">Защита от блокировки аккаунта</div></div>
-        <input type="number" id="maxPerDay" value="25" min="1" max="100" class="num-input">
-      </div>
-      <div class="toggle-row">
-        <div>История: кол-во сообщений<div class="toggle-desc">Сколько сообщений читать из каждого канала</div></div>
-        <input type="number" id="historyLimit" value="50" min="10" max="500" class="num-input">
-      </div>
-    </div>
-
-    <!-- HH Settings -->
-    <div class="section-split" style="margin-top:8px">
-      <div class="section-split-label hh">
-        <svg viewBox="0 0 40 20"><text x="0" y="17" font-family="Arial Black,sans-serif" font-weight="900" font-size="18" fill="#D6001C">hh</text></svg>
-        HH.ru
-      </div>
-      <div class="section-split-line"></div>
-      <button class="btn btn-primary" style="font-size:12px;background:var(--hh)" data-action="saveHHSettings">Сохранить HH</button>
-    </div>
-
-    <div class="two-col">
-      <div class="card">
-        <div class="card-title">Ключевые слова HH</div>
-        <div id="hhKwList"></div>
-        <div class="add-row">
-          <input type="text" id="newHHKw" placeholder="Название профессии">
-          <button class="btn btn-secondary" data-action="addHHKw">+</button>
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-title">Исключения HH</div>
-        <div id="hhExList"></div>
-        <div class="add-row">
-          <input type="text" id="newHHEx" placeholder="senior, lead...">
-          <button class="btn btn-secondary" data-action="addHHEx">+</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="two-col">
-      <div class="card">
-        <div class="card-title">Регион поиска</div>
-        <div style="font-size:13px;color:var(--muted)">
-          Поиск ведётся по одному региону:
-          <span id="hhAreaLabel" style="color:var(--text);font-weight:600">—</span>.
-          Это константа приложения, а не настройка.
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-title">Параметры HH</div>
-        <div class="toggle-row">
-          <div>Опыт</div>
-          <select id="hhExperience" style="padding:5px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;background:var(--bg);color:var(--text)"></select>
-        </div>
-        <div class="toggle-row">
-          <div>Зарплата от<div class="toggle-desc">0 = не фильтровать</div></div>
-          <input type="number" id="hhSalaryFrom" value="0" min="0" step="10000" class="num-input" style="width:80px">
-        </div>
-        <div class="toggle-row">
-          <div>Период поиска</div>
-          <select id="hhSearchPeriod" style="padding:5px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;background:var(--bg);color:var(--text)">
-            <option value="1">Сегодня</option>
-            <option value="3">3 дня</option>
-            <option value="7">Неделя</option>
-            <option value="30">Месяц</option>
-          </select>
-        </div>
-        <div class="toggle-row">
-          <div>Макс. откликов/день</div>
-          <input type="number" id="hhMaxPerDayInput" value="20" min="1" max="50" class="num-input">
-        </div>
-        <div class="toggle-row">
-          <div>Интервал проверки (мин)</div>
-          <input type="number" id="hhCheckInterval" value="30" min="10" max="240" class="num-input">
-        </div>
-        <div class="toggle-row">
-          <div>Автозапуск HH<div class="toggle-desc">Запускать HH при старте приложения</div></div>
-          <label class="toggle"><input type="checkbox" id="toggleHHAutostart"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">График работы HH</div>
-      <div id="hhScheduleBox" style="display:flex;gap:16px;flex-wrap:wrap"></div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">Тип занятости HH</div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
-        hh.ru принимает несколько типов сразу; одно значение сужает выдачу.
-      </div>
-      <div id="hhEmploymentBox" style="display:flex;gap:16px;flex-wrap:wrap"></div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">ID резюме на HH</div>
-      <input class="api-input" type="text" id="hhResumeId" placeholder="Найти в URL: hh.ru/resume/XXXXXXXX">
-    </div>
-
-    <!-- HH Login (L4: вход без блокировки процесса, две отдельных кнопки вместо input()) -->
-    <div class="card">
-      <div class="card-title">Вход в hh.ru</div>
+      <div class="field-label">Вход в hh.ru</div>
       <div id="hhLoginStatus" style="font-size:13px;color:var(--muted);margin-bottom:10px"></div>
       <div id="hhLoginButtons" style="display:flex;gap:8px;flex-wrap:wrap"></div>
       <button class="btn btn-secondary" id="btnHhLoginCancel" style="margin-top:8px"
               data-action="hhLoginCancel">Закрыть окно входа</button>
     </div>
 
-    <!-- Selenium Steps Editor -->
-    <div class="card">
-      <div class="card-title">Редактор сценария автокликания (Selenium)</div>
+    <div class="card" id="settingsResumes">
+      <div class="card-title">Библиотека резюме</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+        Файлы лежат в каталоге данных, а не в каталоге проекта: в резюме
+        есть ФИО, телефон и почта. Какое из них приложить — выбирается в
+        критериях пресета.
+      </div>
+      <div class="file-zone" id="fileZone" data-action="pickFile" data-enter-action="pickFile"
+           role="button" tabindex="0" aria-label="Загрузить файл резюме">
+        <input type="file" id="fileInput" accept=".pdf,.doc,.docx,.rtf,.odt"
+               style="display:none" data-change-action="uploadResume">
+        <div style="font-size:20px;margin-bottom:6px">📎</div>
+        <div id="fileZoneLabel" style="font-size:12.5px;color:var(--muted);font-weight:500">Нажмите чтобы загрузить файл</div>
+      </div>
+      <div id="resumeList" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card" id="settingsAdvanced">
+      <div class="card-title">Продвинутое</div>
+      <div class="field-label">Сценарий автокликания (Selenium)</div>
       <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Шаги выполняются после нажатия кнопки отклика на каждой вакансии</div>
       <div id="seleniumStepsList"></div>
       <div style="display:grid;grid-template-columns:auto 1fr 1fr auto;gap:8px;margin-top:12px;align-items:center">
@@ -489,31 +400,22 @@
         <input type="text" id="newStepValue" placeholder="Значение / текст / сек" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;font-family:'JetBrains Mono',monospace;background:var(--bg);color:var(--text);outline:none">
         <button class="btn btn-primary" style="font-size:12px;background:var(--hh)" data-action="addStep">+ Добавить</button>
       </div>
-    </div>
-  </div>
 
-  <!-- LOGS -->
-  <div class="page" id="page-logs">
-    <div class="page-header">
-      <div class="page-title">Логи</div>
-      <div style="display:flex;gap:8px;align-items:center">
+      <div class="field-label">Журнал работы</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
         <div class="log-tabs">
           <button class="log-tab active-tg" id="logTabTG" data-action="showLog" data-arg="tg">Telegram</button>
-          <button class="log-tab" id="logTabHH" data-action="showLog" data-arg="hh">HH.ru</button>
+          <button class="log-tab" id="logTabHH" data-action="showLog" data-arg="hh">hh.ru</button>
         </div>
-        <button class="btn btn-secondary" data-action="clearConsole">Очистить</button>
+        <button class="btn btn-secondary" style="margin-left:auto" data-action="clearConsole">Очистить</button>
         <button class="btn btn-secondary" data-action="refreshLogs">↻ Обновить</button>
       </div>
-    </div>
-    <div class="card" style="padding:0;overflow:hidden">
       <div class="log-console" id="logConsole">
-        <span class="info">// Загрузка...</span>
+        <span class="info">// Ожидание данных...</span>
       </div>
     </div>
   </div>
-
 </div>
-
 
 <!-- About modal -->
 <div id="aboutModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;align-items:center;justify-content:center">

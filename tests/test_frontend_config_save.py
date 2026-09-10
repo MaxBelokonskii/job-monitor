@@ -106,11 +106,15 @@ function setTimeout() {}
 
 
 @skip_without_node
-def test_save_tg_settings_reports_the_rejection_not_success() -> None:
+def test_save_global_settings_reports_the_rejection_not_success() -> None:
     """Reproduces the exact I4 scenario: an empty 'max_per_day' input
     serialises as NaN -> null, the API rejects it with 422, and the save
     handler must surface that instead of claiming success."""
-    tg_state_stub = "const tgState = { running: false, safeMode: true, parseHistory: false, maxPerDay: 25 };"
+    tg_state_stub = (
+        "const tgState = { running: false, safeMode: true, parseHistory: false, maxPerDay: 25 };\n"
+        "const hhState = { running: false, maxPerDay: 20, seleniumSteps: [] };\n"
+        "function updateStatusBar() {}"
+    )
     script = "\n".join((
         _DOM_STUB,
         tg_state_stub,
@@ -127,12 +131,15 @@ def test_save_tg_settings_reports_the_rejection_not_success() -> None:
         document.__elements = {
           toggleSafe: { checked: true },
           toggleHistory: { checked: false },
+          toggleTGAutostart: { checked: false },
+          toggleHHAutostart: { checked: false },
           maxPerDay: { value: '' },       // emptied by the user -> parseInt -> NaN -> JSON null
           historyLimit: { value: '50' },
-          toggleTGAutostart: { checked: false },
+          hhMaxPerDayInput: { value: '20' },
+          hhCheckInterval: { value: '30' },
         };
         """,
-        _extract_function_source("saveTGSettings"),
+        _extract_function_source("saveGlobalSettings"),
         """
         (async () => {
           globalThis.fetch = async () => ({
@@ -141,7 +148,7 @@ def test_save_tg_settings_reports_the_rejection_not_success() -> None:
             json: async () => ({ detail: [{ loc: ['body', 'max_per_day'], msg: 'Input should be a valid integer' }] }),
           });
 
-          await saveTGSettings();
+          await saveGlobalSettings();
 
           if (tgState.maxPerDay !== 25) {
             console.error('FAIL: local state was updated despite the rejected save', tgState.maxPerDay);
@@ -162,14 +169,18 @@ def test_save_tg_settings_reports_the_rejection_not_success() -> None:
     ))
     result = _run_node(script)
     assert result.returncode == 0, (
-        "saveTGSettings() did not surface a rejected PATCH /api/config.\n"
+        "saveGlobalSettings() did not surface a rejected PATCH /api/config.\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
 
 
 @skip_without_node
-def test_save_tg_settings_still_reports_success_on_a_healthy_save() -> None:
-    tg_state_stub = "const tgState = { running: false, safeMode: true, parseHistory: false, maxPerDay: 25 };"
+def test_save_global_settings_still_reports_success_on_a_healthy_save() -> None:
+    tg_state_stub = (
+        "const tgState = { running: false, safeMode: true, parseHistory: false, maxPerDay: 25 };\n"
+        "const hhState = { running: false, maxPerDay: 20, seleniumSteps: [] };\n"
+        "function updateStatusBar() {}"
+    )
     script = "\n".join((
         _DOM_STUB,
         tg_state_stub,
@@ -185,16 +196,19 @@ def test_save_tg_settings_still_reports_success_on_a_healthy_save() -> None:
         document.__elements = {
           toggleSafe: { checked: true },
           toggleHistory: { checked: false },
+          toggleTGAutostart: { checked: false },
+          toggleHHAutostart: { checked: false },
           maxPerDay: { value: '30' },
           historyLimit: { value: '50' },
-          toggleTGAutostart: { checked: false },
+          hhMaxPerDayInput: { value: '20' },
+          hhCheckInterval: { value: '30' },
         };
         """,
-        _extract_function_source("saveTGSettings"),
+        _extract_function_source("saveGlobalSettings"),
         """
         (async () => {
           globalThis.fetch = async () => ({ status: 200, ok: true, json: async () => ({ status: 'saved' }) });
-          await saveTGSettings();
+          await saveGlobalSettings();
           if (tgState.maxPerDay !== 30) {
             console.error('FAIL: local state was not updated on a healthy save', tgState.maxPerDay);
             process.exitCode = 1;

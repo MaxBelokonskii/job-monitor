@@ -93,13 +93,30 @@ async def get_preset(preset_id: int) -> dict[str, Any]:
 
 @router.patch("/{preset_id}")
 async def patch_preset(preset_id: int, patch: dict) -> dict[str, str]:
+    """Применяется целиком или никак.
+
+    Раньше имя и позиция писались сразу, а критерии валидировались после:
+    запрос с новым именем и негодным критерием возвращал 422, оставив
+    переименование сделанным. Клиент видел отказ и не знал, что половина
+    прошла, — и следующий его запрос шёл к пресету, которого «нет».
+
+    Сначала проверяется ВСЁ (имя, позиция, критерии), и только потом идёт
+    первая запись. Валидация критериев — `SearchCriteria` над слиянием
+    патча с сохранённым, то есть ровно то, что сделает `save_criteria`,
+    но без записи. Дублирование дешевле полусохранения: слияние — чистая
+    функция, а откатить уже записанное имя нечем.
+    """
     conn = get_connection()
     repo = PresetsRepo(conn)
-    if repo.get(preset_id) is None:
+    stored = repo.get(preset_id)
+    if stored is None:
         raise HTTPException(status_code=404, detail="пресет не найден")
 
     body = dict(patch)
     new_name = body.pop("name", None)
+    position = body.pop("position", None)
+
+    stripped: str | None = None
     if new_name is not None:
         stripped = str(new_name).strip()
         if not stripped:
@@ -109,19 +126,32 @@ async def patch_preset(preset_id: int, patch: dict) -> dict[str, str]:
         clash = repo.get_by_name(stripped)
         if clash is not None and clash["id"] != preset_id:
             raise HTTPException(status_code=400, detail=f"имя «{stripped}» уже занято")
-        repo.set_name(preset_id, stripped, datetime.now())
 
-    position = body.pop("position", None)
     if position is not None:
-        repo.set_position(preset_id, int(position), datetime.now())
+        try:
+            position = int(position)
+        except (TypeError, ValueError) as error:
+            raise HTTPException(
+                status_code=400, detail="позиция должна быть числом"
+            ) from error
 
     if body:
+        merged = presets_service.parse_criteria(stored["criteria"]).model_dump()
+        merged.update(body)
         try:
-            presets_service.save_criteria(conn, preset_id, body)
+            SearchCriteria(**merged)
         except ValidationError as error:
             raise HTTPException(
                 status_code=422, detail=_validation_detail(error)
             ) from error
+
+    now = datetime.now()
+    if stripped is not None:
+        repo.set_name(preset_id, stripped, now)
+    if position is not None:
+        repo.set_position(preset_id, position, now)
+    if body:
+        presets_service.save_criteria(conn, preset_id, body)
     return {"status": "saved"}
 
 

@@ -59,7 +59,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from job_monitor import paths
+from job_monitor import paths, statuses
 from job_monitor.db.repositories import EventsRepo, HH_STATUS_APPLIED, HhRepo
 from job_monitor.criteria import HH_AREA_ID, SearchCriteria
 from job_monitor.presets import active_criteria
@@ -75,7 +75,8 @@ SELENIUM_COOKIE_FIELDS = ("name", "value", "domain", "path", "secure", "httpOnly
 # уже после клика по кнопке отклика. Не HH_STATUS_APPLIED — не в счётчик
 # отправленных; отдельно от "пропущено" — видно в дашборде, что причина
 # именно в сценарии, а не в том, что кнопка отклика не нашлась.
-HH_STATUS_SCENARIO_ERROR = "ошибка сценария"
+# Прежнее имя, единственный источник значения — job_monitor/statuses.py.
+HH_STATUS_SCENARIO_ERROR = statuses.SCENARIO_ERROR
 
 
 # ── Вход без блокировки (L4) ────────────────────────────────────────────
@@ -284,8 +285,9 @@ def get_vacancies_from_page(driver: Any, criteria: SearchCriteria) -> list[dict]
     """Собираем вакансии со страницы поиска.
 
     Ключ переименован с `id` на `vacancy_id` (перенос из hh_monitor.py):
-    `HhRepo.exists()`/`upsert()` ждут `vacancy_id`, иначе получат `None`
-    молча и приложение начнёт откликаться на одни и те же вакансии по кругу.
+    `HhRepo.is_decided()`/`record_found()` ждут `vacancy_id`, иначе получат
+    `None` молча и приложение начнёт откликаться на одни и те же вакансии
+    по кругу.
     """
     vacancies: list[dict] = []
     wait = WebDriverWait(driver, 10)
@@ -503,7 +505,7 @@ def _process_one(
         # воркера, пока пользователь не поправит настройки, хуже, чем одна
         # непереотправленная вакансия. Поэтому НЕ пропускаем upsert (как
         # было раньше): помечаем вакансию отдельным статусом, не
-        # HH_STATUS_APPLIED, — repo.exists() станет True, дедуп в
+        # HH_STATUS_APPLIED, — статус попадает в statuses.DECIDED, дедуп в
         # _blocking_loop больше её не тронет, а причина видна и в
         # worker_events, и в карточке вакансии на дашборде: бейдж статуса
         # плюс сам текст `error` (frontend/app.js::loadHHVacancies). Без
@@ -513,13 +515,19 @@ def _process_one(
         repo.upsert({
             **vacancy,
             "status": HH_STATUS_SCENARIO_ERROR,
+            # Источник указывается явно, потому что `upsert` — слияние: без
+            # этой строки вакансия, которую человек когда-то вернул в
+            # очередь (источник «человек»), после автоматической обработки
+            # осталась бы подписана человеком.
+            "status_source": statuses.SOURCE_ROBOT,
             "error": str(error),
         })
         events.add("hh", "steps_invalid", str(error), datetime.now())
         return False
     repo.upsert({
         **vacancy,
-        "status": HH_STATUS_APPLIED if applied else "пропущено",
+        "status": HH_STATUS_APPLIED if applied else statuses.SKIPPED,
+        "status_source": statuses.SOURCE_ROBOT,
         "applied_at": datetime.now().isoformat(timespec="seconds") if applied else None,
     })
     events.add("hh", "applied" if applied else "skipped", vacancy["title"], datetime.now())
@@ -561,7 +569,24 @@ def _blocking_loop(stop_event: threading.Event) -> None:
             try:
                 settings = load_settings(conn)
                 criteria = active_criteria(conn)
-                if repo.applied_on(date.today()) >= settings.hh_max_per_day:
+                # В безопасном режиме лимит не проверяется вовсе: он
+                # существует потому, что банят за отправку, а отправки
+                # здесь нет — `applied_on` не растёт, и уснуть на десять
+                # минут значило бы перестать наполнять очередь, то есть
+                # отменить ровно то, ради чего режим включают.
+                #
+                # В обычном режиме воркер на достигнутом лимите засыпает и
+                # перестаёт собирать тоже. Это сознательный размен, а не
+                # недосмотр: проснувшись, он ждёт 600 секунд, тогда как
+                # обычный интервал проверки — 1800, так что «собирать и
+                # дальше» означало бы ходить на hh.ru втрое чаще ровно
+                # тогда, когда отправлять всё равно нечего. Очередь при
+                # этом не пустеет: собранное за день никуда не девается, и
+                # откликнуться вручную можно по нему в любой момент.
+                if (
+                    not settings.safe_mode
+                    and repo.applied_on(date.today()) >= settings.hh_max_per_day
+                ):
                     if not _interruptible_sleep(stop_event, 600):
                         return
                     continue
@@ -572,7 +597,32 @@ def _blocking_loop(stop_event: threading.Event) -> None:
                     for vacancy in get_vacancies_from_page(driver, criteria):
                         if stop_event.is_set():
                             return
-                        if repo.exists(vacancy["vacancy_id"]):
+                        # Дедуп по РЕШЁННОСТИ, а не по наличию строки
+                        # (решение D19). Строка теперь появляется в момент
+                        # находки — строкой ниже, — поэтому `repo.exists()`
+                        # здесь отбрасывал бы вакансию, которую воркер сам
+                        # только что записал, и отклик не ушёл бы никогда.
+                        # Это не падение, а тихая остановка автоматики;
+                        # поведение закреплено на настоящем цикле в
+                        # tests/test_hh_safe_mode.py.
+                        if repo.is_decided(vacancy["vacancy_id"]):
+                            continue
+                        # Запись ДО всякой попытки отклика — это и есть
+                        # наполнение очереди, которую показывает интерфейс.
+                        # `record_found` не трогает уже существующую строку,
+                        # поэтому повторный проход по той же странице не
+                        # переписывает `found_at` и не воскрешает статус.
+                        if repo.record_found({
+                            **vacancy,
+                            "status": statuses.NEW,
+                            "status_source": statuses.SOURCE_ROBOT,
+                        }):
+                            events.add("hh", "found", vacancy["title"], datetime.now())
+                        if settings.safe_mode:
+                            # Решение D17: один переключатель на оба воркера.
+                            # Ищем и складываем, наружу не уходит ничего — и
+                            # паузы между вакансиями не платим, платить не за
+                            # что.
                             continue
                         _process_one(
                             driver, vacancy, criteria, settings, repo, events

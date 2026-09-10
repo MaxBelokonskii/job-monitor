@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from job_monitor.db.migrations import migrate
+from job_monitor.db.migrations import SCHEMA_VERSION, migrate
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -22,9 +22,13 @@ def test_migration_creates_the_three_new_tables(tmp_path) -> None:
     assert _columns(conn, "resumes") == {
         "id", "original_name", "stored_name", "size_bytes", "uploaded_at",
     }
+    # Набор точный, а не «содержит»: каждая следующая миграция обязана
+    # объявиться здесь явно. Три последних колонки добавила 004 — очередь
+    # найденного; `username` (единственное число) с тех пор не пишется, но
+    # остаётся, потому что удаление колонки означает пересоздание таблицы.
     assert _columns(conn, "tg_found") == {
         "id", "channel", "message_id", "found_at", "username", "preview",
-        "matched_keyword",
+        "matched_keyword", "status", "status_at", "usernames",
     }
 
 
@@ -67,8 +71,8 @@ def test_the_same_post_cannot_be_recorded_twice(tmp_path) -> None:
 
 def test_migration_is_idempotent(tmp_path) -> None:
     conn = sqlite3.connect(tmp_path / "t.db")
-    assert migrate(conn) == 3
-    assert migrate(conn) == 3
+    assert migrate(conn) == SCHEMA_VERSION
+    assert migrate(conn) == SCHEMA_VERSION
 
 
 def test_the_backup_runs_once_per_run_and_outside_a_transaction(
@@ -104,7 +108,9 @@ def test_the_backup_runs_once_per_run_and_outside_a_transaction(
 
     assert len(calls) == 1, f"копия снята {len(calls)} раз(а) вместо одного: {calls}"
     target, in_transaction = calls[0]
-    assert target == 3, "копия должна быть помечена итоговой версией прогона"
+    assert target == SCHEMA_VERSION, (
+        "копия должна быть помечена итоговой версией прогона"
+    )
     assert in_transaction is False, (
         "копия снимается при открытой транзакции — Connection.backup() "
         "получит SQLITE_BUSY и зациклится без таймаута"
@@ -137,7 +143,9 @@ def test_pending_migrations_leave_a_backup_of_the_database(tmp_path, monkeypatch
 
     migrations.migrate(conn)
 
-    backup = paths.db_backup_file("003")
+    # Метка — итоговая версия прогона, а не номер конкретной миграции:
+    # копия снимается один раз перед всеми ожидающими.
+    backup = paths.db_backup_file(f"{SCHEMA_VERSION:03d}")
     assert backup.exists(), "миграция не оставила копию БД"
     restored = sqlite3.connect(backup)
     restored.row_factory = sqlite3.Row
@@ -150,7 +158,7 @@ def test_pending_migrations_leave_a_backup_of_the_database(tmp_path, monkeypatch
 def test_the_backup_is_0600_like_everything_else_it_copies(tmp_path, monkeypatch) -> None:
     """Найдено мутационным аудитом: правам копии не было ни одного теста.
 
-    В `job_monitor.db.bak-003` лежат ровно те же контакты и превью
+    В копии `job_monitor.db.bak-NNN` лежат ровно те же контакты и превью
     переписки, что и в самой базе. Всем остальным носителям этих данных —
     базе, `-wal`, `-shm`, файлу сессии, `.env`, логам — права закреплены
     отдельными проверками; копия была единственным исключением, и ослабление
@@ -169,7 +177,7 @@ def test_the_backup_is_0600_like_everything_else_it_copies(tmp_path, monkeypatch
     conn.commit()
     migrations.migrate(conn)
 
-    backup = paths.db_backup_file("003")
+    backup = paths.db_backup_file(f"{SCHEMA_VERSION:03d}")
     assert backup.exists()
     assert stat.S_IMODE(backup.stat().st_mode) == 0o600, (
         "копия базы доступна на чтение кому попало, а в ней те же контакты "

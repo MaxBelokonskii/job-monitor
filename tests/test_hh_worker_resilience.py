@@ -292,8 +292,12 @@ def _prepare_db(monkeypatch, tmp_path, **settings_overrides):
     monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path))
     db_connection.reset_connection()
     conn = db_connection.connect()
+    # `safe_mode=False` явно: с решения D17 безопасный режим действует и на
+    # hh.ru, а по умолчанию он ВКЛЮЧЁН — воркер в нём только собирает и до
+    # отклика не доходит. Все тесты этого файла про устойчивость ЦИКЛА
+    # ОТКЛИКОВ, значит отклик должен быть разрешён.
     save_settings(conn, {
-        "hh_max_per_day": 50, "hh_check_interval": 60,
+        "hh_max_per_day": 50, "hh_check_interval": 60, "safe_mode": False,
         **settings_overrides,
     })
     # Профессия — критерий, она в пресете; регион больше не настройка вовсе.
@@ -373,7 +377,14 @@ def test_reversed_delay_bounds_do_not_break_the_cycle(monkeypatch, tmp_path):
     stop_event = threading.Event()
     scrapes = {"n": 0}
     processed: list[dict] = []
-    vacancy = {"vacancy_id": "42", "title": "QA", "url": "https://hh.ru/vacancy/42"}
+    # `found_at` обязателен: колонка NOT NULL, и настоящий
+    # `get_vacancies_from_page` её всегда заполняет. Пока цикл записывал
+    # вакансию только через подменённый здесь `_process_one`, заготовка без
+    # неё проходила; теперь цикл кладёт находку в очередь сам, до отклика.
+    vacancy = {
+        "vacancy_id": "42", "title": "QA", "url": "https://hh.ru/vacancy/42",
+        "found_at": "2026-09-10T10:00:00",
+    }
 
     def fake_get_vacancies(driver, settings):
         scrapes["n"] += 1
