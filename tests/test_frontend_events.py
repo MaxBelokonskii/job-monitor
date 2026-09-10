@@ -188,12 +188,22 @@ def test_markup_carries_the_converted_handlers() -> None:
     `onFileSelect` из списка ушёл осознанно: обработчик был мёртвым — он
     обновлял подписи и никогда не отправлял файл (дефект L14). На его месте
     `uploadResume`, который действительно загружает резюме в библиотеку.
+
+    `saveChannels`, `saveKeywords`, `saveTemplate`, `saveHHCoverLetter` и
+    `chooseResume` ушли тоже осознанно: пять кнопок сохранения критериев
+    стали одной (`saveCriteria`), а выбор резюме — выпадающим списком,
+    который сохраняется вместе с остальными критериями. Пять кнопок
+    означали пять частичных сохранений; один PATCH пресета применяется
+    целиком или никак. Множество ниже по-прежнему требует, чтобы каждое
+    перечисленное имя присутствовало в разметке, а
+    `test_every_handler_is_reachable` — чтобы в ACTIONS не осталось
+    мёртвых записей.
     """
     expected = {
         "showAbout", "hideAbout", "toggleTG", "toggleHH",
         "reloadChat", "sendChatMessage",
-        "saveChannels", "addChannel", "saveKeywords", "addKw", "addEx",
-        "saveTemplate", "pickFile", "saveHHCoverLetter",
+        "addChannel", "addKw", "addEx", "saveCriteria",
+        "pickFile",
         "saveTGSettings", "saveApiKeys", "sendAuthCode", "verifyAuthCode",
         "saveHHSettings", "addHHKw", "addHHEx", "addStep",
         "showLog", "clearConsole", "refreshLogs",

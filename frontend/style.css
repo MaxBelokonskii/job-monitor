@@ -332,3 +332,13 @@ body { font-family: 'Manrope', sans-serif; background: var(--bg); color: var(--t
 .found-empty { padding: 24px; text-align: center; color: var(--muted); font-size: 13px; }
 
 .worker-bar { display: flex; gap: 10px; flex-wrap: wrap; }
+
+/* ── Поля критериев ───────────────────────────────────────────────── */
+.field-label { font-size: 11px; font-weight: 600; color: var(--muted);
+  margin: 14px 0 5px; }
+.field-label:first-of-type { margin-top: 0; }
+.field-hint { font-size: 11px; color: var(--muted); margin: -2px 0 6px; line-height: 1.4; }
+.field-hint-inline { font-weight: 400; text-transform: none; letter-spacing: 0; }
+.field-select { width: 100%; padding: 6px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); font-size: 12px; background: var(--bg); color: var(--text); }
+.choice-box { display: flex; gap: 12px; flex-wrap: wrap; }

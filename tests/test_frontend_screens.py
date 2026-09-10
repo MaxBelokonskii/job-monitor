@@ -439,3 +439,124 @@ for (const [source, expected] of cases) {
         ["node", "-e", script], capture_output=True, text=True, timeout=10
     )
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+
+# ── Критерии живут рядом с пресетом ───────────────────────────────────
+
+CRITERIA_FIELDS = (
+    "newChannel", "channelEditList",       # каналы Telegram
+    "kwList", "exList",                    # ключевые слова и стоп-слова TG
+    "hhKwList", "hhExList",                # профессии и стоп-слова hh.ru
+    "hhExperience", "hhSalaryFrom", "hhSearchPeriod",
+    "hhScheduleBox", "hhEmploymentBox", "hhResumeId",
+    "templateText", "hhCoverLetter", "criteriaResume",
+)
+
+
+def _overview() -> str:
+    index = _index()
+    return index[index.index('id="page-overview"'):index.index('id="page-found"')]
+
+
+def _settings() -> str:
+    index = _index()
+    return index[index.index('id="page-settings"'):]
+
+
+def test_every_criteria_field_lives_on_the_overview() -> None:
+    """«Что искать» принадлежит пресету и показывается вместе с ним; в
+    «Настройках» остаётся только то, что общее для всех пресетов."""
+    overview = _overview()
+    for field in CRITERIA_FIELDS:
+        assert f'id="{field}"' in overview, f"поле критериев {field} не на «Обзоре»"
+
+
+def test_no_criteria_field_is_left_in_the_settings() -> None:
+    settings = _settings()
+    for field in CRITERIA_FIELDS:
+        assert f'id="{field}"' not in settings, (
+            f"{field} остался в «Настройках» — он принадлежит пресету"
+        )
+
+
+def test_the_criteria_are_grouped_into_three_cards() -> None:
+    overview = _overview()
+    for group in ("criteriaWhere", "criteriaWhat", "criteriaHow"):
+        assert f'id="{group}"' in overview
+
+
+def test_there_is_one_save_button_for_the_criteria() -> None:
+    """Пять кнопок сохранения — это пять частичных сохранений. Одна кнопка
+    и один PATCH: с задачи 7 он применяется целиком или никак."""
+    overview = _overview()
+    assert overview.count('data-action="saveCriteria"') == 1
+    for gone in ("saveChannels", "saveKeywords", "saveTemplate",
+                 "saveHHCoverLetter", "chooseResume"):
+        assert gone not in _index(), f"кнопка {gone} осталась в разметке"
+        assert gone not in _app(), f"обработчик {gone} остался в app.js"
+
+
+def _without_comments(source: str) -> str:
+    """Исходник без `//`-комментариев.
+
+    Те же соображения, что у `_app_code_without_comments` в
+    tests/test_frontend_events.py: причина, по которой что-то сделано
+    именно так, часто называет то самое имя, которое проверка считает.
+    """
+    return "\n".join(
+        re.sub(r"(^|\s)//.*$", "", line) for line in source.splitlines()
+    )
+
+
+def test_the_criteria_save_goes_through_one_patch() -> None:
+    """Патч уходит одним запросом на пресет, а не полем за полем: иначе
+    отказ на пятом поле оставил бы четыре сохранёнными."""
+    source = _without_comments(_extract_function_source("saveCriteria"))
+    assert source.count("patchCriteria") == 1
+
+
+@skip_without_node
+def test_collect_criteria_sends_numbers_as_numbers() -> None:
+    """Пустое числовое поле сериализуется в null и отвергается с 422 —
+    это уже ловили в подпроекте 1. Но у критерия «пусто» имеет смысл:
+    «зарплата от» без числа значит «не важно», то есть ноль. Это не то же
+    самое, что лимит отправок, где выбрать значение за человека нельзя."""
+    source = _extract_function_source("collectCriteria")
+    script = """
+const fields = {
+  hhSalaryFrom: '', hhSearchPeriod: '3', hhResumeId: ' 12345 ',
+  templateText: 'привет', hhCoverLetter: '', hhExperience: 'between1And3',
+  criteriaResume: '',
+};
+global.document = {
+  getElementById: id => (id in fields ? { value: fields[id] } : null),
+};
+""" + source + """
+const patch = collectCriteria({
+  channels: ['qajobs'], tg_keywords: ['qa'], tg_exclude: [],
+  professions: ['QA'], hh_exclude: [], hh_schedule: [], hh_employment: [],
+});
+function check(name, actual, expected) {
+  if (actual !== expected) {
+    console.error(name, actual, '!=', expected);
+    process.exitCode = 1;
+  }
+}
+check('hh_salary_from', patch.hh_salary_from, 0);
+check('hh_search_period', patch.hh_search_period, 3);
+check('hh_resume_id', patch.hh_resume_id, '12345');
+check('resume_id', patch.resume_id, null);
+check('channels', patch.channels.join(), 'qajobs');
+
+// Второй заход: пусто ВЕЗДЕ. Период обязан стать единицей, а не нулём:
+// ноль не проходит проверку `ge=1`, и сохранение упало бы с 422 на поле,
+// которого человек не трогал.
+fields.hhSearchPeriod = '';
+const empty = collectCriteria({});
+check('пустой период', empty.hh_search_period, 1);
+check('пустая зарплата', empty.hh_salary_from, 0);
+"""
+    result = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=10
+    )
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"

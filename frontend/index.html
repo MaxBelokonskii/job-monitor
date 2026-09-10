@@ -102,111 +102,97 @@
       </div>
     </div>
 
-    <!-- Bottom row: channels + recent log -->
-    <div class="two-col">
-      <div class="card">
-        <div class="card-title">
-          TG Каналы
-          <span style="font-family:'JetBrains Mono',monospace;font-weight:700;color:var(--tg);margin-left:6px" id="dashChannelCount">0</span>
+    <div class="page-header" style="margin-top:6px">
+      <div class="card-title" style="margin:0">Критерии активного пресета</div>
+      <button class="btn btn-primary" data-action="saveCriteria">Сохранить критерии</button>
+    </div>
+
+    <div class="three-col">
+      <div class="card" id="criteriaWhere">
+        <div class="card-title">Где искать</div>
+        <div class="field-label">Каналы Telegram</div>
+        <div id="channelEditList"></div>
+        <div class="add-row">
+          <input type="text" id="newChannel" placeholder="@username или username">
+          <button class="btn btn-secondary" data-action="addChannel">+</button>
         </div>
-        <div id="dashChannelList"></div>
-        <div style="margin-top:12px">
-          <div class="card-title">Ключевые слова</div>
-          <div class="tags" id="kwTags"></div>
+        <div class="field-label">Профессии на hh.ru</div>
+        <div id="hhKwList"></div>
+        <div class="add-row">
+          <input type="text" id="newHHKw" placeholder="Название профессии">
+          <button class="btn btn-secondary" data-action="addHHKw">+</button>
         </div>
-        <div style="margin-top:10px">
-          <div class="card-title">Исключения</div>
-          <div class="tags" id="exTags"></div>
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-title">Последние действия</div>
-        <div id="recentLog">
-          <div class="log-row">
-            <span class="log-time">—</span>
-            <span class="log-source tg">TG</span>
-            <span class="log-badge badge-skip">WAIT</span>
-            <span style="color:var(--muted);font-size:12px">Ожидание данных...</span>
-          </div>
+        <div class="field-hint">
+          Регион поиска — константа приложения, а не настройка: поиск
+          ведётся только по нему.
         </div>
       </div>
-    </div>
-    <div class="page-header">
-      <div class="page-title">Каналы</div>
-      <button class="btn btn-primary" data-action="saveChannels">Сохранить</button>
-    </div>
-    <div class="card">
-      <div class="card-title">Telegram каналы для мониторинга</div>
-      <div id="channelEditList"></div>
-      <div class="add-row">
-        <input type="text" id="newChannel" placeholder="@username или username">
-        <button class="btn btn-secondary" data-action="addChannel">+ Добавить</button>
-      </div>
-    </div>
-    <div class="page-header">
-      <div class="page-title">Ключевые слова</div>
-      <button class="btn btn-primary" data-action="saveKeywords">Сохранить</button>
-    </div>
-    <div class="two-col">
-      <div class="card">
-        <div class="card-title">Искать вакансии с</div>
+
+      <div class="card" id="criteriaWhat">
+        <div class="card-title">Что искать</div>
+        <div class="field-label">Ключевые слова Telegram</div>
         <div id="kwList"></div>
         <div class="add-row">
           <input type="text" id="newKw" placeholder="Ключевое слово">
           <button class="btn btn-secondary" data-action="addKw">+</button>
         </div>
-      </div>
-      <div class="card">
-        <div class="card-title">Исключать вакансии с</div>
+        <div class="field-label">Стоп-слова Telegram</div>
         <div id="exList"></div>
         <div class="add-row">
           <input type="text" id="newEx" placeholder="Слово для исключения">
           <button class="btn btn-secondary" data-action="addEx">+</button>
         </div>
+        <div class="field-label">Стоп-слова hh.ru</div>
+        <div id="hhExList"></div>
+        <div class="add-row">
+          <input type="text" id="newHHEx" placeholder="senior, lead...">
+          <button class="btn btn-secondary" data-action="addHHEx">+</button>
+        </div>
+        <div class="field-label">Опыт</div>
+        <select id="hhExperience" class="field-select"></select>
+        <div class="field-label">Зарплата от <span class="field-hint-inline">0 — не фильтровать</span></div>
+        <input type="number" id="hhSalaryFrom" value="0" min="0" step="10000" class="num-input">
+        <div class="field-label">Период поиска</div>
+        <select id="hhSearchPeriod" class="field-select">
+          <option value="1">Сегодня</option>
+          <option value="3">3 дня</option>
+          <option value="7">Неделя</option>
+          <option value="30">Месяц</option>
+        </select>
+        <div class="field-label">График работы</div>
+        <div id="hhScheduleBox" class="choice-box"></div>
+        <div class="field-label">Тип занятости <span class="field-hint-inline">можно несколько</span></div>
+        <div id="hhEmploymentBox" class="choice-box"></div>
       </div>
-    </div>
-    <div class="page-header"><div class="page-title">Шаблоны</div></div>
 
-    <div class="section-split">
-      <div class="section-split-label tg">
-        <svg viewBox="0 0 24 24" fill="none"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.289c-.145.658-.537.818-1.084.508l-3-2.21-1.447 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.17 13.617l-2.96-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.537-.194 1.006.131.978.942z" fill="#2AABEE"/></svg>
-        Telegram
+      <div class="card" id="criteriaHow">
+        <div class="card-title">Чем отвечать</div>
+        <div class="field-label">Текст отклика в Telegram</div>
+        <div class="field-hint">Подстановки: {канал}, {ключевое_слово}, {профессия}</div>
+        <textarea class="template-area" id="templateText" rows="7"></textarea>
+        <div class="field-label">Сопроводительное письмо на hh.ru</div>
+        <div class="field-hint">Первые 500 символов уходят как сопроводительное</div>
+        <textarea class="template-area" id="hhCoverLetter" rows="7"
+                  placeholder="Здравствуйте! Откликаюсь на вашу вакансию..."></textarea>
+        <div class="field-label">Резюме из библиотеки</div>
+        <div class="field-hint">Прикладывается к отклику в Telegram</div>
+        <select id="criteriaResume" class="field-select"></select>
+        <div class="field-label">ID резюме на hh.ru</div>
+        <input class="api-input" type="text" id="hhResumeId"
+               placeholder="Найти в URL: hh.ru/resume/XXXXXXXX">
       </div>
-      <div class="section-split-line"></div>
-      <button class="btn btn-primary" style="font-size:12px" data-action="saveTemplate">Сохранить</button>
-    </div>
-    <div class="card">
-      <div class="card-title">Текст отклика в Telegram</div>
-      <textarea class="template-area" id="templateText" rows="10"></textarea>
-    </div>
-    <div class="card">
-      <div class="card-title">Резюме</div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
-        Файл прикладывается к отклику в Telegram. Хранится в каталоге данных,
-        а не в каталоге проекта.
-      </div>
-      <div class="file-zone" id="fileZone" data-action="pickFile" data-enter-action="pickFile"
-           role="button" tabindex="0" aria-label="Загрузить файл резюме">
-        <input type="file" id="fileInput" accept=".pdf,.doc,.docx,.rtf,.odt"
-               style="display:none" data-change-action="uploadResume">
-        <div style="font-size:20px;margin-bottom:6px">📎</div>
-        <div id="fileZoneLabel" style="font-size:12.5px;color:var(--muted);font-weight:500">Нажмите чтобы загрузить файл</div>
-      </div>
-      <div id="resumeList" style="margin-top:10px"></div>
     </div>
 
-    <div class="section-split">
-      <div class="section-split-label hh">
-        <svg viewBox="0 0 40 20"><text x="0" y="17" font-family="Arial Black,sans-serif" font-weight="900" font-size="18" fill="#D6001C">hh</text></svg>
-        HH.ru
-      </div>
-      <div class="section-split-line"></div>
-      <button class="btn btn-primary" style="font-size:12px;background:var(--hh)" data-action="saveHHCoverLetter">Сохранить</button>
-    </div>
     <div class="card">
-      <div class="card-title">Сопроводительное письмо</div>
-      <textarea class="template-area" id="hhCoverLetter" rows="10" placeholder="Здравствуйте! Откликаюсь на вашу вакансию..."></textarea>
-      <div style="font-size:12px;color:var(--muted);margin-top:6px">Первые 500 символов отправляются как сопроводительное письмо</div>
+      <div class="card-title">Последние действия</div>
+      <div id="recentLog">
+        <div class="log-row">
+          <span class="log-time">—</span>
+          <span class="log-source tg">TG</span>
+          <span class="log-badge badge-skip">WAIT</span>
+          <span style="color:var(--muted);font-size:12px">Ожидание данных...</span>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -358,51 +344,7 @@
 
     <div class="two-col">
       <div class="card">
-        <div class="card-title">Ключевые слова HH</div>
-        <div id="hhKwList"></div>
-        <div class="add-row">
-          <input type="text" id="newHHKw" placeholder="Название профессии">
-          <button class="btn btn-secondary" data-action="addHHKw">+</button>
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-title">Исключения HH</div>
-        <div id="hhExList"></div>
-        <div class="add-row">
-          <input type="text" id="newHHEx" placeholder="senior, lead...">
-          <button class="btn btn-secondary" data-action="addHHEx">+</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="two-col">
-      <div class="card">
-        <div class="card-title">Регион поиска</div>
-        <div style="font-size:13px;color:var(--muted)">
-          Поиск ведётся по одному региону:
-          <span id="hhAreaLabel" style="color:var(--text);font-weight:600">—</span>.
-          Это константа приложения, а не настройка.
-        </div>
-      </div>
-      <div class="card">
         <div class="card-title">Параметры HH</div>
-        <div class="toggle-row">
-          <div>Опыт</div>
-          <select id="hhExperience" style="padding:5px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;background:var(--bg);color:var(--text)"></select>
-        </div>
-        <div class="toggle-row">
-          <div>Зарплата от<div class="toggle-desc">0 = не фильтровать</div></div>
-          <input type="number" id="hhSalaryFrom" value="0" min="0" step="10000" class="num-input" style="width:80px">
-        </div>
-        <div class="toggle-row">
-          <div>Период поиска</div>
-          <select id="hhSearchPeriod" style="padding:5px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;background:var(--bg);color:var(--text)">
-            <option value="1">Сегодня</option>
-            <option value="3">3 дня</option>
-            <option value="7">Неделя</option>
-            <option value="30">Месяц</option>
-          </select>
-        </div>
         <div class="toggle-row">
           <div>Макс. откликов/день</div>
           <input type="number" id="hhMaxPerDayInput" value="20" min="1" max="50" class="num-input">
@@ -418,22 +360,21 @@
       </div>
     </div>
 
-    <div class="card">
-      <div class="card-title">График работы HH</div>
-      <div id="hhScheduleBox" style="display:flex;gap:16px;flex-wrap:wrap"></div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">Тип занятости HH</div>
+    <div class="card" id="resumeLibrary">
+      <div class="card-title">Библиотека резюме</div>
       <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
-        hh.ru принимает несколько типов сразу; одно значение сужает выдачу.
+        Файлы лежат в каталоге данных, а не в каталоге проекта: в резюме
+        есть ФИО, телефон и почта. Какое из них приложить — выбирается в
+        критериях пресета.
       </div>
-      <div id="hhEmploymentBox" style="display:flex;gap:16px;flex-wrap:wrap"></div>
-    </div>
-
-    <div class="card">
-      <div class="card-title">ID резюме на HH</div>
-      <input class="api-input" type="text" id="hhResumeId" placeholder="Найти в URL: hh.ru/resume/XXXXXXXX">
+      <div class="file-zone" id="fileZone" data-action="pickFile" data-enter-action="pickFile"
+           role="button" tabindex="0" aria-label="Загрузить файл резюме">
+        <input type="file" id="fileInput" accept=".pdf,.doc,.docx,.rtf,.odt"
+               style="display:none" data-change-action="uploadResume">
+        <div style="font-size:20px;margin-bottom:6px">📎</div>
+        <div id="fileZoneLabel" style="font-size:12.5px;color:var(--muted);font-weight:500">Нажмите чтобы загрузить файл</div>
+      </div>
+      <div id="resumeList" style="margin-top:10px"></div>
     </div>
 
     <!-- HH Login (L4: вход без блокировки процесса, две отдельных кнопки вместо input()) -->

@@ -258,11 +258,7 @@ const hhState = {
 // решается: раньше это была лестница из шести `if (page === ...)`, куда
 // новый экран забывали дописать — и он открывался пустым, без ошибки.
 const PAGE_LOADERS = {
-  overview: async () => {
-    renderChannelEdit();
-    renderKeywords();
-    document.getElementById('templateText').value = tgState.template;
-  },
+  overview: async () => { await loadActiveCriteria(); },
   found: async () => { await loadFound(); },
   sent: async () => { await renderChats(); },
   settings: async () => {
@@ -606,12 +602,6 @@ function addChannel() {
   renderChannelEdit();
 }
 function removeChannel(i) { tgState.channels.splice(i, 1); renderChannelEdit(); }
-async function saveChannels() {
-  if (!await patchCriteria({ channels: tgState.channels })) return;
-  if (tgState.running) { showToast('Сохранено — перезапустите TG'); showRestartBanner(); }
-  else showToast('Каналы сохранены');
-}
-
 // ── Keywords ──────────────────────────────────────────────────────────
 function renderKeywords() {
   fill(document.getElementById('kwList'), tgState.keywords.map((k, i) => el('div', { class: 'list-item' }, [
@@ -627,26 +617,8 @@ function addKw() { const v = document.getElementById('newKw').value.trim().toLow
 function removeKw(i) { tgState.keywords.splice(i, 1); renderKeywords(); }
 function addEx() { const v = document.getElementById('newEx').value.trim().toLowerCase(); if (!v) return; if (tgState.exclude.includes(v)) { showToast('Уже есть'); return; } tgState.exclude.push(v); document.getElementById('newEx').value = ''; renderKeywords(); }
 function removeEx(i) { tgState.exclude.splice(i, 1); renderKeywords(); }
-async function saveKeywords() {
-  if (!await patchCriteria({
-    tg_keywords: tgState.keywords, tg_exclude: tgState.exclude,
-  })) return;
-  if (tgState.running) { showToast('Сохранено — перезапустите TG'); showRestartBanner(); }
-  else showToast('Ключевые слова сохранены');
-}
 
 // ── Templates ─────────────────────────────────────────────────────────
-async function saveTemplate() {
-  tgState.template = document.getElementById('templateText').value;
-  if (!await patchCriteria({ template: tgState.template })) return;
-  if (tgState.running) { showToast('Сохранено — перезапустите TG'); showRestartBanner(); }
-  else showToast('Шаблон сохранён');
-}
-async function saveHHCoverLetter() {
-  const letter = document.getElementById('hhCoverLetter').value;
-  if (!await patchCriteria({ hh_cover_letter: letter })) return;
-  showToast('Сопроводительное письмо сохранено');
-}
 // ── Библиотека резюме ─────────────────────────────────────────────────
 //
 // Раньше здесь жил мёртвый обработчик выбора файла: он обновлял три
@@ -681,6 +653,7 @@ async function loadResumes() {
   const items = await apiGet('/resumes');
   if (!Array.isArray(items)) return;
   const chosen = presetState.criteria.resume_id ?? null;
+  renderResumePicker(items);
   if (items.length === 0) {
     fill(box, el('div', {
       style: 'font-size:12px;color:var(--muted)',
@@ -699,13 +672,8 @@ async function loadResumes() {
       text: `${Math.max(1, Math.round(item.size_bytes / 1024))} КБ`,
     }),
     item.id === chosen
-      ? el('span', { class: 'preset-meta', text: 'выбрано' })
-      : el('button', {
-          class: 'btn btn-secondary',
-          text: 'Выбрать',
-          'data-action': 'chooseResume',
-          'data-arg': String(item.id),
-        }),
+      ? el('span', { class: 'preset-meta', text: 'выбрано в пресете' })
+      : null,
     el('button', {
       class: 'btn-del',
       text: '×',
@@ -715,11 +683,6 @@ async function loadResumes() {
   ])));
 }
 
-async function chooseResume(id) {
-  if (!await patchCriteria({ resume_id: parseInt(id, 10) })) return;
-  showToast('Резюме выбрано для активного пресета');
-  await loadResumes();
-}
 
 async function deleteResume(id) {
   const r = await apiSend('DELETE', `/resumes/${id}`);
@@ -728,6 +691,78 @@ async function deleteResume(id) {
   if (!r || r.status !== 'deleted') { showToast(configErrorDetail(r)); return; }
   showToast('Резюме удалено');
   await loadResumes();
+}
+
+// Выпадающий список резюме на «Обзоре»: выбор принадлежит пресету и
+// сохраняется вместе с остальными критериями. Сама библиотека (загрузка и
+// удаление файлов) живёт в настройках — она общая для всех пресетов.
+function renderResumePicker(rows) {
+  const box = document.getElementById('criteriaResume');
+  if (!box) return;
+  const chosen = presetState.criteria.resume_id ?? null;
+  fill(box, [
+    el('option', { value: '', text: '— без вложения —' }),
+    ...rows.map(row => {
+      const option = el('option', { value: String(row.id), text: row.original_name });
+      if (chosen === row.id) option.selected = true;
+      return option;
+    }),
+  ]);
+}
+
+// Сборка патча критериев из полей формы. Чистая функция от документа и уже
+// собранных списков — поэтому её можно исполнить в тесте.
+//
+// Числа приводятся здесь: пустое числовое поле даёт пустую строку, и
+// JSON.stringify кладёт в тело null, который pydantic отвергает с 422.
+// У критерия «пусто» имеет смысл — «зарплата от» без числа значит «не
+// важно», — и это НЕ то же самое, что лимит отправок, где выбрать
+// значение за человека нельзя (см. saveGlobalSettings).
+//
+// `Number('')` — это 0, поэтому зарплате запасное значение не нужно. А
+// периоду нужно: ноль не проходит проверку `ge=1`, и сохранение упало бы
+// с 422 на поле, которого человек не трогал.
+function collectCriteria(lists) {
+  const value = id => {
+    const node = document.getElementById(id);
+    return node ? node.value : '';
+  };
+  const resume = value('criteriaResume');
+  return {
+    ...lists,
+    hh_experience: value('hhExperience'),
+    hh_salary_from: Number(value('hhSalaryFrom')),
+    hh_search_period: Number(value('hhSearchPeriod')) || 1,
+    hh_resume_id: value('hhResumeId').trim(),
+    template: value('templateText'),
+    hh_cover_letter: value('hhCoverLetter'),
+    resume_id: resume === '' ? null : Number(resume),
+  };
+}
+
+async function saveCriteria() {
+  const patch = collectCriteria({
+    channels: tgState.channels,
+    tg_keywords: tgState.keywords,
+    tg_exclude: tgState.exclude,
+    professions: hhState.keywords,
+    hh_exclude: hhState.exclude,
+    hh_schedule: chosenCodes('hh-schedule'),
+    hh_employment: chosenCodes('hh-employment'),
+  });
+  // Один PATCH на всё: с задачи 7 он применяется целиком или никак,
+  // поэтому отказ на любом поле не оставляет остальные сохранёнными. Пять
+  // отдельных кнопок означали пять частичных сохранений.
+  // `patchCriteria` сам показывает причину отказа и возвращает false —
+  // говорить «сохранено» можно только по его слову.
+  if (!await patchCriteria(patch)) return;
+  tgState.template = patch.template;
+  if (tgState.running || hhState.running) {
+    showToast('Критерии сохранены — перезапустите воркеры');
+    showRestartBanner();
+  } else {
+    showToast('Критерии сохранены');
+  }
 }
 
 // ── Settings ──────────────────────────────────────────────────────────
@@ -758,31 +793,8 @@ async function loadSettings() {
     document.getElementById('apiHash').placeholder = 'abcdef1234567890abcdef1234567890';
   }
 
-  // HH: критерии — из активного пресета, лимиты и расписание — из настроек.
-  const criteria = presetState.criteria;
-  hhState.keywords = criteria.professions || [];
-  hhState.exclude = criteria.hh_exclude || [];
-  renderHHKeywords();
-
-  const dict = await loadDictionaries();
-  if (dict) {
-    const areaLabel = document.getElementById('hhAreaLabel');
-    if (areaLabel) areaLabel.textContent = `код ${dict.area_id}`;
-    const experience = document.getElementById('hhExperience');
-    if (experience) {
-      fill(experience, Object.entries(dict.experience).map(
-        ([code, label]) => el('option', { value: code, text: label }),
-      ));
-      experience.value = criteria.hh_experience || 'noExperience';
-    }
-    renderChoiceBox('hhScheduleBox', dict.schedule, criteria.hh_schedule || [], 'hh-schedule');
-    renderChoiceBox('hhEmploymentBox', dict.employment, criteria.hh_employment || [], 'hh-employment');
-  }
-
-  document.getElementById('hhSalaryFrom').value = criteria.hh_salary_from || 0;
-  if (criteria.hh_search_period) document.getElementById('hhSearchPeriod').value = criteria.hh_search_period;
-  document.getElementById('hhResumeId').value = criteria.hh_resume_id || '';
-  document.getElementById('hhCoverLetter').value = criteria.hh_cover_letter || '';
+  // Критериев здесь больше нет: они принадлежат пресету и заполняются в
+  // loadActiveCriteria(). «Настройки» — только про общее для всех пресетов.
   if (cfg.hh_max_per_day) document.getElementById('hhMaxPerDayInput').value = cfg.hh_max_per_day;
   if (cfg.hh_check_interval) document.getElementById('hhCheckInterval').value = cfg.hh_check_interval / 60;
   if (cfg.hh_autostart !== undefined) document.getElementById('toggleHHAutostart').checked = cfg.hh_autostart;
@@ -1543,7 +1555,6 @@ async function init() {
   updateTGButton();
   updateHHButton();
   updateMetrics();
-  loadResumes();
   pollStatus();
 }
 
@@ -1551,19 +1562,45 @@ async function loadActiveCriteria() {
   if (presetState.activeId === null) return;
   const preset = await apiGet(`/presets/${presetState.activeId}`);
   if (!preset || !preset.criteria) return;
-  presetState.criteria = preset.criteria;
+  const criteria = preset.criteria;
+  presetState.criteria = criteria;
 
-  tgState.channels = preset.criteria.channels || [];
-  tgState.keywords = preset.criteria.tg_keywords || [];
-  tgState.exclude = preset.criteria.tg_exclude || [];
-  tgState.template = preset.criteria.template || '';
-  hhState.keywords = preset.criteria.professions || [];
-  hhState.exclude = preset.criteria.hh_exclude || [];
+  tgState.channels = criteria.channels || [];
+  tgState.keywords = criteria.tg_keywords || [];
+  tgState.exclude = criteria.tg_exclude || [];
+  tgState.template = criteria.template || '';
+  hhState.keywords = criteria.professions || [];
+  hhState.exclude = criteria.hh_exclude || [];
 
-  const tpl = document.getElementById('templateText');
-  if (tpl) tpl.value = tgState.template;
-  const letter = document.getElementById('hhCoverLetter');
-  if (letter) letter.value = preset.criteria.hh_cover_letter || '';
+  renderChannelEdit();
+  renderKeywords();
+  renderHHKeywords();
+
+  const put = (id, value) => {
+    const node = document.getElementById(id);
+    if (node) node.value = value;
+  };
+  put('templateText', tgState.template);
+  put('hhCoverLetter', criteria.hh_cover_letter || '');
+  put('hhResumeId', criteria.hh_resume_id || '');
+  put('hhSalaryFrom', criteria.hh_salary_from || 0);
+  if (criteria.hh_search_period) put('hhSearchPeriod', criteria.hh_search_period);
+
+  // Справочники hh.ru — константы приложения (job_monitor/criteria.py), а
+  // не данные с hh.ru: официальное API им не нужно.
+  const dict = await loadDictionaries();
+  if (dict) {
+    const experience = document.getElementById('hhExperience');
+    if (experience) {
+      fill(experience, Object.entries(dict.experience).map(
+        ([code, label]) => el('option', { value: code, text: label }),
+      ));
+      experience.value = criteria.hh_experience || 'noExperience';
+    }
+    renderChoiceBox('hhScheduleBox', dict.schedule, criteria.hh_schedule || [], 'hh-schedule');
+    renderChoiceBox('hhEmploymentBox', dict.employment, criteria.hh_employment || [], 'hh-employment');
+  }
+  await loadResumes();
 }
 
 // ── About modal ───────────────────────────────────────────────────────
@@ -1610,22 +1647,18 @@ const ACTIONS = {
   toggleHH,
   reloadChat,
   sendChatMessage,
-  saveChannels,
   addChannel,
-  saveKeywords,
+  saveCriteria,
   addKw,
   addEx,
-  saveTemplate,
   pickFile,
   uploadResume,
-  chooseResume,
   deleteResume,
   activatePreset,
   createPreset,
   copyPreset,
   deletePreset,
   hhLoginCancel,
-  saveHHCoverLetter,
   saveTGSettings,
   saveApiKeys,
   sendAuthCode,
