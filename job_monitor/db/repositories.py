@@ -171,16 +171,57 @@ class TgRepo:
 
 class HhRepo:
     FIELDS = ("vacancy_id", "title", "company", "salary", "city", "url",
-              "found_at", "applied_at", "status", "error")
+              "found_at", "applied_at", "status", "error", "status_source")
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
 
+    @staticmethod
+    def _with_defaults(values: dict) -> dict:
+        """Подставляет значения колонок, объявленных `NOT NULL`.
+
+        `status_source` добавлен миграцией 004 как `NOT NULL DEFAULT
+        'робот'`, но умолчание срабатывает только когда колонки НЕТ в
+        списке `INSERT`. Наши запросы перечисляют все `FIELDS` поимённо,
+        поэтому отсутствующее поле уезжает в базу явным `NULL` — и вставка
+        падает на `IntegrityError`. Ловится это не здесь, а у вызывающих,
+        которые про новую колонку не знают вовсе: `legacy_import.py` и
+        каждый существующий тест, зовущий `upsert` со словарём из четырёх
+        ключей.
+        """
+        filled = dict(values)
+        if filled.get("status_source") is None:
+            filled["status_source"] = statuses.SOURCE_ROBOT
+        if filled.get("status") is None:
+            filled["status"] = statuses.NEW
+        return filled
+
     def exists(self, vacancy_id: str) -> bool:
+        """Есть ли вообще такая строка.
+
+        **Это НЕ предикат дедупликации.** С тех пор как вакансия попадает в
+        базу в момент находки, а не после попытки отклика, «строка есть» и
+        «решение принято» — разные вопросы, и подстановка первого вместо
+        второго тихо останавливает автоматику: воркер начинает отбрасывать
+        то, что сам только что нашёл. Дедуплицирует `is_decided()`.
+        """
         row = self._conn.execute(
             "SELECT 1 FROM hh_applications WHERE vacancy_id = ?", (vacancy_id,)
         ).fetchone()
         return row is not None
+
+    def is_decided(self, vacancy_id: str) -> bool:
+        """Принято ли по вакансии решение — робота или человека (D19)."""
+        row = self._conn.execute(
+            "SELECT status FROM hh_applications WHERE vacancy_id = ?", (vacancy_id,)
+        ).fetchone()
+        return row is not None and row["status"] in statuses.DECIDED
+
+    def get(self, vacancy_id: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT * FROM hh_applications WHERE vacancy_id = ?", (vacancy_id,)
+        ).fetchone()
+        return dict(row) if row else None
 
     def upsert(self, vacancy: dict) -> None:
         """Merge-upsert: fields the caller omits keep their previously stored
@@ -194,20 +235,86 @@ class HhRepo:
                 "SELECT * FROM hh_applications WHERE vacancy_id = ?",
                 (vacancy["vacancy_id"],),
             ).fetchone()
-            merged = {
+            merged = self._with_defaults({
                 field: (
                     vacancy[field]
                     if field in vacancy
                     else (existing[field] if existing is not None else None)
                 )
                 for field in self.FIELDS
-            }
+            })
             self._conn.execute(
                 f"INSERT INTO hh_applications ({', '.join(self.FIELDS)})"
                 f" VALUES ({', '.join('?' * len(self.FIELDS))})"
                 f" ON CONFLICT(vacancy_id) DO UPDATE SET {updates}",
                 tuple(merged[field] for field in self.FIELDS),
             )
+
+    def record_found(self, vacancy: dict) -> bool:
+        """Записывает вакансию в момент находки. `True`, если она новая.
+
+        `DO NOTHING`, а не `upsert`: повторный проход по той же странице
+        поиска не должен ни переписывать `found_at` (иначе вчерашняя
+        находка каждый день считается сегодняшней), ни — что гораздо
+        дороже — возвращать решённой вакансии статус «новая». Второе
+        означало бы второй отклик тому же работодателю.
+        """
+        values = self._with_defaults(
+            {field: vacancy.get(field) for field in self.FIELDS}
+        )
+        with transaction(self._conn):
+            cursor = self._conn.execute(
+                f"INSERT INTO hh_applications ({', '.join(self.FIELDS)})"
+                f" VALUES ({', '.join('?' * len(self.FIELDS))})"
+                " ON CONFLICT(vacancy_id) DO NOTHING",
+                tuple(values[field] for field in self.FIELDS),
+            )
+        return cursor.rowcount == 1
+
+    def set_status(
+        self, vacancy_id: str, status: str, source: str, now: datetime
+    ) -> bool:
+        """Меняет статус. `applied_at` проставляется только для отклика.
+
+        Ручной отклик тоже получает `applied_at` — он нужен списку
+        отправленного для порядка сортировки. На дневной счётчик это не
+        влияет: `applied_on()` фильтрует ещё и по статусу, поэтому
+        «откликнулся сам» в него не попадает (решение D16 выполняется
+        формой данных, а не отдельной проверкой).
+        """
+        applied_at = (
+            now.isoformat(timespec="seconds") if status in statuses.APPLIED else None
+        )
+        with transaction(self._conn):
+            cursor = self._conn.execute(
+                "UPDATE hh_applications SET status = ?, status_source = ?,"
+                " applied_at = ? WHERE vacancy_id = ?",
+                (status, source, applied_at, vacancy_id),
+            )
+        return cursor.rowcount == 1
+
+    def list_found(
+        self, *, decided: bool | None = None, limit: int = 50, offset: int = 0
+    ) -> list[dict]:
+        """Очередь найденного, от свежего к старому.
+
+        `decided=None` — всё, `False` — только новое, `True` — только
+        решённое. Порядок тот же, что у `recent()`: сначала момент отклика,
+        а если его нет — момент находки.
+        """
+        clause, params = "", []
+        if decided is not None:
+            placeholders = ", ".join("?" * len(statuses.DECIDED))
+            operator = "IN" if decided else "NOT IN"
+            clause = f" WHERE status {operator} ({placeholders})"
+            params = sorted(statuses.DECIDED)
+        rows = self._conn.execute(
+            "SELECT * FROM hh_applications" + clause
+            + " ORDER BY COALESCE(applied_at, found_at) DESC, rowid DESC"
+            " LIMIT ? OFFSET ?",
+            (*params, limit, offset),
+        ).fetchall()
+        return [dict(row) for row in rows]
 
     def applied_on(self, day: date) -> int:
         start, end = _day_bounds(day)
@@ -433,16 +540,38 @@ class ResumesRepo:
 
 
 class TgFoundRepo:
-    """Найденное в Telegram. Пишется этим подпроектом, читается следующим."""
+    """Найденное в Telegram: очередь постов, по которым можно откликнуться.
+
+    **Колонка `username` (единственное число) остаётся пустой.** Она
+    появилась в миграции 003, когда таблица заводилась только на запись и
+    контакт был не нужен; теперь контакты живут в `usernames` JSON-массивом,
+    потому что в одном посте их бывает несколько, а решение «не подходит»
+    принимается по вакансии, а не по человеку. Удалить старую колонку
+    нельзя: `DROP COLUMN` в SQLite означает пересоздание таблицы (см.
+    докстринг `job_monitor/db/migrations.py`). Это сознательно оставленный
+    долг, а не забытый код.
+    """
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         self._conn = conn
+
+    @staticmethod
+    def _row(row: sqlite3.Row) -> dict:
+        """Строка наружу: `usernames` разобран, а не отдан JSON-текстом.
+
+        Та же причина, что у `PresetsRepo._row`: забытый `json.loads` в
+        одном из мест вызова — ровно тот дефект, который потом ищут полдня.
+        """
+        parsed = dict(row)
+        raw = parsed.get("usernames")
+        parsed["usernames"] = json.loads(raw) if raw else []
+        return parsed
 
     def record(
         self,
         channel: str,
         message_id: int,
-        username: str | None,
+        usernames: list[str],
         preview: str | None,
         matched_keyword: str | None,
         now: datetime,
@@ -455,15 +584,17 @@ class TgFoundRepo:
         with transaction(self._conn):
             cursor = self._conn.execute(
                 "INSERT OR IGNORE INTO tg_found"
-                " (channel, message_id, found_at, username, preview, matched_keyword)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
+                " (channel, message_id, found_at, usernames, preview,"
+                "  matched_keyword, status)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     channel,
                     message_id,
                     now.isoformat(timespec="seconds"),
-                    username,
+                    json.dumps(usernames, ensure_ascii=False),
                     preview,
                     matched_keyword,
+                    statuses.NEW,
                 ),
             )
         return cursor.rowcount == 1
@@ -475,9 +606,35 @@ class TgFoundRepo:
         ).fetchone()
         return row is not None
 
-    def recent(self, limit: int) -> list[dict]:
+    def get(self, found_id: int) -> dict | None:
+        row = self._conn.execute(
+            "SELECT * FROM tg_found WHERE id = ?", (found_id,)
+        ).fetchone()
+        return self._row(row) if row else None
+
+    def set_status(self, found_id: int, status: str, now: datetime) -> bool:
+        with transaction(self._conn):
+            cursor = self._conn.execute(
+                "UPDATE tg_found SET status = ?, status_at = ? WHERE id = ?",
+                (status, now.isoformat(timespec="seconds"), found_id),
+            )
+        return cursor.rowcount == 1
+
+    def list(
+        self, *, decided: bool | None = None, limit: int = 50, offset: int = 0
+    ) -> list[dict]:
+        clause, params = "", []
+        if decided is not None:
+            placeholders = ", ".join("?" * len(statuses.DECIDED))
+            operator = "IN" if decided else "NOT IN"
+            clause = f" WHERE status {operator} ({placeholders})"
+            params = sorted(statuses.DECIDED)
         rows = self._conn.execute(
-            "SELECT * FROM tg_found ORDER BY found_at DESC, id DESC LIMIT ?",
-            (limit,),
+            "SELECT * FROM tg_found" + clause
+            + " ORDER BY found_at DESC, id DESC LIMIT ? OFFSET ?",
+            (*params, limit, offset),
         ).fetchall()
-        return [dict(row) for row in rows]
+        return [self._row(row) for row in rows]
+
+    def recent(self, limit: int) -> list[dict]:
+        return self.list(limit=limit)

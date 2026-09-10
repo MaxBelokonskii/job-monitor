@@ -1125,7 +1125,13 @@ async function loadHHVacancies() {
           el('div', { style: 'font-size:13px;font-weight:600', text: v.title || '' }),
           el('div', { style: 'font-size:11px;color:var(--muted);margin-top:2px', text: meta }),
         ]),
-        el('span', { class: `status-badge ${cls}`, style: 'flex-shrink:0', text: st || 'ожидание' }),
+        // `status_source` отвечает на вопрос «это я откликнулся или робот»:
+        // с появлением ручных статусов бейдж без него врал бы наполовину.
+        el('span', {
+          class: `status-badge ${cls}`,
+          style: 'flex-shrink:0',
+          text: (st || 'ожидание') + (v.status_source === 'человек' ? ' · вручную' : ''),
+        }),
       ]),
       // Текст причины, а не только красный бейдж: для HH_STATUS_SCENARIO_ERROR
       // («ошибка сценария») бейдж говорит, ЧТО случилось, а починить сценарий
