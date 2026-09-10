@@ -7,15 +7,16 @@ import sqlite3
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
 
+from job_monitor import statuses
 from job_monitor.db.connection import transaction
 
 SETTINGS_KEY = "app"
 
-# Status string a completed hh.ru application is stamped with. Hoisted here
-# so the daily/total counters below and the hh_monitor.py writer can never
-# drift apart — a reworded status in only one of the two places would
-# silently zero the counters instead of raising anywhere.
-HH_STATUS_APPLIED = "отклик отправлен"
+# Прежнее имя той же строки. Оставлено алиасом, чтобы не править все места
+# использования разом; единственный источник значения — job_monitor/statuses.py.
+# Разойдись эти два места — счётчики откликов молча обнулились бы, ничего
+# нигде не подняв.
+HH_STATUS_APPLIED = statuses.AUTO_APPLIED
 
 
 def _day_bounds(day: date) -> tuple[str, str]:

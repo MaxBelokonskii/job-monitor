@@ -21,6 +21,7 @@ JobMonitor/
 │   ├── security.py             APP_TOKEN, TrustedHost, CSP
 │   ├── settings.py             глобальные настройки (SQLite) и секреты (окружение)
 │   ├── criteria.py             критерии поиска в пресете и константы hh.ru
+│   ├── statuses.py             словарь статусов найденного (общий на TG и hh.ru)
 │   ├── presets.py              активный пресет: чтение, переключение, перенос
 │   ├── resume_store.py         файлы библиотеки резюме в каталоге данных
 │   ├── telegram_client.py      единственный Telethon-клиент приложения

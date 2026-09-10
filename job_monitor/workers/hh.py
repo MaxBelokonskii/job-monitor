@@ -59,7 +59,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from job_monitor import paths
+from job_monitor import paths, statuses
 from job_monitor.db.repositories import EventsRepo, HH_STATUS_APPLIED, HhRepo
 from job_monitor.criteria import HH_AREA_ID, SearchCriteria
 from job_monitor.presets import active_criteria
@@ -75,7 +75,8 @@ SELENIUM_COOKIE_FIELDS = ("name", "value", "domain", "path", "secure", "httpOnly
 # уже после клика по кнопке отклика. Не HH_STATUS_APPLIED — не в счётчик
 # отправленных; отдельно от "пропущено" — видно в дашборде, что причина
 # именно в сценарии, а не в том, что кнопка отклика не нашлась.
-HH_STATUS_SCENARIO_ERROR = "ошибка сценария"
+# Прежнее имя, единственный источник значения — job_monitor/statuses.py.
+HH_STATUS_SCENARIO_ERROR = statuses.SCENARIO_ERROR
 
 
 # ── Вход без блокировки (L4) ────────────────────────────────────────────
