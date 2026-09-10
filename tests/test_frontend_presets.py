@@ -84,13 +84,19 @@ def test_the_activation_conflict_is_shown_and_not_swallowed() -> None:
     а воркер продолжает работать по старым критериям и со старым резюме.
     Поэтому проверяется поведение: что показано пользователю и обновился ли
     список пресетов.
+
+    Здесь же закреплено перечитывание критериев на успешном переключении —
+    без него форма показывала бы значения предыдущего пресета, а
+    сохранение записало бы их поверх нового.
     """
     script = _maybe_extract("activatePreset") + NODE_CHECK_HELPER + """
     let reloaded = 0;
+    let criteriaReloaded = 0;
     const toasts = [];
     globalThis.showToast = (text) => toasts.push(text);
     globalThis.loadPresets = async () => { reloaded += 1; };
     globalThis.loadSettings = async () => {};
+    globalThis.loadActiveCriteria = async () => { criteriaReloaded += 1; };
     globalThis.configErrorDetail = (r) => (r && r.detail) || '';
 
     // 409: воркер не остановился, пресет НЕ переключён.
@@ -108,6 +114,11 @@ def test_the_activation_conflict_is_shown_and_not_swallowed() -> None:
     await activatePreset(2);
     check('успех показан', toasts.some(t => t.includes('Пресет переключён')));
     check('названо остановленное', toasts.some(t => t.includes('tg')));
+    // Критерии обязаны перечитаться: чипы пресетов живут НА «Обзоре»,
+    // перехода между экранами нет, и без этого в форме остались бы
+    // значения предыдущего пресета — а «Сохранить критерии» записало бы
+    // их поверх нового, уничтожив его настройку.
+    check('критерии нового пресета перечитаны', criteriaReloaded === 1);
     """
     result = _run_node(f"(async () => {{\n{script}\n}})();")
     assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"

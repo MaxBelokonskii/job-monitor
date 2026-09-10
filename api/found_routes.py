@@ -24,7 +24,17 @@ from job_monitor.db.repositories import HhRepo, TgFoundRepo, TgRepo
 
 router = APIRouter(prefix="/api/found", tags=["found"])
 
-StatusFilter = Literal["all", "new", "decided"]
+StatusFilter = Literal["all", "new", "decided", "applied"]
+
+#: Что показывает каждый фильтр. `applied` — не подмножество `decided` по
+#: смыслу, а самостоятельный вопрос «куда я уже написал»: «не подходит»
+#: тоже решение, но не отправка.
+STATUS_FILTERS: dict[str, frozenset[str] | None] = {
+    "all": None,
+    "new": frozenset({statuses.NEW}),
+    "decided": statuses.DECIDED,
+    "applied": statuses.APPLIED,
+}
 
 
 class StatusPatch(BaseModel):
@@ -36,8 +46,8 @@ class StatusPatch(BaseModel):
     status: str
 
 
-def _decided_flag(status: StatusFilter) -> bool | None:
-    return {"all": None, "new": False, "decided": True}[status]
+def _wanted(status: StatusFilter) -> frozenset[str] | None:
+    return STATUS_FILTERS[status]
 
 
 def check_transition(current: str, target: str) -> None:
@@ -45,6 +55,11 @@ def check_transition(current: str, target: str) -> None:
 
     Общая на оба списка: правила не зависят от того, где лежит запись, а
     две копии одного правила расходятся при первой же правке.
+
+    Правил ровно два, и оба про одно: **отправленный отклик — не решение,
+    а запись о факте.** Письмо ушло работодателю, и переименованием этого
+    не отменить. Поэтому из `APPLIED` нельзя выйти никуда, а войти в
+    `AUTO_APPLIED` нельзя вообще — это слово робота.
     """
     if target == statuses.AUTO_APPLIED:
         raise HTTPException(
@@ -52,6 +67,19 @@ def check_transition(current: str, target: str) -> None:
             detail="«отклик отправлен» ставит только робот: этот статус — "
             "источник счётчика отправленного за день, и рука человека "
             "сделала бы его неправдой",
+        )
+    if current in statuses.APPLIED and target != current:
+        # Найдено ревью, и цена бреши считается в отправленных письмах.
+        # `applied_on()` считает строки со статусом «отклик отправлен», и
+        # по нему воркер сверяет суточный лимит. Пометив пять отправленных
+        # откликов как «не подходит», человек опускал счётчик с 20 до 15 —
+        # и воркер, спавший на достигнутом лимите, просыпался и досылал
+        # ещё пять. Лимит существует, чтобы не забанили аккаунт.
+        raise HTTPException(
+            status_code=400,
+            detail="отклик уже отправлен — сменить статус нельзя: это не "
+            "решение, а запись о том, что письмо ушло работодателю, и "
+            "по ней считается суточный лимит отправок",
         )
     if target in statuses.MANUAL:
         return
@@ -110,7 +138,7 @@ async def list_tg_found(
     offset: int = Query(default=0, ge=0),
 ) -> list[dict[str, Any]]:
     rows = TgFoundRepo(get_connection()).list(
-        decided=_decided_flag(status), limit=limit, offset=offset
+        only=_wanted(status), limit=limit, offset=offset
     )
     return [_tg_view(row) for row in rows]
 
@@ -165,7 +193,7 @@ async def list_hh_found(
     offset: int = Query(default=0, ge=0),
 ) -> list[dict[str, Any]]:
     rows = HhRepo(get_connection()).list_found(
-        decided=_decided_flag(status), limit=limit, offset=offset
+        only=_wanted(status), limit=limit, offset=offset
     )
     return [_hh_view(row) for row in rows]
 

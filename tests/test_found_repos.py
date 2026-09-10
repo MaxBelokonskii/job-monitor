@@ -141,15 +141,25 @@ def test_set_status_reports_whether_it_found_the_row(conn) -> None:
     assert repo.set_status("нет", statuses.DISMISSED, statuses.SOURCE_HUMAN, NOW) is False
 
 
-def test_list_found_filters_by_decidedness(conn) -> None:
+def test_list_found_filters_by_the_requested_statuses(conn) -> None:
+    """Множество статусов, а не флаг «решено»: «отправлено» — отдельный
+    вопрос, и «не подходит» в него не входит, хотя это тоже решение."""
     repo = HhRepo(conn)
     repo.record_found(_vacancy("1"))
     repo.record_found(_vacancy("2"))
+    repo.record_found(_vacancy("3"))
     repo.set_status("2", statuses.DISMISSED, statuses.SOURCE_HUMAN, NOW)
+    repo.set_status("3", statuses.AUTO_APPLIED, statuses.SOURCE_ROBOT, NOW)
 
-    assert [row["vacancy_id"] for row in repo.list_found(decided=False)] == ["1"]
-    assert [row["vacancy_id"] for row in repo.list_found(decided=True)] == ["2"]
-    assert {row["vacancy_id"] for row in repo.list_found()} == {"1", "2"}
+    def ids(**kwargs):
+        return sorted(row["vacancy_id"] for row in repo.list_found(**kwargs))
+
+    assert ids(only=frozenset({statuses.NEW})) == ["1"]
+    assert ids(only=statuses.DECIDED) == ["2", "3"]
+    assert ids(only=statuses.APPLIED) == ["3"], (
+        "«отправлено» это не «решено»: отброшенная вакансия сюда не входит"
+    )
+    assert ids() == ["1", "2", "3"]
 
 
 def test_list_found_pages(conn) -> None:
@@ -200,15 +210,21 @@ def test_set_status_stamps_the_time(conn) -> None:
     assert repo.set_status(999, statuses.DISMISSED, NOW) is False
 
 
-def test_tg_list_filters_by_decidedness(conn) -> None:
+def test_tg_list_filters_by_the_requested_statuses(conn) -> None:
     repo = TgFoundRepo(conn)
     repo.record("qajobs", 1, [], "первый", "qa", NOW)
     repo.record("qajobs", 2, [], "второй", "qa", NOW)
+    repo.record("qajobs", 3, [], "третий", "qa", NOW)
     repo.set_status(2, statuses.MANUAL_APPLIED, NOW)
+    repo.set_status(3, statuses.DISMISSED, NOW)
 
-    assert [row["message_id"] for row in repo.list(decided=False)] == [1]
-    assert [row["message_id"] for row in repo.list(decided=True)] == [2]
-    assert len(repo.list()) == 2
+    def ids(**kwargs):
+        return sorted(row["message_id"] for row in repo.list(**kwargs))
+
+    assert ids(only=frozenset({statuses.NEW})) == [1]
+    assert ids(only=statuses.DECIDED) == [2, 3]
+    assert ids(only=statuses.APPLIED) == [2]
+    assert ids() == [1, 2, 3]
 
 
 def test_tg_list_pages_newest_first(conn) -> None:

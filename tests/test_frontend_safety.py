@@ -248,3 +248,44 @@ def test_stale_token_403_surfaces_a_banner_instead_of_silent_undefined() -> None
         "apiGet/apiSend did not handle a stale-token 403 correctly.\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
     )
+
+
+@skip_without_node
+def test_el_treats_a_null_prop_as_absent_not_as_the_string_null() -> None:
+    """Найдено на живом приложении: переключить пресет кликом было нельзя.
+
+    `renderPresetBar` передаёт `disabled: preset.is_active ? 'disabled' :
+    null`, а `el()` звало `setAttribute('disabled', null)` — и атрибут
+    получал строку `"null"`. Для булева атрибута присутствие и есть
+    истина, поэтому НЕАКТИВНЫЙ чип оказывался заблокирован наравне с
+    активным: пресеты нельзя было переключать вовсе, то есть весь смысл
+    подпроекта 1 не работал, и заметить это можно было только в браузере.
+
+    `el()` уже пропускает `null` среди детей — «нет узла». Свойства
+    обязаны вести себя так же: `null` значит «атрибута нет».
+    """
+    script = "\n".join((
+        "global.document = { createElement: () => ({",
+        "  attributes: {}, style: {}, className: '',",
+        "  setAttribute(k, v) { this.attributes[k] = v; },",
+        "  addEventListener() {}, append() {},",
+        "}) };",
+        _extract_function_source("isHttpUrl"),
+        _extract_function_source("el"),
+        """
+        const active = el('button', { disabled: 'disabled' });
+        const idle = el('button', { disabled: null });
+        if (active.attributes.disabled !== 'disabled') {
+          console.error('активная кнопка потеряла disabled'); process.exitCode = 1;
+        }
+        if ('disabled' in idle.attributes) {
+          console.error('null-свойство стало атрибутом:', idle.attributes.disabled);
+          process.exitCode = 1;
+        }
+        if ('title' in el('span', { title: undefined }).attributes) {
+          console.error('undefined-свойство стало атрибутом'); process.exitCode = 1;
+        }
+        """,
+    ))
+    result = _run_node(script)
+    assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"

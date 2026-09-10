@@ -5,6 +5,13 @@ const APP_TOKEN = document.querySelector('meta[name="app-token"]').content;
 function el(tag, props = {}, children = []) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(props)) {
+    // `null`/`undefined` — это «атрибута нет», как `null` среди детей это
+    // «узла нет». Без этой строки `setAttribute` записывал строку "null",
+    // и для булева атрибута присутствие оказывалось истиной: чип
+    // НЕАКТИВНОГО пресета получал `disabled="null"` и блокировался
+    // наравне с активным — переключить пресет кликом было нельзя вовсе.
+    // Найдено в браузере; ни один тест этого не показывал.
+    if (value === null || value === undefined) continue;
     if (key === 'class') node.className = value;
     else if (key === 'text') node.textContent = value;
     else if (key === 'style') node.style.cssText = value;
@@ -117,7 +124,9 @@ function configErrorDetail(r) {
 // только глобальное (лимиты, задержки, безопасный режим). Патч критерия,
 // отправленный на /config, теперь отвергается с 422 — поэтому все экраны
 // критериев ходят через `patchCriteria`.
-const presetState = { list: [], activeId: null, criteria: {} };
+// `loadedId` — чей набор критериев сейчас лежит в форме. Отличается от
+// `activeId` ровно между переключением пресета и перечитыванием полей.
+const presetState = { list: [], activeId: null, loadedId: null, criteria: {} };
 let dictionaries = null;
 
 async function patchCriteria(patch) {
@@ -178,7 +187,14 @@ async function activatePreset(id) {
   }
   const stopped = (r.stopped || []).join(', ');
   showToast(stopped ? `Пресет переключён, остановлено: ${stopped}` : 'Пресет переключён');
+  // Порядок обязателен: `loadPresets()` обновляет `activeId`, и только
+  // после этого `loadActiveCriteria()` видит, что пресет сменился, и
+  // перечитывает поля. Без второй строки в форме остаются значения
+  // ПРЕДЫДУЩЕГО пресета — чипы живут НА «Обзоре», перехода между
+  // экранами не случается, — и «Сохранить критерии» запишет их поверх
+  // нового, уничтожив его настройку без единого предупреждения.
   await loadPresets();
+  await loadActiveCriteria();
   await loadSettings();
 }
 
@@ -260,7 +276,10 @@ const hhState = {
 const PAGE_LOADERS = {
   overview: async () => { await loadActiveCriteria(); },
   found: async () => { await loadFound(); },
-  sent: async () => { await renderChats(); },
+  // Через выбранный источник, а не всегда через Telegram: панель
+  // остаётся видимой между заходами, и обновление скрытой соседней
+  // оставляло бы на экране старые данные.
+  sent: async () => { await sentSource(sentState.source); },
   settings: async () => {
     await loadSettings();
     refreshLogs();
@@ -727,8 +746,7 @@ function collectCriteria(lists) {
     const node = document.getElementById(id);
     return node ? node.value : '';
   };
-  const resume = value('criteriaResume');
-  return {
+  const patch = {
     ...lists,
     hh_experience: value('hhExperience'),
     hh_salary_from: Number(value('hhSalaryFrom')),
@@ -736,8 +754,17 @@ function collectCriteria(lists) {
     hh_resume_id: value('hhResumeId').trim(),
     template: value('templateText'),
     hh_cover_letter: value('hhCoverLetter'),
-    resume_id: resume === '' ? null : Number(resume),
   };
+  // Незагруженный список — это «не знаю», а не «без вложения».
+  // `renderResumePicker` вызывается только после успешного GET
+  // /api/resumes; если запрос не удался, селект пуст, и без этой
+  // проверки следующее сохранение молча отвязало бы резюме от пресета,
+  // отрапортовав «Критерии сохранены».
+  const picker = document.getElementById('criteriaResume');
+  if (picker) {
+    patch.resume_id = picker.value === '' ? null : Number(picker.value);
+  }
+  return patch;
 }
 
 async function saveCriteria() {
@@ -1334,12 +1361,15 @@ const foundDismiss = key => patchFound(key, 'не подходит');
 const foundReopen = key => patchFound(key, 'новая');
 
 // ── Отправленное ──────────────────────────────────────────────────────
-// Что считать отправленным. Зеркалит job_monitor/statuses.py::APPLIED;
-// tests/test_frontend_screens.py сторожит, что списки не разошлись —
-// разойдись они, экран был бы пуст при полной базе откликов.
-const APPLIED_STATUSES = ['отклик отправлен', 'откликнулся сам'];
+// Своего списка «что считать отправленным» здесь нет намеренно: его
+// знает бэкенд (`STATUS_FILTERS` в api/found_routes.py, поверх
+// job_monitor/statuses.py). Копия на фронтенде была ровно тем вторым
+// местом, которое однажды отстаёт, — и отстав, показывала бы пустой
+// экран при полной таблице откликов.
+const sentState = { source: 'tg' };
 
 function sentSource(source) {
+  sentState.source = source;
   setSegActive('sentSource', source);
   const tg = document.getElementById('sentTg');
   const hh = document.getElementById('sentHh');
@@ -1349,14 +1379,16 @@ function sentSource(source) {
 }
 
 async function loadSentHh() {
-  const rows = await apiGet('/found/hh?status=decided');
+  // Отбор делает запрос, а не мы. С `status=decided` и отбором здесь
+  // страница в 50 строк могла целиком состоять из отброшенных вакансий —
+  // и экран говорил «откликов пока нет» при полной таблице откликов.
+  // Ручной отклик входит в `applied` наравне с роботным: показывать
+  // только роботный значило бы прятать от человека половину его
+  // собственной истории.
+  const rows = await apiGet('/found/hh?status=applied');
   const box = document.getElementById('sentHhList');
   if (!box) return;
-  // Ручной отклик — тоже отклик: показывать только роботный значило бы
-  // прятать от человека половину его собственной истории. Отсюда же и
-  // фильтр: «решённые» включают «не подходит», а это не отправка.
-  const applied = (Array.isArray(rows) ? rows : [])
-    .filter(row => APPLIED_STATUSES.includes(row.status));
+  const applied = Array.isArray(rows) ? rows : [];
   if (!applied.length) {
     fill(box, el('div', { class: 'found-empty', text: 'Откликов пока нет' }));
     return;
@@ -1596,10 +1628,16 @@ async function init() {
 
 async function loadActiveCriteria() {
   if (presetState.activeId === null) return;
+  // Поля перезаписываются, только если пресет сменился. Иначе возврат на
+  // «Обзор» стирал бы несохранённую правку: набрал длинное
+  // сопроводительное, ушёл на «Найдено» посмотреть вакансию, вернулся —
+  // текста нет и никто об этом не предупредил.
+  if (presetState.loadedId === presetState.activeId) return;
   const preset = await apiGet(`/presets/${presetState.activeId}`);
   if (!preset || !preset.criteria) return;
   const criteria = preset.criteria;
   presetState.criteria = criteria;
+  presetState.loadedId = presetState.activeId;
 
   tgState.channels = criteria.channels || [];
   tgState.keywords = criteria.tg_keywords || [];

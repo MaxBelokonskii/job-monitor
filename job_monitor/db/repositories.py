@@ -281,6 +281,15 @@ class HhRepo:
         влияет: `applied_on()` фильтрует ещё и по статусу, поэтому
         «откликнулся сам» в него не попадает (решение D16 выполняется
         формой данных, а не отдельной проверкой).
+
+        **Дата только проставляется, никогда не стирается.** Раньше здесь
+        стоял `else None`, и смена статуса на любой «неотправленный»
+        обнуляла её. `applied_at` — единственная запись о том, КОГДА ушёл
+        отклик; потерять её значит потерять историю переписки с
+        работодателем и порядок на экране «Отправлено». Роут такой переход
+        теперь и не пропускает (см. `check_transition`), но репозиторий не
+        должен полагаться на вызывающего в вопросе, который стоит одну
+        строку SQL.
         """
         applied_at = (
             now.isoformat(timespec="seconds") if status in statuses.APPLIED else None
@@ -288,26 +297,36 @@ class HhRepo:
         with transaction(self._conn):
             cursor = self._conn.execute(
                 "UPDATE hh_applications SET status = ?, status_source = ?,"
-                " applied_at = ? WHERE vacancy_id = ?",
+                " applied_at = COALESCE(?, applied_at) WHERE vacancy_id = ?",
                 (status, source, applied_at, vacancy_id),
             )
         return cursor.rowcount == 1
 
     def list_found(
-        self, *, decided: bool | None = None, limit: int = 50, offset: int = 0
+        self,
+        *,
+        only: frozenset[str] | None = None,
+        limit: int = 50,
+        offset: int = 0,
     ) -> list[dict]:
         """Очередь найденного, от свежего к старому.
 
-        `decided=None` — всё, `False` — только новое, `True` — только
-        решённое. Порядок тот же, что у `recent()`: сначала момент отклика,
-        а если его нет — момент находки.
+        `only` — множество статусов, которые нужны; `None` — все. Именно
+        множество, а не флаг «решено/не решено»: экран «Отправлено»
+        просит отправленное, а «отправлено» это не «решено» — «не
+        подходит» тоже решение. Отбор в SQL, а не у вызывающего: с
+        отбором на клиенте страница в 50 строк могла целиком состоять из
+        отброшенных вакансий, и экран говорил «откликов нет» при полной
+        таблице откликов.
+
+        Порядок тот же, что у `recent()`: сначала момент отклика, а если
+        его нет — момент находки.
         """
         clause, params = "", []
-        if decided is not None:
-            placeholders = ", ".join("?" * len(statuses.DECIDED))
-            operator = "IN" if decided else "NOT IN"
-            clause = f" WHERE status {operator} ({placeholders})"
-            params = sorted(statuses.DECIDED)
+        if only is not None:
+            placeholders = ", ".join("?" * len(only))
+            clause = f" WHERE status IN ({placeholders})"
+            params = sorted(only)
         rows = self._conn.execute(
             "SELECT * FROM hh_applications" + clause
             + " ORDER BY COALESCE(applied_at, found_at) DESC, rowid DESC"
@@ -638,14 +657,19 @@ class TgFoundRepo:
         return cursor.rowcount == 1
 
     def list(
-        self, *, decided: bool | None = None, limit: int = 50, offset: int = 0
+        self,
+        *,
+        only: frozenset[str] | None = None,
+        limit: int = 50,
+        offset: int = 0,
     ) -> list[dict]:
+        """Очередь постов. `only` — множество нужных статусов, `None` — все.
+        Отбор в SQL по той же причине, что у `HhRepo.list_found`."""
         clause, params = "", []
-        if decided is not None:
-            placeholders = ", ".join("?" * len(statuses.DECIDED))
-            operator = "IN" if decided else "NOT IN"
-            clause = f" WHERE status {operator} ({placeholders})"
-            params = sorted(statuses.DECIDED)
+        if only is not None:
+            placeholders = ", ".join("?" * len(only))
+            clause = f" WHERE status IN ({placeholders})"
+            params = sorted(only)
         rows = self._conn.execute(
             "SELECT * FROM tg_found" + clause
             + " ORDER BY found_at DESC, id DESC LIMIT ? OFFSET ?",

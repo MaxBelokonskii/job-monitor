@@ -577,26 +577,33 @@ def test_the_sent_screen_switches_between_sources() -> None:
     assert 'id="sentHh"' in sent
 
 
-def test_the_applied_vocabulary_matches_the_backend() -> None:
-    """Список «что считать отправленным» есть и на бэкенде, и здесь. Два
-    списка, которые разошлись, — это пустой экран «Отправлено» при полной
-    базе откликов."""
-    from job_monitor import statuses
+def test_the_sent_screen_asks_the_server_what_counts_as_sent() -> None:
+    """Своего словаря статусов у фронтенда быть не должно.
 
-    match = re.search(r"const APPLIED_STATUSES = \[(.*?)\];", _app(), re.DOTALL)
-    assert match, "APPLIED_STATUSES не найдена в app.js"
-    known = set(re.findall(r"['\"]([^'\"]+)['\"]", match.group(1)))
-    assert known == set(statuses.APPLIED), (
-        f"фронтенд считает отправленным {sorted(known)}, "
-        f"бэкенд — {sorted(statuses.APPLIED)}"
+    Раньше экран просил `status=decided` и отсеивал неотправленное сам,
+    держа копию списка «что считать откликом». Две беды сразу: копия
+    однажды отстаёт от бэкенда, а отбор на клиенте поверх страницы в 50
+    строк давал «откликов пока нет» при полной таблице откликов —
+    достаточно было отбросить за день шестьдесят вакансий.
+    """
+    source = _without_comments(_extract_function_source("loadSentHh"))
+    assert "status=applied" in source
+    assert "APPLIED_STATUSES" not in _app(), (
+        "копия списка статусов вернулась на фронтенд — словарь знает "
+        "бэкенд, и знать его должен он один"
+    )
+    assert ".filter(" not in source, (
+        "отбор снова делается на клиенте поверх ограниченной страницы"
     )
 
 
-def test_the_sent_screen_shows_manual_answers_too() -> None:
-    """Ручной отклик — тоже отклик. Показывать только робота значило бы
-    прятать половину истории от человека, который её и создал."""
-    source = _without_comments(_extract_function_source("loadSentHh"))
-    assert "APPLIED_STATUSES" in source
+def test_the_server_filter_the_screen_asks_for_actually_exists() -> None:
+    """Обратная сторона: `status=applied` должен быть настоящим значением
+    фильтра, а не опечаткой, которую роут отвергнет с 422."""
+    from api.found_routes import STATUS_FILTERS
+    from job_monitor import statuses
+
+    assert STATUS_FILTERS["applied"] == statuses.APPLIED
 
 
 # ── Экран «Настройки» ─────────────────────────────────────────────────
@@ -680,6 +687,130 @@ function showRestartBanner() {}
     process.exitCode = 1;
   }
 })();
+"""
+    result = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=10
+    )
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+
+# ── Переключение пресета ──────────────────────────────────────────────
+
+
+def test_switching_a_preset_reloads_its_criteria() -> None:
+    """Найдено ревью, и это самый дорогой дефект переработки интерфейса.
+
+    Критерии переехали из `loadSettings()` в `loadActiveCriteria()`, а
+    `activatePreset()` продолжал звать `loadSettings()`. Чипы пресетов
+    живут НА «Обзоре», так что перехода между экранами не случается и
+    перезагрузить поля некому: после переключения на пресете Б в форме
+    остаются значения пресета А. Нажатие «Сохранить критерии» записывает
+    их поверх Б — конфигурация пресета уничтожена без единого
+    предупреждения.
+    """
+    source = _without_comments(_extract_function_source("activatePreset"))
+    assert "loadActiveCriteria" in source, (
+        "переключение пресета не перечитывает его критерии — форма покажет "
+        "чужие значения, а сохранение их запишет"
+    )
+
+
+@skip_without_node
+def test_the_overview_does_not_discard_unsaved_edits_on_every_visit() -> None:
+    """`PAGE_LOADERS.overview` перечитывал критерии при каждом клике по
+    пункту навигации. Человек, набравший длинное сопроводительное, уходил
+    на «Найдено» посмотреть вакансию, возвращался — и текста нет.
+
+    Проверяется поведение, а не наличие имени в тексте: первая версия
+    этой проверки искала подстроку `loadedId`, и снятие самого условия её
+    не роняло — присваивание-то оставалось.
+    """
+    script = "\n".join((
+        "const fields = {};",
+        "global.document = { getElementById: id => (fields[id] ||= { value: '' }) };",
+        "const presetState = { list: [], activeId: 7, loadedId: null, criteria: {} };",
+        "const tgState = {}; const hhState = {};",
+        "let fetched = 0;",
+        "async function apiGet() { fetched += 1; return { criteria: {} }; }",
+        "function fill() {} function el() { return {}; }",
+        "function renderChannelEdit() {} function renderKeywords() {}",
+        "function renderHHKeywords() {} function renderChoiceBox() {}",
+        "async function loadDictionaries() { return null; }",
+        "async function loadResumes() {}",
+        _extract_function_source("loadActiveCriteria"),
+        """
+        (async () => {
+          await loadActiveCriteria();
+          if (fetched !== 1) { console.error('первый заход не загрузил критерии'); process.exitCode = 1; }
+
+          // Человек печатает сопроводительное и уходит на другой экран.
+          fields.hhCoverLetter.value = 'черновик, который нельзя терять';
+          await loadActiveCriteria();
+          if (fetched !== 1) { console.error('повторный заход полез в сеть'); process.exitCode = 1; }
+          if (fields.hhCoverLetter.value !== 'черновик, который нельзя терять') {
+            console.error('несохранённая правка затёрта:', fields.hhCoverLetter.value);
+            process.exitCode = 1;
+          }
+
+          // Переключение пресета обязано перечитать всё, даже поверх правки.
+          // Именно так его и видит `activatePreset`: `loadPresets()`
+          // обновляет `activeId`, и только потом зовётся эта функция.
+          presetState.activeId = 9;
+          await loadActiveCriteria();
+          if (fetched !== 2) { console.error('переключение пресета не перечитало критерии'); process.exitCode = 1; }
+          if (fields.hhCoverLetter.value !== '') {
+            console.error('поля нового пресета не заполнены:', fields.hhCoverLetter.value);
+            process.exitCode = 1;
+          }
+        })();
+        """,
+    ))
+    result = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=10
+    )
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+
+def test_the_sent_screen_remembers_which_source_is_open() -> None:
+    """Загрузчик всегда обновлял панель Telegram. Выбрав hh.ru, уйдя и
+    вернувшись, человек видел ту же панель hh.ru со СТАРЫМ содержимым,
+    пока обновлялась скрытая соседняя."""
+    match = re.search(r"const PAGE_LOADERS = \{(.*?)\n\};", _app(), re.DOTALL)
+    assert match
+    sent = re.search(r"sent:\s*(.*)", match.group(1)).group(1)
+    assert "sentSource" in sent, f"загрузчик «Отправлено» игнорирует выбранный источник: {sent}"
+
+
+@skip_without_node
+def test_an_unloaded_resume_picker_does_not_detach_the_resume() -> None:
+    """Найдено ревью. `renderResumePicker` вызывается только после
+    успешного `GET /api/resumes`. Если запрос не удался, список пуст,
+    `collectCriteria` читает пустую строку и отправляет `resume_id: null`
+    — следующее «Сохранить критерии» молча отвязывает резюме от пресета и
+    рапортует «сохранено». Пустой список означает «не знаю», а не «без
+    вложения»."""
+    source = _extract_function_source("collectCriteria")
+    script = """
+const fields = {
+  hhSalaryFrom: '0', hhSearchPeriod: '1', hhResumeId: '',
+  templateText: '', hhCoverLetter: '', hhExperience: 'noExperience',
+};
+global.document = { getElementById: id => (id in fields ? { value: fields[id] } : null) };
+""" + source + """
+// Селекта резюме в документе нет вовсе — как если бы список не загрузился.
+const patch = collectCriteria({});
+if ('resume_id' in patch) {
+  console.error('resume_id ушёл в патч при незагруженном списке:', patch.resume_id);
+  process.exitCode = 1;
+}
+
+// А когда список есть и в нём выбрано «без вложения» — поле обязано уехать.
+fields.criteriaResume = '';
+const chosen = collectCriteria({});
+if (chosen.resume_id !== null) {
+  console.error('явный выбор «без вложения» не доехал:', chosen.resume_id);
+  process.exitCode = 1;
+}
 """
     result = subprocess.run(
         ["node", "-e", script], capture_output=True, text=True, timeout=10

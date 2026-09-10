@@ -270,3 +270,105 @@ def test_the_old_vacancies_route_is_gone(client, hh_vacancy) -> None:
     """Единственным его потребителем был наш же фронтенд. Два роута с одним
     смыслом — это два места, которые разойдутся."""
     assert client.get("/api/hh/vacancies").status_code == 404
+
+
+# ── Отправленное нельзя переписать задним числом ──────────────────────
+
+
+def test_a_sent_application_cannot_be_relabelled(client, hh_vacancy) -> None:
+    """Найдено ревью. «Отклик отправлен» — не решение, а ЗАПИСЬ О ФАКТЕ:
+    письмо ушло работодателю, и переименованием этого не отменить.
+
+    Цена бреши конкретная. `applied_on()` считает строки со статусом
+    «отклик отправлен», и по нему воркер сверяет суточный лимит. Пометив
+    пять отправленных откликов как «не подходит», человек опускал счётчик
+    с 20 до 15 — и воркер, спавший на достигнутом лимите, просыпался и
+    досылал ещё пять. Лимит существует, чтобы не забанили аккаунт.
+    """
+    from datetime import date
+
+    repo = HhRepo(get_connection())
+    repo.set_status(hh_vacancy, statuses.AUTO_APPLIED, statuses.SOURCE_ROBOT, datetime.now())
+    assert repo.applied_on(date.today()) == 1
+
+    for target in (statuses.DISMISSED, statuses.MANUAL_APPLIED, statuses.NEW):
+        reply = client.patch(f"/api/found/hh/{hh_vacancy}", json={"status": target})
+        assert reply.status_code == 400, f"переход в {target!r} должен быть отвергнут"
+
+    assert repo.get(hh_vacancy)["status"] == statuses.AUTO_APPLIED
+    assert repo.applied_on(date.today()) == 1, "счётчик суточного лимита сдвинулся"
+
+
+def test_a_manual_application_cannot_be_relabelled_either(client, hh_vacancy) -> None:
+    """«Откликнулся сам» — тоже запись о факте. В суточный счётчик она не
+    попадает, но отклик всё равно ушёл: снять отметку значит соврать себе
+    же о том, куда уже писал."""
+    client.patch(f"/api/found/hh/{hh_vacancy}", json={"status": statuses.MANUAL_APPLIED})
+    reply = client.patch(f"/api/found/hh/{hh_vacancy}", json={"status": statuses.DISMISSED})
+    assert reply.status_code == 400
+    assert "отклик уже отправлен" in reply.json()["detail"]
+    assert HhRepo(get_connection()).get(hh_vacancy)["status"] == statuses.MANUAL_APPLIED
+
+
+def test_a_dismissed_vacancy_can_still_become_an_application(client, hh_vacancy) -> None:
+    """Обратная сторона: запрет касается только выхода из отправленного.
+    Передумать в другую сторону — «сначала отбросил, потом откликнулся» —
+    можно, никакой записи о факте это не стирает."""
+    client.patch(f"/api/found/hh/{hh_vacancy}", json={"status": statuses.DISMISSED})
+    reply = client.patch(f"/api/found/hh/{hh_vacancy}", json={"status": statuses.MANUAL_APPLIED})
+    assert reply.status_code == 200
+    assert HhRepo(get_connection()).get(hh_vacancy)["status"] == statuses.MANUAL_APPLIED
+
+
+def test_marking_it_applied_never_erases_an_earlier_send(client, hh_vacancy) -> None:
+    """`set_status` обнулял `applied_at` для всякого «не отправленного»
+    статуса. Даже когда переход запрещён роутом, репозиторий обязан
+    беречь дату: она — единственная запись о том, КОГДА ушёл отклик, и по
+    ней строится порядок на экране «Отправлено»."""
+    repo = HhRepo(get_connection())
+    sent_at = datetime(2026, 9, 10, 9, 0, 0)
+    repo.set_status(hh_vacancy, statuses.AUTO_APPLIED, statuses.SOURCE_ROBOT, sent_at)
+    assert repo.get(hh_vacancy)["applied_at"] == sent_at.isoformat(timespec="seconds")
+
+    repo.set_status(hh_vacancy, statuses.DISMISSED, statuses.SOURCE_HUMAN, datetime.now())
+    assert repo.get(hh_vacancy)["applied_at"] == sent_at.isoformat(timespec="seconds"), (
+        "дата отправки стёрта — история отклика потеряна безвозвратно"
+    )
+
+
+def test_the_applied_filter_is_done_by_the_query_not_the_client(client, hh_vacancy) -> None:
+    """Найдено ревью. Экран «Отправлено» просил `status=decided` и отсеивал
+    неотправленное у себя, а роут отдаёт не больше 50 строк. Отбросьте за
+    день шестьдесят вакансий — и все пятьдесят возвращённых окажутся «не
+    подходит», список опустеет, и экран скажет «откликов пока нет» при
+    полной таблице откликов.
+    """
+    repo = HhRepo(get_connection())
+    for index in range(60):
+        repo.record_found({
+            "vacancy_id": f"m{index}", "title": f"Вакансия {index}",
+            "url": f"https://hh.ru/vacancy/m{index}",
+            "found_at": f"2026-09-11T{index // 3:02d}:00:00",
+            "status": statuses.DISMISSED, "status_source": statuses.SOURCE_HUMAN,
+        })
+    repo.set_status(hh_vacancy, statuses.AUTO_APPLIED, statuses.SOURCE_ROBOT,
+                    datetime(2026, 9, 1, 8, 0, 0))
+
+    rows = client.get("/api/found/hh?status=applied").json()
+    assert [row["vacancy_id"] for row in rows] == [hh_vacancy], (
+        "отправленный отклик не найден среди шестидесяти отброшенных вакансий"
+    )
+
+
+def test_the_applied_filter_covers_manual_answers(client, hh_vacancy) -> None:
+    """Обратная сторона: «отправлено» — это оба отклика, не только
+    роботный. Иначе фильтр прятал бы от человека его собственную работу."""
+    client.patch(f"/api/found/hh/{hh_vacancy}", json={"status": statuses.MANUAL_APPLIED})
+    rows = client.get("/api/found/hh?status=applied").json()
+    assert [row["status"] for row in rows] == [statuses.MANUAL_APPLIED]
+
+
+def test_the_tg_list_has_the_same_filter(client, tg_post) -> None:
+    client.patch(f"/api/found/tg/{tg_post}", json={"status": statuses.MANUAL_APPLIED})
+    assert len(client.get("/api/found/tg?status=applied").json()) == 1
+    assert client.get("/api/found/tg?status=new").json() == []
