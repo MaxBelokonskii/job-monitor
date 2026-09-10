@@ -10,7 +10,10 @@ from pathlib import Path
 FORBIDDEN_NAMES = (
     ".env", "*.session", "*.session-journal", "*.sqlite", "*.db",
     "*cookies*.json", "config.json", "all_sent_users.txt", "sent_log_*.txt",
-    "*.pdf", "*.doc", "*.docx",
+    # Форматы резюме. Список обязан покрывать весь
+    # `resume_store.ALLOWED_EXTENSIONS` — см. тест связи в
+    # tests/test_check_no_secrets.py.
+    "*.pdf", "*.doc", "*.docx", "*.rtf", "*.odt",
     # Архивы — .gitignore не видит их содержимое, поэтому запрещаем и по имени.
     "*.rar", "*.zip", "*.7z",
     "*.tar", "*.tar.gz", "*.tgz", "*.tar.bz2", "*.tar.xz", "*.txz", "*.zst",

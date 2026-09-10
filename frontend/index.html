@@ -39,6 +39,23 @@
   <div class="page active" id="page-dashboard">
     <div class="page-title">Дашборд</div>
 
+    <div id="dataDirWarning" class="restart-banner" style="display:none"></div>
+
+    <div class="card" id="presetCard">
+      <div class="card-title">Пресет поиска</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+        Каналы, ключевые слова, профессии и резюме. Лимиты и задержки общие
+        для всех пресетов: банят аккаунт, а не пресет.
+      </div>
+      <div id="presetBar" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"></div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <input type="text" id="newPresetName" placeholder="Название нового пресета"
+               style="flex:1;padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--bg);color:var(--text)">
+        <button class="btn btn-primary" data-action="createPreset">Создать</button>
+        <button class="btn btn-secondary" data-action="copyPreset">Копировать активный</button>
+      </div>
+    </div>
+
     <!-- TG Section -->
     <div class="section-split">
       <div class="section-split-label tg">
@@ -240,17 +257,19 @@
       <textarea class="template-area" id="templateText" rows="10"></textarea>
     </div>
     <div class="card">
-      <div class="card-title">Прикреплённый файл (резюме)</div>
+      <div class="card-title">Резюме</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+        Файл прикладывается к отклику в Telegram. Хранится в каталоге данных,
+        а не в каталоге проекта.
+      </div>
       <div class="file-zone" id="fileZone" data-action="pickFile" data-enter-action="pickFile"
-           role="button" tabindex="0" aria-label="Выбрать файл резюме">
-        <input type="file" id="fileInput" accept=".pdf,.doc,.docx" style="display:none" data-change-action="onFileSelect">
+           role="button" tabindex="0" aria-label="Загрузить файл резюме">
+        <input type="file" id="fileInput" accept=".pdf,.doc,.docx,.rtf,.odt"
+               style="display:none" data-change-action="uploadResume">
         <div style="font-size:20px;margin-bottom:6px">📎</div>
-        <div id="fileZoneLabel" style="font-size:12.5px;color:var(--muted);font-weight:500">Нажмите чтобы выбрать файл</div>
-        <div id="fileName" style="font-size:11px;font-family:'JetBrains Mono',monospace;color:var(--green);margin-top:3px"></div>
+        <div id="fileZoneLabel" style="font-size:12.5px;color:var(--muted);font-weight:500">Нажмите чтобы загрузить файл</div>
       </div>
-      <div style="font-size:12px;color:var(--muted);margin-top:6px">
-        Текущий файл: <span style="font-family:'JetBrains Mono',monospace;color:var(--text)" id="currentFile">не выбран</span>
-      </div>
+      <div id="resumeList" style="margin-top:10px"></div>
     </div>
 
     <div class="section-split">
@@ -366,7 +385,7 @@
         <div class="card-title">Ключевые слова HH</div>
         <div id="hhKwList"></div>
         <div class="add-row">
-          <input type="text" id="newHHKw" placeholder="Junior QA...">
+          <input type="text" id="newHHKw" placeholder="Название профессии">
           <button class="btn btn-secondary" data-action="addHHKw">+</button>
         </div>
       </div>
@@ -382,26 +401,18 @@
 
     <div class="two-col">
       <div class="card">
-        <div class="card-title">Регионы поиска</div>
-        <div style="display:flex;flex-direction:column;gap:7px">
-          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" value="40" class="hh-region"> Казахстан</label>
-          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" value="113" class="hh-region" checked> Россия</label>
-          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" value="16" class="hh-region"> Беларусь</label>
-          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" value="275" class="hh-region"> Узбекистан</label>
-          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" value="5" class="hh-region"> Украина</label>
-          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" value="48" class="hh-region"> Азербайджан</label>
-          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer"><input type="checkbox" value="1776" class="hh-region"> Грузия</label>
+        <div class="card-title">Регион поиска</div>
+        <div style="font-size:13px;color:var(--muted)">
+          Поиск ведётся по одному региону:
+          <span id="hhAreaLabel" style="color:var(--text);font-weight:600">—</span>.
+          Это константа приложения, а не настройка.
         </div>
       </div>
       <div class="card">
         <div class="card-title">Параметры HH</div>
         <div class="toggle-row">
           <div>Опыт</div>
-          <select id="hhExperience" style="padding:5px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;background:var(--bg);color:var(--text)">
-            <option value="noExperience">Без опыта</option>
-            <option value="between1And3">1–3 года</option>
-            <option value="between3And6">3–6 лет</option>
-          </select>
+          <select id="hhExperience" style="padding:5px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;background:var(--bg);color:var(--text)"></select>
         </div>
         <div class="toggle-row">
           <div>Зарплата от<div class="toggle-desc">0 = не фильтровать</div></div>
@@ -433,11 +444,15 @@
 
     <div class="card">
       <div class="card-title">График работы HH</div>
-      <div style="display:flex;gap:16px;flex-wrap:wrap">
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="remote" class="hh-schedule" checked> Удалённо</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="fullDay" class="hh-schedule" checked> Полный день</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="flexible" class="hh-schedule" checked> Гибкий</label>
-        <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer"><input type="checkbox" value="shift" class="hh-schedule"> Сменный</label>
+      <div id="hhScheduleBox" style="display:flex;gap:16px;flex-wrap:wrap"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Тип занятости HH</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
+        hh.ru принимает несколько типов сразу; одно значение сужает выдачу.
+      </div>
+      <div id="hhEmploymentBox" style="display:flex;gap:16px;flex-wrap:wrap"></div>
       </div>
     </div>
 
@@ -529,19 +544,13 @@
     </div>
 
     <div style="border-top:1px solid var(--border);padding-top:14px">
-      <div style="font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.5px;margin-bottom:10px">АВТОР</div>
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
-        <div style="width:36px;height:36px;border-radius:50%;background:var(--accent-light);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--accent)">ВП</div>
-        <div>
-          <div style="font-size:13px;font-weight:600">Пак Виталий</div>
-          <div style="font-size:11px;color:var(--muted)">Junior QA Engineer</div>
-        </div>
-      </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <a href="https://www.linkedin.com/in/vitaliy-pak-634a163b9" target="_blank" style="font-size:11px;padding:4px 10px;border-radius:var(--radius-sm);background:var(--accent-light);color:var(--accent);text-decoration:none;font-weight:600">LinkedIn</a>
-        <a href="https://github.com/Scr00ge90" target="_blank" style="font-size:11px;padding:4px 10px;border-radius:var(--radius-sm);background:var(--bg);color:var(--text);text-decoration:none;font-weight:600;border:1px solid var(--border)">GitHub</a>
-        <a href="https://t.me/Scr00ge_3_16" target="_blank" style="font-size:11px;padding:4px 10px;border-radius:var(--radius-sm);background:var(--tg-light);color:var(--tg-text);text-decoration:none;font-weight:600">Telegram</a>
-        <a href="https://www.notion.so/97f6c027176c83aaa56a019ee570248e" target="_blank" style="font-size:11px;padding:4px 10px;border-radius:var(--radius-sm);background:var(--bg);color:var(--text);text-decoration:none;font-weight:600;border:1px solid var(--border)">Portfolio</a>
+      <div style="font-size:10px;font-weight:600;color:var(--muted);letter-spacing:.5px;margin-bottom:10px">ПРОИСХОЖДЕНИЕ</div>
+      <div style="font-size:12px;color:var(--muted);line-height:1.5">
+        Основано на проекте
+        <a href="https://github.com/Vita1iyPak/Job_Monitor" target="_blank" rel="noopener noreferrer"
+           style="color:var(--accent);text-decoration:none;font-weight:600">Vita1iyPak/Job_Monitor</a>,
+        используется с разрешения автора. Безопасность, архитектура и
+        функциональность существенно переработаны.
       </div>
     </div>
   </div>

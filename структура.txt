@@ -6,7 +6,10 @@ JobMonitor/
 │   ├── tg_routes.py            /api/tg/*
 │   ├── hh_routes.py            /api/hh/*
 │   ├── auth_routes.py          /api/auth/*
-│   └── routes_state.py         /api/state — агрегированное состояние дашборда
+│   ├── routes_state.py         /api/state — агрегированное состояние дашборда
+│   ├── presets_routes.py       /api/presets — пресеты поиска
+│   ├── dictionaries_routes.py  /api/dictionaries — справочники hh.ru
+│   └── resumes_routes.py       /api/resumes — библиотека резюме
 ├── frontend/
 │   ├── index.html              только разметка
 │   ├── style.css               все стили
@@ -16,7 +19,10 @@ JobMonitor/
 │   ├── paths.py                единственное место, где вычисляются пути к $JOB_MONITOR_DATA_DIR
 │   ├── envfile.py              атомарная запись .env (0600)
 │   ├── security.py             APP_TOKEN, TrustedHost, CSP
-│   ├── settings.py             модель настроек (SQLite) и секреты (окружение)
+│   ├── settings.py             глобальные настройки (SQLite) и секреты (окружение)
+│   ├── criteria.py             критерии поиска в пресете и константы hh.ru
+│   ├── presets.py              активный пресет: чтение, переключение, перенос
+│   ├── resume_store.py         файлы библиотеки резюме в каталоге данных
 │   ├── telegram_client.py      единственный Telethon-клиент приложения
 │   ├── logging_setup.py        файлы логов: tg_system.log и hh.log
 │   ├── legacy_import.py        импорт состояния из версий до 2.1.0

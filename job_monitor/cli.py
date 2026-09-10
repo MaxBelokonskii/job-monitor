@@ -33,7 +33,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     report = import_legacy(get_connection(), args.source)
-    print(f"настроек: {report.settings_keys}, контактов: {report.contacts}, "
+    print(f"настроек: {report.settings_keys}, критериев: {report.criteria_keys}, "
+          f"контактов: {report.contacts}, "
           f"отправок: {report.sends}, вакансий: {report.vacancies}")
     for note in report.skipped:
         print(f"  пропущено: {note}")

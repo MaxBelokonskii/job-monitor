@@ -25,8 +25,34 @@ def connect(database: str | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=5000")
     migrate(conn)
+    _bootstrap(conn)
     _secure(target)
     return conn
+
+
+def _bootstrap(conn: sqlite3.Connection) -> None:
+    """Перенос критериев в пресет и создание пресета по умолчанию.
+
+    Здесь, а не в `migrate()`, по двум причинам. Первая: это перенос ДАННЫХ,
+    а не схемы, и делается он через модели и репозитории, которых SQL не
+    знает. Вторая практическая: репозитории пишут через `transaction()`,
+    то есть выдают явный `BEGIN IMMEDIATE`, и это работает только на
+    соединении с `isolation_level=None` — а `migrate()` зовут и на сыром
+    `sqlite3.connect()` в тестах схемы, где неявные транзакции включены и
+    явный BEGIN падает с «cannot start a transaction within a transaction».
+
+    Порядок важен: сначала перенос, потом создание пустого пресета по
+    умолчанию. Наоборот пустой пресет занял бы место первого, `import`
+    увидел бы непустую таблицу и решил, что перенос уже был, — критерии
+    пользователя остались бы в старой строке и просто исчезли из виду.
+    """
+    from datetime import datetime
+
+    from job_monitor.presets import ensure_default, import_legacy_criteria
+
+    now = datetime.now()
+    import_legacy_criteria(conn, now)
+    ensure_default(conn, now)
 
 
 # В WAL-режиме рядом с базой живут ещё два файла, и в `-wal` лежат те же

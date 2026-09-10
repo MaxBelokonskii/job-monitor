@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException
 from .config_routes import load_config
 from job_monitor.db.connection import get_connection
 from job_monitor.db.repositories import HhRepo
+from job_monitor.presets import active_criteria, active_preset
 from job_monitor.logging_setup import log_file
 from job_monitor.workers.hh import LoginWindowNotOpen, login
 from job_monitor.workers.manager import WorkerAlreadyRunning, WorkerNotRunning, manager
@@ -44,6 +45,15 @@ async def hh_status() -> dict[str, Any]:
 
 @router.post("/start")
 async def hh_start() -> dict[str, str | int]:
+    # См. tg_start: отказ со внятным текстом дешевле любой диагностики
+    # постфактум.
+    conn = get_connection()
+    if not active_criteria(conn).professions:
+        raise HTTPException(
+            status_code=400,
+            detail=f"в пресете «{active_preset(conn)['name']}» нет профессий — "
+            "по ним строится поисковый запрос на hh.ru",
+        )
     try:
         status = await manager.start("hh")
     except WorkerAlreadyRunning:

@@ -36,6 +36,14 @@ DATA_ACTION_ATTR = re.compile(
     r"""\bdata-(?:action|change-action|enter-action)\s*=\s*["']([^"']+)["']"""
 )
 
+# Та же связь, но в другом синтаксисе: узлы, созданные из JS, получают
+# атрибут как ключ объекта — `'data-action': 'chooseResume'`. Шаблон
+# разметки такую форму не видит, поэтому сканеров два, а не один
+# «универсальный»: универсальный ловил бы лишнее.
+DATA_ACTION_IN_JS = re.compile(
+    r"""['"]data-(?:action|change-action|enter-action)['"]\s*:\s*['"]([^'"]+)['"]"""
+)
+
 
 def _index_source() -> str:
     return INDEX_HTML.read_text(encoding="utf-8")
@@ -153,22 +161,40 @@ def test_every_markup_action_has_a_handler() -> None:
     assert not missing, f"data-action(s) with no entry in ACTIONS: {sorted(missing)} — dead buttons"
 
 
-def test_every_handler_is_reachable_from_markup() -> None:
-    unused = _action_map_keys() - _markup_action_names()
-    assert not unused, f"ACTIONS entries no markup can reach: {sorted(unused)}"
+def _dynamic_action_names() -> set[str]:
+    """`data-action`, которые проставляет сам JS на созданных им узлах.
+
+    Списки пресетов и резюме строятся динамически: их кнопки не существуют
+    в `index.html` и статическим сканом разметки не видны. Инвариант при
+    этом сохраняется прежний — мёртвых записей в `ACTIONS` быть не должно, —
+    просто «достижима» теперь значит «есть в разметке ИЛИ проставляется
+    кодом». Запись, которой нет нигде, по-прежнему падает.
+    """
+    return set(DATA_ACTION_IN_JS.findall(_app_source()))
+
+
+def test_every_handler_is_reachable() -> None:
+    unused = _action_map_keys() - _markup_action_names() - _dynamic_action_names()
+    assert not unused, f"ACTIONS entries nothing can reach: {sorted(unused)}"
 
 
 def test_markup_carries_the_converted_handlers() -> None:
     """The 30 attributes removed from index.html must reappear as data-actions,
-    not just vanish."""
+    not just vanish.
+
+    `onFileSelect` из списка ушёл осознанно: обработчик был мёртвым — он
+    обновлял подписи и никогда не отправлял файл (дефект L14). На его месте
+    `uploadResume`, который действительно загружает резюме в библиотеку.
+    """
     expected = {
         "showAbout", "hideAbout", "toggleTG", "toggleHH",
         "reloadChat", "sendChatMessage",
         "saveChannels", "addChannel", "saveKeywords", "addKw", "addEx",
-        "saveTemplate", "pickFile", "onFileSelect", "saveHHCoverLetter",
+        "saveTemplate", "pickFile", "saveHHCoverLetter",
         "saveTGSettings", "saveApiKeys", "sendAuthCode", "verifyAuthCode",
         "saveHHSettings", "addHHKw", "addHHEx", "addStep",
         "showLog", "clearConsole", "refreshLogs",
+        "uploadResume",
     }
     assert expected <= _markup_action_names(), sorted(expected - _markup_action_names())
 
@@ -309,16 +335,25 @@ def test_only_the_api_helpers_call_fetch_directly() -> None:
     Два следствия, оба реальные: `.json()` на не-JSON теле ответа 500
     бросало исключение в консоль, а 403 протухшего токена проходил мимо
     баннера, который план 1 построил ровно для этого случая (см.
-    `showTokenExpiredBanner`). Единственные законные места вызова `fetch` —
-    сами помощники `apiGet` и `apiSend`.
+    `showTokenExpiredBanner`). Законные места вызова `fetch` — только сами
+    помощники: `apiGet`, `apiSend` и `apiUpload` (загрузка резюме сырым
+    телом; JSON-помощники для неё не годятся, тело — байты файла).
+
+    Проверяется не только их число, но и свойство, ради которого счёт
+    ведётся: каждый вызывающий `fetch` обязан сам обрабатывать 403.
     """
     source = _app_source()
-    assert source.count("fetch(") == 2, (
-        "fetch() вызывается вне apiGet/apiSend — 403 пройдёт мимо баннера "
+    helpers = ("apiGet", "apiSend", "apiUpload")
+    assert source.count("fetch(") == len(helpers), (
+        "fetch() вызывается вне помощников — 403 пройдёт мимо баннера "
         "протухшего токена, а не-JSON тело ответа бросит исключение"
     )
-    for helper in ("apiGet", "apiSend"):
-        assert "fetch(" in _extract_function_source(helper)
+    for helper in helpers:
+        body = _extract_function_source(helper)
+        assert "fetch(" in body
+        assert "showTokenExpiredBanner" in body, (
+            f"{helper} зовёт fetch, но не поднимает баннер на 403"
+        )
     for caller in ("sendChatMessage", "verifyAuthCode"):
         assert "fetch(" not in _extract_function_source(caller)
 

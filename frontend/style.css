@@ -288,3 +288,19 @@ body { font-family: 'Manrope', sans-serif; background: var(--bg); color: var(--t
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+
+/* Пресеты поиска */
+.preset-chip { padding: 6px 14px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 600;
+  font-family: 'Manrope', sans-serif; cursor: pointer; border: 1px solid var(--border);
+  background: var(--card-bg); color: var(--text); transition: all .15s; }
+.preset-chip:hover:not(:disabled) { border-color: var(--accent); }
+.preset-chip.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.preset-chip:disabled { cursor: default; }
+.preset-meta { font-size: 11px; color: var(--muted); font-family: 'JetBrains Mono', monospace; }
+
+/* Библиотека резюме */
+.resume-row { display: flex; align-items: center; gap: 10px; padding: 7px 0;
+  border-bottom: 1px solid var(--border); font-size: 13px; }
+.resume-row:last-child { border-bottom: none; }
+.resume-name { flex: 1; word-break: break-all; }
+.resume-row.chosen .resume-name { font-weight: 700; color: var(--accent); }

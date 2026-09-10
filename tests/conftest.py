@@ -145,3 +145,62 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config) -> None:
         "поведенческие пины XSS и CSP (S5/S6): без node защита фронтенда держится "
         "только грепом по исходнику. Полный прогон требует Node.js — см. README."
     )
+
+
+@pytest.fixture()
+def bare_conn(tmp_path):
+    """Соединение со схемой, но БЕЗ бутстрапа данных.
+
+    `connect()` после миграций создаёт пресет по умолчанию и переносит старые
+    критерии (`_bootstrap`). Это правильно для приложения и мешает тестам,
+    которые проверяют сам бутстрап: им нужна база до него. Соединение
+    настраивается так же, как приложение — `isolation_level=None`, иначе
+    явный `BEGIN IMMEDIATE` из `transaction()` падает с «cannot start a
+    transaction within a transaction».
+    """
+    import sqlite3
+
+    from job_monitor.db.migrations import migrate
+
+    conn = sqlite3.connect(
+        tmp_path / "t.db", isolation_level=None, check_same_thread=False
+    )
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    migrate(conn)
+    return conn
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_external_tools():
+    """Набор не запускает системные утилиты.
+
+    `lifespan` зовёт `paths.exclude_from_backups()`, а на macOS `tmutil`
+    существует по-настоящему — и каждый тест, входящий в lifespan, начинал
+    порождать сторонний процесс: прогон вырос с 16 до 86 секунд, а тест
+    бюджета остановки стал мерить чужое время. Это тот же класс требований,
+    что «тесты не ходят в сеть»: внешние границы подменяются двойниками.
+    """
+    from job_monitor import paths
+
+    original = paths.exclude_from_backups
+    paths.exclude_from_backups = lambda: False
+    # Отдаём настоящую реализацию: тесты самой функции обязаны звать её, а
+    # не заглушку, иначе «вернула False» проходит вакуумно — заглушка
+    # возвращает False всегда.
+    yield original
+    paths.exclude_from_backups = original
+
+
+@pytest.fixture()
+def real_exclude_from_backups(_no_external_tools, monkeypatch):
+    """Настоящая `paths.exclude_from_backups` вместо сессионной заглушки.
+
+    Для тестов, которые проверяют саму функцию: они подменяют `shutil.which`
+    и `subprocess.run`, то есть наружу всё равно не выходят.
+    """
+    from job_monitor import paths
+
+    monkeypatch.setattr(paths, "exclude_from_backups", _no_external_tools)
+    return _no_external_tools

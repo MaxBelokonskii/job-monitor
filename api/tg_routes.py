@@ -7,6 +7,7 @@ from .config_routes import load_config
 from job_monitor.db.connection import get_connection
 from job_monitor.db.repositories import EventsRepo, TgRepo
 from job_monitor.logging_setup import log_file
+from job_monitor.presets import active_criteria, active_preset
 from job_monitor.settings import load_secrets
 from job_monitor.workers.manager import WorkerAlreadyRunning, WorkerNotRunning, manager
 
@@ -43,7 +44,7 @@ async def tg_status() -> dict[str, Any]:
         "sent_total": TgRepo(conn).contacts_total(),
         "found_today": EventsRepo(conn).count_on("tg", "vacancy", today),
         "max_per_day": cfg.get("max_per_day", 25),
-        "channels_count": len(cfg.get("channels", [])),
+        "channels_count": len(active_criteria(conn).channels),
         "api_id": cfg.get("api_id", ""),
         "api_hash_set": bool(secrets.api_hash),
         "tg_autostart": cfg.get("tg_autostart", False),
@@ -51,6 +52,23 @@ async def tg_status() -> dict[str, Any]:
 
 @router.post("/start")
 async def tg_start() -> dict[str, str | int]:
+    # Пустой пресет — не повод молча крутиться впустую: раньше воркер
+    # запускался, ничего не находил, и понять почему было нельзя ни по
+    # логам, ни по интерфейсу.
+    conn = get_connection()
+    criteria = active_criteria(conn)
+    preset_name = active_preset(conn)["name"]
+    if not criteria.channels:
+        raise HTTPException(
+            status_code=400,
+            detail=f"в пресете «{preset_name}» нет каналов — добавьте хотя бы один",
+        )
+    if not criteria.tg_keywords:
+        raise HTTPException(
+            status_code=400,
+            detail=f"в пресете «{preset_name}» нет ключевых слов — иначе воркер "
+            "не поймёт, какие посты считать вакансиями",
+        )
     try:
         status = await manager.start("tg")
     except WorkerAlreadyRunning:
@@ -93,7 +111,8 @@ async def tg_stop() -> dict[str, str | int | None]:
 
 @router.get("/chats")
 async def tg_chats() -> list[dict[str, Any]]:
-    has_file = bool(load_config().get("file_path"))
+    # Резюме больше не путь в настройках, а ссылка на библиотеку (L14/D10).
+    has_file = active_criteria(get_connection()).resume_id is not None
     return [
         {
             "username": row["username"],

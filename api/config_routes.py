@@ -3,7 +3,12 @@ from pydantic import ValidationError
 
 from job_monitor import envfile
 from job_monitor.db.connection import get_connection
-from job_monitor.settings import AppSettings, load_secrets, load_settings, save_settings
+from job_monitor.settings import (
+    GlobalSettings,
+    load_secrets,
+    load_settings,
+    save_settings,
+)
 from job_monitor.telegram_client import reset_client
 
 router = APIRouter(prefix="/api/config", tags=["config"])
@@ -21,6 +26,19 @@ async def get_config() -> dict:
 @router.patch("")
 async def update_config(patch: dict) -> dict:
     patch = dict(patch)
+    # Активный пресет через этот роут не меняется. Иначе он обходил бы всё,
+    # ради чего существует `POST /api/presets/{id}/activate`: тот сначала
+    # останавливает воркеров и отказывается переключаться, если воркер не
+    # уложился в бюджет остановки (решение D9). Смена поля напрямую
+    # оставляла бы воркер работающим — и следующая его итерация прочитала бы
+    # чужие критерии и приложила чужое резюме, а отозвать отправленное
+    # человеку сообщение нельзя.
+    if "active_preset_id" in patch:
+        raise HTTPException(
+            status_code=400,
+            detail="активный пресет меняется через POST /api/presets/{id}/activate — "
+            "он останавливает воркеров перед переключением",
+        )
     api_id = patch.pop("api_id", None)
     api_hash = patch.pop("api_hash", None)
     patch.pop("api_hash_set", None)
@@ -36,7 +54,14 @@ async def update_config(patch: dict) -> dict:
     try:
         updated = save_settings(get_connection(), patch)
     except ValidationError as error:
-        raise HTTPException(status_code=422, detail=error.errors(include_url=False)) from error
+        # `include_context=False` — та же защита, что в api/presets_routes.py:
+        # пользовательский валидатор кладёт объект `ValueError` в контекст
+        # ошибки, и попытка отдать его в JSON превращает 422 в 500. Сейчас у
+        # `GlobalSettings` таких валидаторов нет, но первый же добавленный
+        # ломал бы ответ молча.
+        raise HTTPException(
+            status_code=422, detail=error.errors(include_url=False, include_context=False)
+        ) from error
 
     if secrets_to_write:
         # В `.env` живут ТОЛЬКО секреты. Раньше сюда же дописывались

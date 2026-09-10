@@ -123,6 +123,9 @@ job_monitor/            пакет приложения
   paths.py              каталог данных, все пути к состоянию
   security.py           токен приложения, проверка Host, CSP
   settings.py           модель настроек, секреты из окружения
+  criteria.py           критерии поиска в пресете и константы hh.ru
+  presets.py            активный пресет: чтение, переключение, перенос
+  resume_store.py       файлы библиотеки резюме в каталоге данных
   envfile.py            атомарная запись .env (0600)
   telegram_client.py    единственный Telethon-клиент приложения
   logging_setup.py      файлы логов: tg_system.log и hh.log
@@ -140,6 +143,7 @@ job_monitor/            пакет приложения
 api/                    (пакет верхнего уровня, не подпакет job_monitor)
   main.py               сборка FastAPI, middleware, lifespan
   config_routes.py      tg_routes.py  hh_routes.py  auth_routes.py  routes_state.py
+  presets_routes.py     dictionaries_routes.py  resumes_routes.py
 frontend/               index.html, app.js, style.css
 tests/                  pytest
 docs/superpowers/       specs/ и plans/

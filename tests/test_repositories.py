@@ -20,7 +20,9 @@ def conn(tmp_path, monkeypatch):
 
 def test_settings_roundtrip(conn):
     repo = SettingsRepo(conn)
-    assert repo.load() == {}
+    # Не пусто: бутстрап при подключении записывает активный пресет. Всё
+    # остальное — по-прежнему чистый лист.
+    assert set(repo.load()) == {"active_preset_id"}
     repo.save({"max_per_day": 25, "channels": ["a", "b"]})
     assert repo.load() == {"max_per_day": 25, "channels": ["a", "b"]}
 
