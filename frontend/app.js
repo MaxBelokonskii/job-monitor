@@ -161,6 +161,9 @@ function renderPresetBar() {
       'data-arg': String(preset.id),
     }),
   ])));
+  // Активный пресет назван и в полосе состояния — она обязана меняться
+  // вместе с этим списком, а не через три секунды до следующего опроса.
+  updateStatusBar();
 }
 
 async function activatePreset(id) {
@@ -251,6 +254,23 @@ const hhState = {
 };
 
 // ── Navigation ────────────────────────────────────────────────────────
+// Что подгрузить при открытии экрана. Единственное место, где это
+// решается: раньше это была лестница из шести `if (page === ...)`, куда
+// новый экран забывали дописать — и он открывался пустым, без ошибки.
+const PAGE_LOADERS = {
+  overview: async () => {
+    renderChannelEdit();
+    renderKeywords();
+    document.getElementById('templateText').value = tgState.template;
+  },
+  found: async () => {},
+  sent: async () => { await renderChats(); },
+  settings: async () => {
+    await loadSettings();
+    refreshLogs();
+  },
+};
+
 document.querySelectorAll('.nav-item[data-page]').forEach(item => {
   item.addEventListener('click', async () => {
     const page = item.dataset.page;
@@ -258,16 +278,50 @@ document.querySelectorAll('.nav-item[data-page]').forEach(item => {
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
     document.getElementById('page-' + page).classList.add('active');
     item.classList.add('active');
-    if (page === 'channels') renderChannelEdit();
-    if (page === 'keywords') renderKeywords();
-    if (page === 'template') {
-      document.getElementById('templateText').value = tgState.template;
-    }
-    if (page === 'settings') await loadSettings();
-    if (page === 'logs') refreshLogs();
-    if (page === 'chats') await renderChats();
+    const load = PAGE_LOADERS[page];
+    if (load) await load();
   });
 });
+
+// ── Полоса состояния ──────────────────────────────────────────────────
+// Состояние воркеров, режим и активный пресет были разбросаны по дашборду
+// и настройкам, а смысл безопасного режима не написан нигде: только
+// галочка, до которой надо дойти и вспомнить, что она значит.
+const WORKER_STATE_WORDS = {
+  stopped: 'остановлен',
+  starting: 'запускается',
+  running: 'работает',
+  stopping: 'останавливается',
+  error: 'ошибка',
+};
+
+function workerWord(state) {
+  return WORKER_STATE_WORDS[state] || WORKER_STATE_WORDS.stopped;
+}
+
+function safeModeWords(on) {
+  return on
+    ? 'Безопасный режим: собираю, не отправляю'
+    : 'Отправка включена';
+}
+
+function updateStatusBar() {
+  const rows = [
+    ['sbDotTG', 'sbTG', tgState, 'Telegram'],
+    ['sbDotHH', 'sbHH', hhState, 'hh.ru'],
+  ];
+  for (const [dotId, textId, worker, name] of rows) {
+    const dot = document.getElementById(dotId);
+    const label = document.getElementById(textId);
+    if (dot) dot.className = 'status-dot ' + workerView(worker.state, name, worker.canStart).dot;
+    if (label) label.textContent = `${name}: ${workerWord(worker.state)}`;
+  }
+  const mode = document.getElementById('sbMode');
+  if (mode) mode.textContent = safeModeWords(tgState.safeMode);
+  const preset = document.getElementById('sbPreset');
+  const active = presetState.list.find(item => item.is_active);
+  if (preset) preset.textContent = active ? `Пресет: ${active.name}` : 'Пресет не выбран';
+}
 
 // ── Worker status UI ──────────────────────────────────────────────────
 // A worker is not simply running-or-not. `error` means its task either
@@ -349,10 +403,12 @@ function updateWorkerButton(worker, name, btnId, dotId, alertId, toggleClass) {
 
 function updateTGButton() {
   updateWorkerButton(tgState, 'TG', 'btnToggleTG', 'dotTG', 'tgWorkerAlert', 'btn-toggle-tg');
+  updateStatusBar();
 }
 
 function updateHHButton() {
   updateWorkerButton(hhState, 'HH', 'btnToggleHH', 'dotHH', 'hhWorkerAlert', 'btn-toggle-hh');
+  updateStatusBar();
 }
 
 function updateMetrics() {

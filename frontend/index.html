@@ -20,24 +20,34 @@
     <button class="btn-about" data-action="showAbout" title="О приложении">ⓘ</button>
   </div>
   <nav class="nav">
-    <div class="nav-item active" data-page="dashboard"><div class="nav-dot"></div>Дашборд</div>
-    <div class="nav-item" data-page="chats"><div class="nav-dot"></div>Отправленные</div>
-    <div class="nav-sep"></div>
-    <div class="nav-item" data-page="channels"><div class="nav-dot"></div>Каналы</div>
-    <div class="nav-item" data-page="keywords"><div class="nav-dot"></div>Ключевые слова</div>
-    <div class="nav-item" data-page="template"><div class="nav-dot"></div>Шаблоны</div>
-    <div class="nav-sep"></div>
+    <div class="nav-item active" data-page="overview"><div class="nav-dot"></div>Обзор</div>
+    <div class="nav-item" data-page="found"><div class="nav-dot"></div>Найдено</div>
+    <div class="nav-item" data-page="sent"><div class="nav-dot"></div>Отправлено</div>
     <div class="nav-item" data-page="settings"><div class="nav-dot"></div>Настройки</div>
-    <div class="nav-item" data-page="logs"><div class="nav-dot"></div>Логи</div>
   </nav>
 </div>
 
 <!-- ── MAIN ────────────────────────────────────────────────────────── -->
 <div class="main">
+  <!-- Полоса состояния: видна на любом экране. Состояние воркеров, режим и
+       активный пресет были разбросаны по дашборду и настройкам, а смысл
+       безопасного режима не написан нигде — только галочка. -->
+  <div class="statusbar" id="statusBar">
+    <span class="statusbar-item">
+      <span class="status-dot stopped" id="sbDotTG"></span>
+      <span id="sbTG"></span>
+    </span>
+    <span class="statusbar-item">
+      <span class="status-dot stopped" id="sbDotHH"></span>
+      <span id="sbHH"></span>
+    </span>
+    <span class="statusbar-item statusbar-mode" id="sbMode"></span>
+    <span class="statusbar-item statusbar-preset" id="sbPreset"></span>
+  </div>
 
-  <!-- DASHBOARD -->
-  <div class="page active" id="page-dashboard">
-    <div class="page-title">Дашборд</div>
+  <!-- ОБЗОР -->
+  <div class="page active" id="page-overview">
+    <div class="page-title">Обзор</div>
 
     <div id="dataDirWarning" class="restart-banner" style="display:none"></div>
 
@@ -162,44 +172,6 @@
         </div>
       </div>
     </div>
-  </div>
-
-  <!-- CHATS -->
-  <div class="page" id="page-chats" style="padding:0;flex-direction:row;height:100vh;gap:0">
-    <div style="width:270px;flex-shrink:0;border-right:1px solid var(--border);display:flex;flex-direction:column;background:var(--card-bg)">
-      <div style="padding:14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
-        <div style="font-size:14px;font-weight:700">Отправленные</div>
-        <div style="font-size:12px;color:var(--muted)" id="chatCount">0</div>
-      </div>
-      <div id="chatList" style="flex:1;overflow-y:auto"></div>
-    </div>
-    <div style="flex:1;display:flex;flex-direction:column;background:var(--bg)">
-      <div id="chatEmpty" style="flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;color:var(--muted)">
-        <div style="font-size:36px">💬</div>
-        <div style="font-size:13px;font-weight:500">Выберите контакт слева</div>
-      </div>
-      <div id="chatView" style="display:none;flex-direction:column;height:100%">
-        <div style="padding:12px 18px;border-bottom:1px solid var(--border);background:var(--card-bg);display:flex;align-items:center;gap:10px">
-          <div id="chatViewAvatar" style="width:34px;height:34px;border-radius:50%;background:var(--tg-light);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--tg);flex-shrink:0;font-family:'JetBrains Mono',monospace"></div>
-          <div>
-            <div id="chatViewName" style="font-size:13px;font-weight:600;font-family:'JetBrains Mono',monospace"></div>
-            <div style="font-size:11px;color:var(--muted)">Telegram</div>
-          </div>
-          <button class="btn btn-secondary" style="margin-left:auto;font-size:11px" data-action="reloadChat">↻</button>
-        </div>
-        <div id="chatMessages" style="flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:8px"></div>
-        <div style="padding:10px 14px;border-top:1px solid var(--border);background:var(--card-bg);display:flex;gap:8px">
-          <input type="text" id="chatInput" placeholder="Написать сообщение..."
-            style="flex:1;padding:8px 13px;border:1px solid var(--border);border-radius:20px;font-size:12.5px;font-family:'Manrope',sans-serif;background:var(--bg);color:var(--text);outline:none"
-            data-enter-action="sendChatMessage">
-          <button class="btn btn-primary" style="border-radius:20px;padding:8px 16px;font-size:12.5px" data-action="sendChatMessage">Отправить</button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- CHANNELS -->
-  <div class="page" id="page-channels">
     <div class="page-header">
       <div class="page-title">Каналы</div>
       <button class="btn btn-primary" data-action="saveChannels">Сохранить</button>
@@ -212,10 +184,6 @@
         <button class="btn btn-secondary" data-action="addChannel">+ Добавить</button>
       </div>
     </div>
-  </div>
-
-  <!-- KEYWORDS -->
-  <div class="page" id="page-keywords">
     <div class="page-header">
       <div class="page-title">Ключевые слова</div>
       <button class="btn btn-primary" data-action="saveKeywords">Сохранить</button>
@@ -238,10 +206,6 @@
         </div>
       </div>
     </div>
-  </div>
-
-  <!-- TEMPLATES -->
-  <div class="page" id="page-template">
     <div class="page-header"><div class="page-title">Шаблоны</div></div>
 
     <div class="section-split">
@@ -287,7 +251,47 @@
     </div>
   </div>
 
-  <!-- SETTINGS -->
+  <!-- НАЙДЕНО -->
+  <div class="page" id="page-found">
+    <div class="page-header"><div class="page-title">Найдено</div></div>
+    <div id="foundBody"></div>
+  </div>
+
+  <!-- ОТПРАВЛЕНО -->
+  <div class="page" id="page-sent" style="padding:0;flex-direction:row;height:100vh;gap:0">
+    <div style="width:270px;flex-shrink:0;border-right:1px solid var(--border);display:flex;flex-direction:column;background:var(--card-bg)">
+      <div style="padding:14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between">
+        <div style="font-size:14px;font-weight:700">Отправленные</div>
+        <div style="font-size:12px;color:var(--muted)" id="chatCount">0</div>
+      </div>
+      <div id="chatList" style="flex:1;overflow-y:auto"></div>
+    </div>
+    <div style="flex:1;display:flex;flex-direction:column;background:var(--bg)">
+      <div id="chatEmpty" style="flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;color:var(--muted)">
+        <div style="font-size:36px">💬</div>
+        <div style="font-size:13px;font-weight:500">Выберите контакт слева</div>
+      </div>
+      <div id="chatView" style="display:none;flex-direction:column;height:100%">
+        <div style="padding:12px 18px;border-bottom:1px solid var(--border);background:var(--card-bg);display:flex;align-items:center;gap:10px">
+          <div id="chatViewAvatar" style="width:34px;height:34px;border-radius:50%;background:var(--tg-light);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--tg);flex-shrink:0;font-family:'JetBrains Mono',monospace"></div>
+          <div>
+            <div id="chatViewName" style="font-size:13px;font-weight:600;font-family:'JetBrains Mono',monospace"></div>
+            <div style="font-size:11px;color:var(--muted)">Telegram</div>
+          </div>
+          <button class="btn btn-secondary" style="margin-left:auto;font-size:11px" data-action="reloadChat">↻</button>
+        </div>
+        <div id="chatMessages" style="flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:8px"></div>
+        <div style="padding:10px 14px;border-top:1px solid var(--border);background:var(--card-bg);display:flex;gap:8px">
+          <input type="text" id="chatInput" placeholder="Написать сообщение..."
+            style="flex:1;padding:8px 13px;border:1px solid var(--border);border-radius:20px;font-size:12.5px;font-family:'Manrope',sans-serif;background:var(--bg);color:var(--text);outline:none"
+            data-enter-action="sendChatMessage">
+          <button class="btn btn-primary" style="border-radius:20px;padding:8px 16px;font-size:12.5px" data-action="sendChatMessage">Отправить</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- НАСТРОЙКИ -->
   <div class="page" id="page-settings">
     <div class="page-header"><div class="page-title">Настройки</div></div>
 
@@ -453,7 +457,6 @@
         hh.ru принимает несколько типов сразу; одно значение сужает выдачу.
       </div>
       <div id="hhEmploymentBox" style="display:flex;gap:16px;flex-wrap:wrap"></div>
-      </div>
     </div>
 
     <div class="card">
@@ -490,10 +493,6 @@
         <button class="btn btn-primary" style="font-size:12px;background:var(--hh)" data-action="addStep">+ Добавить</button>
       </div>
     </div>
-  </div>
-
-  <!-- LOGS -->
-  <div class="page" id="page-logs">
     <div class="page-header">
       <div class="page-title">Логи</div>
       <div style="display:flex;gap:8px;align-items:center">

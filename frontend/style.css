@@ -304,3 +304,11 @@ body { font-family: 'Manrope', sans-serif; background: var(--bg); color: var(--t
 .resume-row:last-child { border-bottom: none; }
 .resume-name { flex: 1; word-break: break-all; }
 .resume-row.chosen .resume-name { font-weight: 700; color: var(--accent); }
+
+/* ── Полоса состояния ─────────────────────────────────────────────── */
+.statusbar { display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  padding: 8px 22px; background: var(--sidebar-bg); border-bottom: 1px solid var(--border);
+  font-size: 12px; color: var(--text); flex-shrink: 0; }
+.statusbar-item { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.statusbar-mode { font-weight: 600; }
+.statusbar-preset { margin-left: auto; color: var(--muted); }
