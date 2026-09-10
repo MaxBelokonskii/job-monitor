@@ -263,7 +263,7 @@ const PAGE_LOADERS = {
     renderKeywords();
     document.getElementById('templateText').value = tgState.template;
   },
-  found: async () => {},
+  found: async () => { await loadFound(); },
   sent: async () => { await renderChats(); },
   settings: async () => {
     await loadSettings();
@@ -1141,18 +1141,57 @@ function isHttpUrl(url) {
   return /^https?:\/\//i.test(url || '');
 }
 
-// hh.ru vacancy statuses are written by job_monitor/workers/hh.py:
-// HH_STATUS_APPLIED ("отклик отправлен"), "пропущено", and
-// HH_STATUS_SCENARIO_ERROR ("ошибка сценария") — the last one added when a
-// broken Selenium scenario is made terminal. It used to fall through to the
-// neutral "waiting" badge, so a permanently failed vacancy looked like one
-// still in the queue.
+// Словарь статусов зеркалит job_monitor/statuses.py. Раньше класс бейджа
+// выбирался вхождением подстроки — и «откликнулся сам» не совпадал ни с
+// чем, поэтому ручной отклик рисовался как ожидание. Таблица по точным
+// значениям исключает это по построению, а tests/test_frontend_screens.py
+// сторожит, что она не разошлась с бэкендом.
+const STATUS_CLASS = {
+  'новая': 'status-wait',
+  'отклик отправлен': 'status-sent',
+  'откликнулся сам': 'status-sent',
+  'не подходит': 'status-skip',
+  'пропущено': 'status-skip',
+  'ошибка сценария': 'status-error',
+};
+
 function vacancyStatusClass(status) {
-  const st = status || '';
-  if (st.includes('ошибка')) return 'status-error';
-  if (st.includes('отправлен')) return 'status-sent';
-  if (st.includes('пропущено')) return 'status-skip';
-  return 'status-wait';
+  return STATUS_CLASS[status] || 'status-wait';
+}
+
+// Информационная часть карточки вакансии — без кнопок. Отдельно от них
+// потому, что кнопки нужны только в очереди, а карточка нужна и там, и на
+// «Обзоре»; а ещё потому, что `tests/test_stored_columns_are_read.py`
+// сторожит именно её: каждая колонка hh_applications обязана либо попасть
+// сюда, либо быть названной в NOT_ON_THE_CARD с объяснением.
+function hhVacancyCard(v) {
+  const st = v.status || '';
+  const meta = [v.company, v.city, v.salary || 'з/п не указана'].filter(Boolean).join(' · ');
+  return el('div', { class: 'found-main' }, [
+    el('div', { style: 'display:flex;align-items:flex-start;justify-content:space-between;gap:8px' }, [
+      el('div', {}, [
+        el('div', { class: 'found-title', text: v.title || '' }),
+        el('div', { class: 'found-meta', text: meta }),
+      ]),
+      // `status_source` отвечает на вопрос «это я откликнулся или робот»:
+      // с появлением ручных статусов бейдж без него врал бы наполовину.
+      el('span', {
+        class: `status-badge ${vacancyStatusClass(st)}`,
+        style: 'flex-shrink:0',
+        text: (st || 'ожидание') + (v.status_source === 'человек' ? ' · вручную' : ''),
+      }),
+    ]),
+    // Текст причины, а не только красный бейдж: для «ошибки сценария»
+    // бейдж говорит, ЧТО случилось, а починить сценарий можно, только
+    // зная, КАКОЙ шаг не разобрался. Значение недоверенное — только `text:`.
+    v.error ? el('div', { class: 'vac-error', text: v.error }) : null,
+    // Проверки схемы здесь нет намеренно: el() валидирует href сам, по
+    // построению, поэтому плохая схема в v.url просто не прикрепится.
+    v.url ? el('a', {
+      href: v.url, target: '_blank', rel: 'noopener noreferrer',
+      class: 'found-link', text: 'Открыть на hh.ru →',
+    }) : null,
+  ]);
 }
 
 async function loadHHVacancies() {
@@ -1166,41 +1205,121 @@ async function loadHHVacancies() {
     }));
     return;
   }
-  fill(vacEl, vacs.slice(0, 4).map(v => {
-    const st = v.status || '';
-    const cls = vacancyStatusClass(st);
-    // Всё, что бэкенд знает о вакансии и что помещается в карточку. `city`
-    // писался в hh_applications с самого начала и не показывался нигде —
-    // одна из «мёртвых колонок» финального ревью.
-    const meta = [v.company, v.city, v.salary || 'з/п не указана'].filter(Boolean).join(' · ');
-    // No isHttpUrl() check here on purpose: el() validates href/src itself,
-    // by construction, so a bad scheme in v.url just never gets attached.
-    return el('div', { class: 'vac-card' }, [
-      el('div', { style: 'display:flex;align-items:flex-start;justify-content:space-between;gap:8px' }, [
-        el('div', {}, [
-          el('div', { style: 'font-size:13px;font-weight:600', text: v.title || '' }),
-          el('div', { style: 'font-size:11px;color:var(--muted);margin-top:2px', text: meta }),
-        ]),
-        // `status_source` отвечает на вопрос «это я откликнулся или робот»:
-        // с появлением ручных статусов бейдж без него врал бы наполовину.
-        el('span', {
-          class: `status-badge ${cls}`,
-          style: 'flex-shrink:0',
-          text: (st || 'ожидание') + (v.status_source === 'человек' ? ' · вручную' : ''),
-        }),
-      ]),
-      // Текст причины, а не только красный бейдж: для HH_STATUS_SCENARIO_ERROR
-      // («ошибка сценария») бейдж говорит, ЧТО случилось, а починить сценарий
-      // можно, только зная, КАКОЙ шаг не разобрался. Значение недоверенное
-      // (в него попадает содержимое hh_selenium_steps), поэтому — `text:`,
-      // то есть textContent, как и всё остальное в этом файле.
-      v.error ? el('div', { class: 'vac-error', text: v.error }) : null,
-      v.url ? el('div', { style: 'margin-top:8px' }, [
-        el('a', { href: v.url, target: '_blank', rel: 'noopener noreferrer', style: 'font-size:11px;color:var(--hh);text-decoration:none', text: 'Открыть на HH →' }),
-      ]) : null,
-    ]);
-  }));
+  fill(vacEl, vacs.slice(0, 4).map(v => el('div', { class: 'vac-card' }, [hhVacancyCard(v)])));
 }
+
+// ── Очередь найденного ────────────────────────────────────────────────
+const foundState = { source: 'tg', filter: 'new', rows: [] };
+
+function setSegActive(containerId, value) {
+  const box = document.getElementById(containerId);
+  if (!box) return;
+  for (const btn of box.querySelectorAll('.seg-btn')) {
+    btn.classList.toggle('active', btn.dataset.arg === value);
+  }
+}
+
+async function foundSource(source) {
+  foundState.source = source;
+  setSegActive('foundSource', source);
+  await loadFound();
+}
+
+async function foundFilter(filter) {
+  foundState.filter = filter;
+  setSegActive('foundFilter', filter);
+  await loadFound();
+}
+
+async function loadFound() {
+  const rows = await apiGet(`/found/${foundState.source}?status=${foundState.filter}`);
+  foundState.rows = Array.isArray(rows) ? rows : [];
+  renderFound();
+}
+
+function foundKey(row) {
+  return foundState.source === 'tg' ? String(row.id) : row.vacancy_id;
+}
+
+function foundButtons(row) {
+  const key = foundKey(row);
+  if (row.status === 'новая') {
+    return [
+      el('button', {
+        class: 'btn btn-primary', style: 'font-size:11.5px',
+        text: 'Откликнулся', 'data-action': 'foundApply', 'data-arg': key,
+      }),
+      el('button', {
+        class: 'btn btn-secondary', style: 'font-size:11.5px',
+        text: 'Не подходит', 'data-action': 'foundDismiss', 'data-arg': key,
+      }),
+    ];
+  }
+  // Вернуть в очередь можно только оттуда, откуда это безопасно: «не
+  // подходит» (передумал) и «пропущено» (клика не было). Бэкенд отвергает
+  // остальное с 400 — здесь мы просто не предлагаем нажать то, что будет
+  // отвергнуто: обещание, которого интерфейс не может сдержать, хуже
+  // отсутствующей кнопки.
+  if (row.status === 'не подходит' || row.status === 'пропущено') {
+    return [el('button', {
+      class: 'btn btn-secondary', style: 'font-size:11.5px',
+      text: 'Вернуть в очередь', 'data-action': 'foundReopen', 'data-arg': key,
+    })];
+  }
+  return [];
+}
+
+function tgFoundCard(row) {
+  const meta = ['@' + row.channel, row.matched_keyword, (row.usernames || []).join(' ')]
+    .filter(Boolean).join(' · ');
+  return el('div', { class: 'found-main' }, [
+    el('div', { style: 'display:flex;align-items:flex-start;justify-content:space-between;gap:8px' }, [
+      el('div', {}, [
+        el('div', { class: 'found-title', text: row.preview || '(без текста)' }),
+        el('div', { class: 'found-meta', text: meta }),
+      ]),
+      el('span', {
+        class: `status-badge ${vacancyStatusClass(row.status)}`,
+        style: 'flex-shrink:0', text: row.status || '',
+      }),
+    ]),
+    // Ссылку собрал бэкенд (api/found_routes.py). el() всё равно проверит
+    // схему — это его работа, а не работа места вызова.
+    row.link ? el('a', {
+      href: row.link, target: '_blank', rel: 'noopener noreferrer',
+      class: 'found-link', text: 'Открыть в Telegram →',
+    }) : null,
+  ]);
+}
+
+function renderFound() {
+  const box = document.getElementById('foundList');
+  if (!box) return;
+  if (!foundState.rows.length) {
+    fill(box, el('div', { class: 'found-empty', text: 'Здесь пока пусто' }));
+    return;
+  }
+  const card = foundState.source === 'tg' ? tgFoundCard : hhVacancyCard;
+  fill(box, foundState.rows.map(row => el('div', { class: 'found-row' }, [
+    card(row),
+    el('div', { class: 'found-actions' }, foundButtons(row)),
+  ])));
+}
+
+async function patchFound(key, status) {
+  const reply = await apiPatch(`/found/${foundState.source}/${encodeURIComponent(key)}`, { status });
+  if (!reply || reply.status !== 'saved') {
+    // Отвергнутое сохранение нигде не показывается как успешное — то же
+    // правило, что у configPatchOk во всех остальных экранах.
+    showToast(configErrorDetail(reply));
+    return;
+  }
+  await loadFound();
+}
+
+const foundApply = key => patchFound(key, 'откликнулся сам');
+const foundDismiss = key => patchFound(key, 'не подходит');
+const foundReopen = key => patchFound(key, 'новая');
 
 // ── Logs ──────────────────────────────────────────────────────────────
 let currentLogType = 'tg';
@@ -1525,6 +1644,11 @@ const ACTIONS = {
   showLog,
   clearConsole,
   refreshLogs,
+  foundSource,
+  foundFilter,
+  foundApply,
+  foundDismiss,
+  foundReopen,
 };
 
 function runAction(name, target, event) {

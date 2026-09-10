@@ -253,8 +253,21 @@
 
   <!-- НАЙДЕНО -->
   <div class="page" id="page-found">
-    <div class="page-header"><div class="page-title">Найдено</div></div>
-    <div id="foundBody"></div>
+    <div class="page-header">
+      <div class="page-title">Найдено</div>
+      <div class="seg" id="foundSource">
+        <button class="seg-btn active" data-action="foundSource" data-arg="tg">Telegram</button>
+        <button class="seg-btn" data-action="foundSource" data-arg="hh">hh.ru</button>
+      </div>
+    </div>
+    <div class="seg seg-quiet" id="foundFilter">
+      <button class="seg-btn" data-action="foundFilter" data-arg="all">Все</button>
+      <button class="seg-btn active" data-action="foundFilter" data-arg="new">Новые</button>
+      <button class="seg-btn" data-action="foundFilter" data-arg="decided">Решённые</button>
+    </div>
+    <div class="card" style="padding:0;overflow:hidden">
+      <div id="foundList"></div>
+    </div>
   </div>
 
   <!-- ОТПРАВЛЕНО -->

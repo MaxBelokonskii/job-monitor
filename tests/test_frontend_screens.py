@@ -228,3 +228,156 @@ def test_the_stray_markup_check_is_not_vacuous() -> None:
     # Полоса состояния существует и НЕ совпадает ни с одним экраном.
     bar = _container_span(main.splitlines(), 'id="statusBar"')
     assert all(bar != (start, end) for _pid, start, end in spans)
+
+
+# ── Экран «Найдено» ───────────────────────────────────────────────────
+
+
+def test_the_found_screen_has_both_sources_and_the_status_filter() -> None:
+    index = _index()
+    found = index[index.index('id="page-found"'):index.index('id="page-sent"')]
+    for arg in ('data-arg="tg"', 'data-arg="hh"'):
+        assert arg in found, f"на экране «Найдено» нет переключателя {arg}"
+    for arg in ('data-arg="all"', 'data-arg="new"', 'data-arg="decided"'):
+        assert arg in found, f"на экране «Найдено» нет фильтра {arg}"
+
+
+def test_the_found_screen_reads_the_new_endpoints() -> None:
+    source = _extract_function_source("loadFound")
+    assert "/found/" in source
+    assert "/hh/vacancies" not in _app()
+
+
+def test_the_row_never_builds_its_own_telegram_link() -> None:
+    """Ссылку строит бэкенд: фронтенду незачем знать формат чужих URL, а
+    гвард схемы в `el()` остаётся единственной точкой проверки."""
+    assert "t.me/" not in _app(), (
+        "фронтенд собирает ссылку на Telegram сам — это должен делать "
+        "api/found_routes.py, там же где и все остальные ссылки"
+    )
+
+
+@skip_without_node
+def test_the_status_badge_class_is_a_table_not_a_substring_game() -> None:
+    """Раньше класс бейджа выбирался по вхождению подстроки, и «откликнулся
+    сам» не совпадал ни с чем — ручной отклик выглядел как ожидание.
+    Таблица по точным значениям из job_monitor/statuses.py исключает это
+    по построению."""
+    table = re.search(r"const STATUS_CLASS = \{.*?\n\};", _app(), re.DOTALL)
+    assert table, "STATUS_CLASS не найдена в app.js"
+    source = _extract_function_source("vacancyStatusClass")
+    cases = {
+        "новая": "status-wait",
+        "отклик отправлен": "status-sent",
+        "откликнулся сам": "status-sent",
+        "не подходит": "status-skip",
+        "пропущено": "status-skip",
+        "ошибка сценария": "status-error",
+        "": "status-wait",
+    }
+    checks = "\n".join(
+        f"if (vacancyStatusClass({status!r}) !== {css!r}) "
+        f"{{ console.error({status!r}); process.exitCode = 1; }}"
+        for status, css in cases.items()
+    ).replace("'", '"')
+    script = f"{table.group(0)}\n{source}\n{checks}"
+    result = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=10
+    )
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+
+def test_the_status_vocabulary_matches_the_backend() -> None:
+    """Два словаря статусов, которые разошлись, — это бейдж «ожидание» на
+    отправленном отклике. Проверяем, что фронтенд знает ровно те строки,
+    которые пишет бэкенд."""
+    from job_monitor import statuses
+
+    table = re.search(r"const STATUS_CLASS = \{(.*?)\n\};", _app(), re.DOTALL)
+    assert table
+    known = set(re.findall(r"['\"]([^'\"]+)['\"]\s*:", table.group(1)))
+    assert known == set(statuses.ALL), (
+        f"фронтенд знает {sorted(known)}, бэкенд пишет {sorted(statuses.ALL)}"
+    )
+
+
+def test_every_found_action_has_a_handler() -> None:
+    """Та же связь, что держит `tests/test_frontend_events.py`, но для
+    кнопок, которые создаёт сам JS: строки очереди не существуют в
+    index.html и статическим сканом разметки не видны."""
+    actions = set(re.findall(r"""['"]data-action['"]\s*:\s*['"]([^'"]+)['"]""", _app()))
+    for name in ("foundApply", "foundDismiss", "foundReopen"):
+        assert name in actions, f"кнопка {name} нигде не создаётся"
+
+
+def test_the_found_row_never_offers_a_button_the_backend_would_refuse() -> None:
+    """Кнопка «Вернуть в очередь» на отправленном отклике вела бы прямо в
+    400: бэкенд отвергает такой переход, потому что «новая» означает
+    «обработать», то есть второй отклик тому же работодателю. Предлагать
+    нажать то, что будет отвергнуто, — это обещание, которого интерфейс не
+    может сдержать."""
+    from job_monitor import statuses
+
+    source = _extract_function_source("foundButtons")
+    offered = set(re.findall(r"row\.status === '([^']+)'", source))
+    assert offered <= statuses.REOPENABLE | {statuses.NEW}, (
+        f"строка предлагает действие в статусе {sorted(offered - statuses.REOPENABLE - {statuses.NEW})}, "
+        "который бэкенд не примет"
+    )
+    assert statuses.REOPENABLE <= offered, (
+        "из «не подходит» и «пропущено» вернуть в очередь МОЖНО — кнопка "
+        "должна предлагаться"
+    )
+
+
+@skip_without_node
+def test_a_rejected_status_change_is_not_reported_as_success() -> None:
+    """Спецификация, раздел 10: отвергнутое сохранение нигде не
+    показывается как успешное.
+
+    Бэкенд отвергает часть переходов с 400 — например, возврат в очередь
+    уже отправленного отклика. Если очередь просто перерисуется, человек
+    увидит прежний статус и решит, что промахнулся мимо кнопки. Здесь
+    исполняется настоящая `patchFound` с подменёнными `apiPatch`,
+    `showToast` и `loadFound`.
+    """
+    script = "\n".join((
+        "const __toasts = [];",
+        "let __reloaded = 0;",
+        "function showToast(message) { __toasts.push(message); }",
+        "async function loadFound() { __reloaded += 1; }",
+        "const foundState = { source: 'hh' };",
+        _extract_function_source("configErrorDetail"),
+        "let __reply = null;",
+        "async function apiPatch() { return __reply; }",
+        _extract_function_source("patchFound"),
+        """
+        (async () => {
+          __reply = { detail: 'отклик уже отправлен — вернуть запись в очередь нельзя' };
+          await patchFound('1', 'новая');
+          if (__reloaded !== 0) {
+            console.error('FAIL: отвергнутая правка перерисовала список как успешную');
+            process.exitCode = 1;
+          }
+          if (!__toasts.some(t => t.includes('отклик уже отправлен'))) {
+            console.error('FAIL: причина отказа не показана пользователю', __toasts);
+            process.exitCode = 1;
+          }
+
+          __reply = { status: 'saved' };
+          await patchFound('1', 'не подходит');
+          if (__reloaded !== 1) {
+            console.error('FAIL: успешная правка не обновила список');
+            process.exitCode = 1;
+          }
+          if (__toasts.length !== 1) {
+            console.error('FAIL: успех показан как ошибка', __toasts);
+            process.exitCode = 1;
+          }
+        })();
+        """,
+    ))
+    result = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=10
+    )
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"

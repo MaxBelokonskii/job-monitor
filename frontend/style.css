@@ -312,3 +312,22 @@ body { font-family: 'Manrope', sans-serif; background: var(--bg); color: var(--t
 .statusbar-item { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 .statusbar-mode { font-weight: 600; }
 .statusbar-preset { margin-left: auto; color: var(--muted); }
+
+/* ── Переключатели и очередь найденного ───────────────────────────── */
+.seg { display: inline-flex; gap: 2px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 2px; }
+.seg-btn { padding: 5px 12px; border: none; background: none; border-radius: 4px;
+  font-size: 12.5px; font-weight: 600; font-family: 'Manrope', sans-serif;
+  color: var(--muted); cursor: pointer; }
+.seg-btn.active { background: var(--card-bg); color: var(--text); box-shadow: var(--shadow); }
+.seg-quiet { align-self: flex-start; }
+
+.found-row { display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px;
+  border-bottom: 1px solid var(--border); }
+.found-row:last-child { border-bottom: none; }
+.found-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.found-title { font-size: 13px; font-weight: 600; }
+.found-meta { font-size: 11px; color: var(--muted); }
+.found-link { font-size: 11px; color: var(--accent); text-decoration: none; }
+.found-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
+.found-empty { padding: 24px; text-align: center; color: var(--muted); font-size: 13px; }

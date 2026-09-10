@@ -249,7 +249,15 @@ def test_vacancy_status_class_marks_scenario_errors_as_errors() -> None:
         "process.exitCode = 1; }"
         for status, cls in cases
     )
-    result = _run_node(f"{_extract_function_source('vacancyStatusClass')}\n{checks}")
+    # Функция читает модульную таблицу STATUS_CLASS (она зеркалит
+    # job_monitor/statuses.py), поэтому под node нужно подать и её: раньше
+    # соответствие статус → класс жило внутри самой функции цепочкой
+    # `includes`, и «откликнулся сам» не совпадал ни с чем.
+    table = re.search(r"const STATUS_CLASS = \{.*?\n\};", _app_source(), re.DOTALL)
+    assert table, "STATUS_CLASS не найдена в app.js"
+    result = _run_node(
+        f"{table.group(0)}\n{_extract_function_source('vacancyStatusClass')}\n{checks}"
+    )
     assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
 
 
