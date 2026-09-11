@@ -754,6 +754,7 @@ def test_the_overview_does_not_discard_unsaved_edits_on_every_visit() -> None:
         "function renderHHKeywords() {} function renderChoiceBox() {}",
         "async function loadDictionaries() { return null; }",
         "async function loadResumes() {}",
+        "function updateFieldCounts() {}",
         _extract_function_source("loadActiveCriteria"),
         """
         (async () => {
@@ -829,6 +830,121 @@ if (chosen.resume_id !== null) {
   process.exitCode = 1;
 }
 """
+    result = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=10
+    )
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+
+# ── Аккордеоны, ровный ряд пресетов, заметный переключатель ───────────
+
+
+def test_long_lists_are_collapsible() -> None:
+    """Семь каналов, восемь профессий, восемь ключевых слов и два набора
+    стоп-слов разворачивались во весь экран сразу — «Обзор» получался в
+    несколько экранов прокрутки.
+
+    `<details>`, а не самодельный аккордеон: раскрытие, клавиатура и
+    доступность достаются даром, обработчик не нужен вовсе — что важно при
+    `script-src 'self'` без `'unsafe-inline'`.
+    """
+    overview = _overview()
+    assert overview.count('<details class="field-group">') >= 5, (
+        "длинные списки критериев не сворачиваются"
+    )
+    for поле in ("channelEditList", "hhKwList", "kwList", "exList", "hhExList"):
+        assert f'data-count-for="{поле}"' in overview, (
+            f"у раздела {поле} нет счётчика — свёрнутым он прячет и сам факт, "
+            "что в нём что-то есть"
+        )
+
+
+def test_the_accordions_are_closed_by_default() -> None:
+    """Смысл правки — чтобы экран не выглядел громоздким при открытии.
+    Раздел, открытый по умолчанию, эту задачу не решает."""
+    overview = _overview()
+    assert "<details class=\"field-group\" open>" not in overview
+    assert "<details open" not in overview
+
+
+def test_a_collapsed_section_still_holds_its_values() -> None:
+    """Свёрнутый `<details>` прячет содержимое, но не удаляет его из
+    документа: поля остаются доступны `collectCriteria`. Проверяется, что
+    поля именно ВНУТРИ аккордеонов, а не вынесены наружу ради сохранения —
+    иначе смысл сворачивания теряется."""
+    overview = _overview()
+    for поле in ("newChannel", "newHHKw", "newKw", "templateText", "hhCoverLetter"):
+        начало = overview.index(f'id="{поле}"')
+        открыт = overview.rfind("<details", 0, начало)
+        закрыт = overview.rfind("</details>", 0, начало)
+        assert открыт > закрыт, f"поле {поле} осталось вне аккордеона"
+
+
+def test_the_source_switcher_leads_the_metrics() -> None:
+    """Переключатель стоял справа в шапке страницы — маленький и
+    незаметный, и было неочевидно, чем он управляет. Теперь он вплотную
+    над плитками, которые переключает."""
+    overview = _overview()
+    переключатель = overview.index('id="metricsSource"')
+    плитки = overview.index('class="metrics-grid"')
+    заголовок = overview.index('class="page-header"')
+    шапка_конец = overview.index("</div>", overview.index('page-title">Обзор'))
+
+    assert переключатель > шапка_конец, "переключатель всё ещё в шапке страницы"
+    assert переключатель < плитки, "переключатель оторван от плиток, которыми управляет"
+
+
+@skip_without_node
+def test_every_preset_card_has_the_same_shape() -> None:
+    """Ряд пресетов был рваным: у активного нет кнопки «удалить», поэтому
+    его колонка короче соседних, и при выравнивании по центру чипы
+    разъезжались по вертикали.
+
+    Место под крестик занято всегда — у активного он просто невидим.
+    """
+    source = _extract_function_source("renderPresetBar")
+    script = "\n".join((
+        "const узлы = [];",
+        """
+        global.document = {
+          getElementById: () => ({ className: '', querySelectorAll: () => [] }),
+          createElement: (tag) => {
+            const node = { tag, attributes: {}, children: [], style: {},
+              className: '', append(c) { this.children.push(c); },
+              setAttribute(k, v) { this.attributes[k] = v; },
+              addEventListener() {} };
+            узлы.push(node);
+            return node;
+          },
+        };
+        """,
+        "const presetState = { list: [",
+        "  { id: 1, name: 'Мой поиск', is_active: true, channels_count: 7, professions_count: 8 },",
+        "  { id: 2, name: 'Базовый', is_active: false, channels_count: 0, professions_count: 0 },",
+        "] };",
+        "function fill(t, c) { t.children = [].concat(c); }",
+        "function updateStatusBar() {}",
+        _extract_function_source("isHttpUrl"),
+        _extract_function_source("el"),
+        source,
+        """
+        renderPresetBar();
+        const карточки = узлы.filter(n => (n.className || '').includes('preset-card'));
+        if (карточки.length !== 2) {
+          console.error('карточек', карточки.length); process.exitCode = 1;
+        }
+        const крестики = узлы.filter(n => (n.className || '').includes('preset-drop'));
+        if (крестики.length !== 2) {
+          console.error('место под крестик занято не у всех:', крестики.length);
+          process.exitCode = 1;
+        }
+        const скрытых = крестики.filter(n => n.className.includes('hidden'));
+        if (скрытых.length !== 1) {
+          console.error('крестик скрыт не ровно у активного:', скрытых.length);
+          process.exitCode = 1;
+        }
+        """,
+    ))
     result = subprocess.run(
         ["node", "-e", script], capture_output=True, text=True, timeout=10
     )

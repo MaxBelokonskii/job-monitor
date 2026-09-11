@@ -349,3 +349,60 @@ body { font-family: 'Manrope', sans-serif; background: var(--bg); color: var(--t
   border: 1px solid var(--border); border-radius: var(--radius); background: var(--card-bg); }
 
 .page-hint { font-size: 12px; color: var(--muted); margin: -6px 0 4px; line-height: 1.5; }
+
+/* ── Аккордеоны разделов критериев ────────────────────────────────── */
+/* Нативные <details>/<summary>: раскрытие, клавиатура и доступность
+   достаются даром, а обработчик не нужен вовсе — что важно при
+   `script-src 'self'` без 'unsafe-inline'. */
+.field-group { border-top: 1px solid var(--border); }
+.field-group:first-of-type { border-top: none; }
+.field-group > *:not(summary) { margin-top: 8px; }
+.field-group[open] { padding-bottom: 12px; }
+
+.field-summary { display: flex; align-items: center; gap: 8px; cursor: pointer;
+  padding: 11px 0; font-size: 12px; font-weight: 600; color: var(--text);
+  list-style: none; user-select: none; }
+.field-summary::-webkit-details-marker { display: none; }
+/* Стрелка своя: маркер по умолчанию выглядит по-разному в разных
+   браузерах и не поворачивается плавно. */
+.field-summary::before { content: '▸'; color: var(--muted); font-size: 10px;
+  transition: transform .15s; flex-shrink: 0; }
+.field-group[open] > .field-summary::before { transform: rotate(90deg); }
+.field-summary:hover { color: var(--accent); }
+
+/* Счётчик — чтобы закрытый раздел всё равно говорил, сколько в нём. Без
+   него свёрнутый список прячет не только длину, но и сам факт, что там
+   что-то есть. */
+.field-count { margin-left: auto; font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; font-weight: 600; color: var(--muted);
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 99px; padding: 1px 8px; min-width: 22px; text-align: center; }
+.field-count:empty { display: none; }
+
+/* ── Переключатель источника метрик ───────────────────────────────── */
+.seg-lead { align-self: flex-start; }
+.seg-lead .seg-btn { padding: 6px 16px; font-size: 13px; }
+
+/* ── Пресеты: ровный ряд карточек ─────────────────────────────────── */
+/* Прежде каждый пресет был колонкой из чипа, подписи и — только у
+   неактивного — кнопки «удалить». Разное число детей давало разную
+   высоту, и при align-items:center чипы разъезжались по вертикали. */
+.preset-list { display: flex; gap: 10px; flex-wrap: wrap; align-items: stretch; }
+.preset-card { display: flex; flex-direction: column; gap: 6px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 8px 10px; background: var(--bg); min-width: 150px; }
+.preset-card.active { border-color: var(--accent); background: var(--accent-light); }
+.preset-head { display: flex; align-items: center; gap: 8px; }
+.preset-name { font-size: 13px; font-weight: 600; flex: 1; text-align: left;
+  background: none; border: none; padding: 0; cursor: pointer;
+  font-family: 'Manrope', sans-serif; color: var(--text); }
+.preset-card.active .preset-name { color: var(--accent); cursor: default; }
+.preset-name:hover:not(:disabled) { color: var(--accent); }
+/* Место под крестик занято всегда — и когда его нет. Иначе карточка
+   активного пресета оказывается уже соседних, и ряд снова рваный. */
+.preset-drop { width: 20px; height: 20px; flex-shrink: 0; display: flex;
+  align-items: center; justify-content: center; border: none; background: none;
+  color: var(--muted); cursor: pointer; border-radius: 4px; font-size: 15px;
+  line-height: 1; padding: 0; }
+.preset-drop:hover { background: var(--red-light); color: var(--red); }
+.preset-drop.hidden { visibility: hidden; cursor: default; }
