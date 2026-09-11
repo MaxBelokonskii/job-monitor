@@ -40,6 +40,7 @@ import asyncio
 import json
 import logging
 import random
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -331,8 +332,51 @@ def build_search_url(profession: str, criteria: SearchCriteria) -> str:
     return "https://hh.ru/search/vacancy?" + "&".join(params)
 
 
+#: Строка зарплаты в карточке: число с пробелами-разделителями и валюта.
+#: Валюта обязательна — иначе за деньги сойдёт «Сейчас смотрят 6 человек»,
+#: «4.7 • 10829 отзывов» или номер вакансии, а такие строки в карточке есть
+#: всегда. `\u00a0` — неразрывный пробел, которым hh.ru разделяет разряды.
+SALARY_LINE = re.compile(
+    r"[^\n]*?\d[\d\s\u00a0]*\s*(?:₽|руб|\$|€|₸|₴|BYN)[^\n]*"
+)
+
+
+def _salary_of(item: Any) -> str:
+    """Зарплата из карточки. «Не указана», если её там нет.
+
+    Разбирается по тексту, а не по `data-qa`: у узла зарплаты не осталось
+    ни одного крючка — проверено в браузере на живом hh.ru. Раньше он
+    назывался `vacancy-serp__vacancy-compensation`, теперь это голый
+    `span` внутри безымянных `div`.
+
+    Способ хрупкий, и это осознанный размен. Зарплата не влияет на
+    поведение — фильтр по ней уходит в адрес поиска, — но по карточке
+    человек решает, откликаться ли руками. Писать «Не указана» там, где
+    стоит «от 150 000 ₽», значит врать в том единственном месте, ради
+    которого список и существует. Промах разбора хуже не сделает: получится
+    та же «Не указана».
+    """
+    try:
+        found = SALARY_LINE.search(item.text or "")
+    except Exception:  # noqa: BLE001 — устаревший элемент не повод терять вакансию
+        return "Не указана"
+    return found.group(0).strip() if found else "Не указана"
+
+
 def get_vacancies_from_page(driver: Any, criteria: SearchCriteria) -> list[dict]:
     """Собираем вакансии со страницы поиска.
+
+    **Тег в XPath не указывается — только `data-qa`.** Селекторы вида
+    `//div[@data-qa='vacancy-serp__results']` однажды уже перестали
+    совпадать: hh.ru перешёл на семантическую разметку, контейнер стал
+    `section`, карточка — `article`, адрес — `span`. Воркер при этом
+    отчитывался «работает» и не находил ничего, а в журнале была одна
+    строка «Результаты поиска не загрузились» — при том, что на странице
+    лежало полсотни вакансий.
+
+    `data-qa` — собственный крючок hh.ru для их же тестов, он переживает
+    редизайн; тег относится к оформлению и уже поменялся под нами. Указывать
+    его значит добровольно связывать себя с тем, что меняется чаще всего.
 
     Ключ переименован с `id` на `vacancy_id` (перенос из hh_monitor.py):
     `HhRepo.is_decided()`/`record_found()` ждут `vacancy_id`, иначе получат
@@ -343,18 +387,18 @@ def get_vacancies_from_page(driver: Any, criteria: SearchCriteria) -> list[dict]
     wait = WebDriverWait(driver, 10)
     try:
         wait.until(EC.presence_of_element_located(
-            (By.XPATH, "//div[@data-qa='vacancy-serp__results']")
+            (By.XPATH, "//*[@data-qa='vacancy-serp__results']")
         ))
     except TimeoutException:
         log.warning("[HH] Результаты поиска не загрузились")
         return []
 
-    items = driver.find_elements(By.XPATH, "//div[@data-qa='vacancy-serp__vacancy']")
+    items = driver.find_elements(By.XPATH, "//*[@data-qa='vacancy-serp__vacancy']")
     exclude = [w.lower() for w in criteria.hh_exclude]
 
     for item in items:
         try:
-            title_el = item.find_element(By.XPATH, ".//a[@data-qa='serp-item__title']")
+            title_el = item.find_element(By.XPATH, ".//*[@data-qa='serp-item__title']")
             title = title_el.text.strip()
             url = title_el.get_attribute("href").split("?")[0]
             vacancy_id = url.split("/")[-1]
@@ -365,21 +409,16 @@ def get_vacancies_from_page(driver: Any, criteria: SearchCriteria) -> list[dict]
 
             try:
                 company = item.find_element(
-                    By.XPATH, ".//a[@data-qa='vacancy-serp__vacancy-employer']"
+                    By.XPATH, ".//*[@data-qa='vacancy-serp__vacancy-employer']"
                 ).text.strip()
             except NoSuchElementException:
                 company = "Не указана"
 
-            try:
-                salary = item.find_element(
-                    By.XPATH, ".//span[@data-qa='vacancy-serp__vacancy-compensation']"
-                ).text.strip()
-            except NoSuchElementException:
-                salary = "Не указана"
+            salary = _salary_of(item)
 
             try:
                 city = item.find_element(
-                    By.XPATH, ".//div[@data-qa='vacancy-serp__vacancy-address']"
+                    By.XPATH, ".//*[@data-qa='vacancy-serp__vacancy-address']"
                 ).text.strip()
             except NoSuchElementException:
                 city = ""
@@ -455,7 +494,7 @@ def apply_to_vacancy(
         if resume_id:
             try:
                 resume_items = driver.find_elements(
-                    By.XPATH, "//div[@data-qa='resume-negotiations-list__resume']"
+                    By.XPATH, "//*[@data-qa='resume-negotiations-list__resume']"
                 )
                 for item in resume_items:
                     if resume_id in item.get_attribute("innerHTML"):
