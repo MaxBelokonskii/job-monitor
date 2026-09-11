@@ -49,11 +49,6 @@
   <div class="page active" id="page-overview">
     <div class="page-header">
       <div class="page-title">Обзор</div>
-      <div class="seg" id="metricsSource">
-        <button class="seg-btn active" data-action="metricsSource" data-arg="all">Все</button>
-        <button class="seg-btn" data-action="metricsSource" data-arg="tg">Telegram</button>
-        <button class="seg-btn" data-action="metricsSource" data-arg="hh">hh.ru</button>
-      </div>
     </div>
 
     <div id="dataDirWarning" class="restart-banner" style="display:none"></div>
@@ -67,6 +62,14 @@
     </div>
     <div class="worker-alert" id="tgWorkerAlert" style="display:none"></div>
     <div class="worker-alert" id="hhWorkerAlert" style="display:none"></div>
+
+    <!-- Переключатель стоит вплотную к плиткам, а не в шапке страницы:
+         справа вверху он терялся, и было неочевидно, чем он управляет. -->
+    <div class="seg seg-lead" id="metricsSource">
+      <button class="seg-btn active" data-action="metricsSource" data-arg="all">Все</button>
+      <button class="seg-btn" data-action="metricsSource" data-arg="tg">Telegram</button>
+      <button class="seg-btn" data-action="metricsSource" data-arg="hh">hh.ru</button>
+    </div>
 
     <div class="metrics-grid">
       <div class="metric">
@@ -110,18 +113,22 @@
     <div class="three-col">
       <div class="card" id="criteriaWhere">
         <div class="card-title">Где искать</div>
-        <div class="field-label">Каналы Telegram</div>
-        <div id="channelEditList"></div>
-        <div class="add-row">
-          <input type="text" id="newChannel" placeholder="@username или username">
-          <button class="btn btn-secondary" data-action="addChannel">+</button>
-        </div>
-        <div class="field-label">Профессии на hh.ru</div>
-        <div id="hhKwList"></div>
-        <div class="add-row">
-          <input type="text" id="newHHKw" placeholder="Название профессии">
-          <button class="btn btn-secondary" data-action="addHHKw">+</button>
-        </div>
+        <details class="field-group">
+          <summary class="field-summary">Каналы Telegram<span class="field-count" data-count-for="channelEditList"></span></summary>
+          <div id="channelEditList"></div>
+          <div class="add-row">
+            <input type="text" id="newChannel" placeholder="@username или username">
+            <button class="btn btn-secondary" data-action="addChannel">+</button>
+          </div>
+        </details>
+        <details class="field-group">
+          <summary class="field-summary">Профессии на hh.ru<span class="field-count" data-count-for="hhKwList"></span></summary>
+          <div id="hhKwList"></div>
+          <div class="add-row">
+            <input type="text" id="newHHKw" placeholder="Название профессии">
+            <button class="btn btn-secondary" data-action="addHHKw">+</button>
+          </div>
+        </details>
         <div class="field-hint">
           Регион поиска — константа приложения, а не настройка: поиск
           ведётся только по нему.
@@ -130,24 +137,30 @@
 
       <div class="card" id="criteriaWhat">
         <div class="card-title">Что искать</div>
-        <div class="field-label">Ключевые слова Telegram</div>
-        <div id="kwList"></div>
-        <div class="add-row">
-          <input type="text" id="newKw" placeholder="Ключевое слово">
-          <button class="btn btn-secondary" data-action="addKw">+</button>
-        </div>
-        <div class="field-label">Стоп-слова Telegram</div>
-        <div id="exList"></div>
-        <div class="add-row">
-          <input type="text" id="newEx" placeholder="Слово для исключения">
-          <button class="btn btn-secondary" data-action="addEx">+</button>
-        </div>
-        <div class="field-label">Стоп-слова hh.ru</div>
-        <div id="hhExList"></div>
-        <div class="add-row">
-          <input type="text" id="newHHEx" placeholder="senior, lead...">
-          <button class="btn btn-secondary" data-action="addHHEx">+</button>
-        </div>
+        <details class="field-group">
+          <summary class="field-summary">Ключевые слова Telegram<span class="field-count" data-count-for="kwList"></span></summary>
+          <div id="kwList"></div>
+          <div class="add-row">
+            <input type="text" id="newKw" placeholder="Ключевое слово">
+            <button class="btn btn-secondary" data-action="addKw">+</button>
+          </div>
+        </details>
+        <details class="field-group">
+          <summary class="field-summary">Стоп-слова Telegram<span class="field-count" data-count-for="exList"></span></summary>
+          <div id="exList"></div>
+          <div class="add-row">
+            <input type="text" id="newEx" placeholder="Слово для исключения">
+            <button class="btn btn-secondary" data-action="addEx">+</button>
+          </div>
+        </details>
+        <details class="field-group">
+          <summary class="field-summary">Стоп-слова hh.ru<span class="field-count" data-count-for="hhExList"></span></summary>
+          <div id="hhExList"></div>
+          <div class="add-row">
+            <input type="text" id="newHHEx" placeholder="senior, lead...">
+            <button class="btn btn-secondary" data-action="addHHEx">+</button>
+          </div>
+        </details>
         <div class="field-label">Опыт</div>
         <select id="hhExperience" class="field-select"></select>
         <div class="field-label">Зарплата от <span class="field-hint-inline">0 — не фильтровать</span></div>
@@ -167,13 +180,17 @@
 
       <div class="card" id="criteriaHow">
         <div class="card-title">Чем отвечать</div>
-        <div class="field-label">Текст отклика в Telegram</div>
-        <div class="field-hint" id="templateHint"></div>
-        <textarea class="template-area" id="templateText" rows="7"></textarea>
-        <div class="field-label">Сопроводительное письмо на hh.ru</div>
-        <div class="field-hint">Первые 500 символов уходят как сопроводительное</div>
-        <textarea class="template-area" id="hhCoverLetter" rows="7"
-                  placeholder="Здравствуйте! Откликаюсь на вашу вакансию..."></textarea>
+        <details class="field-group">
+          <summary class="field-summary">Текст отклика в Telegram<span class="field-count" data-count-for="templateText"></span></summary>
+          <div class="field-hint" id="templateHint"></div>
+          <textarea class="template-area" id="templateText" rows="7"></textarea>
+        </details>
+        <details class="field-group">
+          <summary class="field-summary">Сопроводительное письмо на hh.ru<span class="field-count" data-count-for="hhCoverLetter"></span></summary>
+          <div class="field-hint">Первые 500 символов уходят как сопроводительное</div>
+          <textarea class="template-area" id="hhCoverLetter" rows="7"
+                    placeholder="Здравствуйте! Откликаюсь на вашу вакансию..."></textarea>
+        </details>
         <div class="field-label">Резюме из библиотеки</div>
         <div class="field-hint">Прикладывается к отклику в Telegram</div>
         <select id="criteriaResume" class="field-select"></select>

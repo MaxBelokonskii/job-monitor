@@ -149,25 +149,40 @@ async function loadPresets() {
 function renderPresetBar() {
   const bar = document.getElementById('presetBar');
   if (!bar) return;
+  bar.className = 'preset-list';
   fill(bar, presetState.list.map(preset => el('div', {
-    style: 'display:flex;flex-direction:column;gap:2px;align-items:flex-start',
+    class: 'preset-card' + (preset.is_active ? ' active' : ''),
   }, [
-    el('button', {
-      class: 'preset-chip' + (preset.is_active ? ' active' : ''),
-      text: preset.name,
-      'data-action': 'activatePreset',
-      'data-arg': String(preset.id),
-      disabled: preset.is_active ? 'disabled' : null,
-    }),
+    el('div', { class: 'preset-head' }, [
+      el('button', {
+        class: 'preset-name',
+        text: preset.name,
+        title: preset.is_active ? 'Активный пресет' : 'Переключиться на этот пресет',
+        'data-action': 'activatePreset',
+        'data-arg': String(preset.id),
+        disabled: preset.is_active ? 'disabled' : null,
+      }),
+      // Крестик занимает место всегда — и когда его нет. Иначе карточка
+      // активного пресета оказывается уже соседних, и ряд снова рваный:
+      // именно из-за разного числа детей чипы и разъезжались по высоте.
+      el('button', {
+        class: 'preset-drop' + (preset.is_active ? ' hidden' : ''),
+        text: '×',
+        title: 'Удалить пресет',
+        // Действие проставляется ВСЕГДА, а нажатие гасится `disabled`:
+        // отключённая кнопка события клика не порождает вовсе, так что
+        // это безопасно — и, в отличие от условного data-action, видно
+        // проверке достижимости обработчиков.
+        'data-action': 'deletePreset',
+        'data-arg': String(preset.id),
+        disabled: preset.is_active ? 'disabled' : null,
+        'aria-hidden': preset.is_active ? 'true' : null,
+      }),
+    ]),
     el('span', {
       class: 'preset-meta',
-      text: `${preset.channels_count} кан. · ${preset.professions_count} проф.`,
-    }),
-    preset.is_active ? null : el('button', {
-      class: 'btn-del',
-      text: 'удалить',
-      'data-action': 'deletePreset',
-      'data-arg': String(preset.id),
+      text: `${preset.channels_count} кан. · ${preset.professions_count} проф.`
+        + (preset.resume_name ? ` · ${preset.resume_name}` : ''),
     }),
   ])));
   // Активный пресет назван и в полосе состояния — она обязана меняться
@@ -611,6 +626,7 @@ function renderChannelEdit() {
     el('span', { text: '@' + ch }),
     el('button', { class: 'btn-del', text: '×', onclick: () => removeChannel(i) }),
   ])));
+  updateFieldCounts();
 }
 function addChannel() {
   const inp = document.getElementById('newChannel');
@@ -631,6 +647,7 @@ function renderKeywords() {
     el('span', { text: k }),
     el('button', { class: 'btn-del', text: '×', onclick: () => removeEx(i) }),
   ])));
+  updateFieldCounts();
 }
 function addKw() { const v = document.getElementById('newKw').value.trim().toLowerCase(); if (!v) return; if (tgState.keywords.includes(v)) { showToast('Уже есть'); return; } tgState.keywords.push(v); document.getElementById('newKw').value = ''; renderKeywords(); }
 function removeKw(i) { tgState.keywords.splice(i, 1); renderKeywords(); }
@@ -987,6 +1004,7 @@ function renderHHKeywords() {
     el('span', { text: k }),
     el('button', { class: 'btn-del', text: '×', onclick: () => removeHHEx(i) }),
   ])));
+  updateFieldCounts();
 }
 function addHHKw() { const v = document.getElementById('newHHKw').value.trim(); if (!v || hhState.keywords.includes(v)) { if (v) showToast('Уже есть'); return; } hhState.keywords.push(v); document.getElementById('newHHKw').value = ''; renderHHKeywords(); }
 function removeHHKw(i) { hhState.keywords.splice(i, 1); renderHHKeywords(); }
@@ -1631,6 +1649,22 @@ function renderDataDirWarning(service) {
   }));
 }
 
+// Счётчик в заголовке свёрнутого раздела: без него аккордеон прячет не
+// только длину списка, но и сам факт, что там что-то есть. Для текстовых
+// полей счётчик не число, а галочка — «заполнено».
+function updateFieldCounts() {
+  for (const badge of document.querySelectorAll('[data-count-for]')) {
+    const target = document.getElementById(badge.dataset.countFor);
+    if (!target) continue;
+    if (target.tagName === 'TEXTAREA') {
+      badge.textContent = target.value.trim() ? '✓' : '';
+    } else {
+      const n = target.children.length;
+      badge.textContent = n ? String(n) : '';
+    }
+  }
+}
+
 // ── Init ──────────────────────────────────────────────────────────────
 async function init() {
   const cfg = await apiGet('/config');
@@ -1711,6 +1745,7 @@ async function loadActiveCriteria() {
     }
   }
   await loadResumes();
+  updateFieldCounts();
 }
 
 // ── About modal ───────────────────────────────────────────────────────
