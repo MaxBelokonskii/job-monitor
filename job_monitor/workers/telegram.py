@@ -12,7 +12,7 @@ import asyncio
 import logging
 import random
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -208,6 +208,51 @@ async def process_post(
     return sent
 
 
+#: Как достать прошлые посты канала. Параметром, а не прямым вызовом
+#: Telethon: иначе сканирование истории нельзя проверить, не поднимая
+#: живого клиента, — а именно непроверяемость и оставила эту настройку
+#: ненаписанной.
+HistoryFetch = Callable[[str, int], "AsyncIterator[tuple[int, str | None]]"]
+PostHandler = Callable[[IncomingPost], Awaitable[None]]
+
+
+async def scan_history(
+    channels: list[str], fetch: HistoryFetch, handle: PostHandler, limit: int
+) -> None:
+    """Прогоняет прошлые посты каналов через ту же обработку, что и новые.
+
+    Настройка «Читать историю каналов» существовала в интерфейсе, значение
+    сохранялось в базу, рядом стояла вторая — «сколько сообщений читать», —
+    и ни одну из них не читала ни одна строка воркера. Человек включал
+    историю, перезапускал воркер и получал ту же пустую очередь, без
+    единого объяснения.
+
+    Обработчик тот же, что у живых постов, и это не экономия строк: всё,
+    за что заплачено — дедупликация постов и контактов, безопасный режим,
+    суточный лимит, — живёт в нём. Отдельный путь для истории означал бы
+    вторую копию этих правил, которая однажды отстанет.
+
+    Отказ на одном канале не останавливает остальные: канал могли
+    переименовать, удалить или закрыть для этого аккаунта, и терять из-за
+    него шесть других — значит наказывать за опечатку в одном названии.
+    """
+    for channel in channels:
+        прочитано = 0
+        try:
+            async for message_id, text in fetch(channel, limit):
+                if not text:
+                    # Пост без текста — картинка или файл. Живой обработчик
+                    # такие пропускает, история ведёт себя так же.
+                    continue
+                await handle(IncomingPost(channel=channel, text=text,
+                                          message_id=message_id))
+                прочитано += 1
+        except Exception as error:  # noqa: BLE001 — см. докстринг
+            log.warning("историю канала @%s прочитать не удалось: %s", channel, error)
+            continue
+        log.info("история @%s: просмотрено %s постов", channel, прочитано)
+
+
 async def run_worker() -> None:
     from telethon import events
 
@@ -260,17 +305,14 @@ async def run_worker() -> None:
         if attachment is not None:
             await client.send_file(username, str(attachment))
 
-    @client.on(events.NewMessage())
-    async def handler(event) -> None:  # адаптер Telethon → чистая логика
-        chat = await event.get_chat()
-        channel = getattr(chat, "username", None)
-        if not channel or not event.message.message:
-            return
-        post = IncomingPost(
-            channel=channel,
-            text=event.message.message,
-            message_id=event.message.id,
-        )
+    async def handle_post(post: IncomingPost) -> None:
+        """Обработка одного поста — общая для живых и для истории.
+
+        Одна на оба пути намеренно: всё, за что заплачено — дедупликация
+        постов и контактов, безопасный режим, суточный лимит, — живёт
+        здесь. Отдельный путь для истории означал бы вторую копию этих
+        правил, которая однажды отстанет.
+        """
         settings = load_settings(conn)
         criteria = active_criteria(conn)
         # Метрика «вакансий найдено» берётся отсюда, а не из текста логов (L2).
@@ -298,5 +340,34 @@ async def run_worker() -> None:
             # `record_send`, и именно она отвечает за дневной лимит.
             EventsRepo(conn).add("tg", "sent", username, datetime.now())
 
+    @client.on(events.NewMessage())
+    async def handler(event) -> None:  # адаптер Telethon → чистая логика
+        chat = await event.get_chat()
+        channel = getattr(chat, "username", None)
+        if not channel or not event.message.message:
+            return
+        await handle_post(IncomingPost(
+            channel=channel,
+            text=event.message.message,
+            message_id=event.message.id,
+        ))
+
     log.info("TG-воркер запущен")
+
+    # Настройки читаются здесь, на старте: «читать историю» — это решение
+    # о том, что делать ПРИ ЗАПУСКЕ, и менять его на ходу нечему.
+    startup = load_settings(conn)
+    if startup.parse_history:
+        async def fetch(channel: str, limit: int):
+            async for message in client.iter_messages(channel, limit=limit):
+                yield message.id, message.message
+
+        log.info(
+            "читаю историю каналов: по %s последних сообщений", startup.history_limit
+        )
+        await scan_history(
+            active_criteria(conn).channels, fetch, handle_post, startup.history_limit
+        )
+        log.info("история просмотрена, перехожу к новым постам")
+
     await client.run_until_disconnected()
