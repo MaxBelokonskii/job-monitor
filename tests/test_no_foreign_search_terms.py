@@ -12,8 +12,23 @@ from __future__ import annotations
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SCANNED_DIRS = ("job_monitor", "api", "frontend")
+SCANNED_DIRS = ("job_monitor", "api", "frontend", "tests")
 SCANNED_SUFFIXES = (".py", ".js", ".html", ".css")
+
+# Два файла говорят о чужом поиске по необходимости: они объясняют, что
+# именно запрещено, и без примера объяснение бессмысленно. Освобождены
+# поимённо, а не шаблоном, — чтобы третий такой файл потребовал решения, а
+# не появился сам собой.
+#
+# `tests/` попал в область сканирования не сразу, и это стоило тридцати
+# двух вхождений настоящего канала прежнего автора в фикстурах. Тестовые
+# данные — классическое место, где утёкшее переживает уборку: именно так
+# уцелел `placeholder="Junior QA..."` в разметке, найденный только на
+# третьем плане.
+EXPLAINING_FILES = frozenset({
+    "tests/test_no_foreign_search_terms.py",
+    "tests/test_criteria.py",
+})
 
 # Собираются из частей, чтобы файл теста не срабатывал на себе, если каталог
 # сканирования когда-нибудь расширят.
@@ -47,6 +62,7 @@ def _sources() -> list[Path]:
             if item.is_file()
             and item.suffix in SCANNED_SUFFIXES
             and "__pycache__" not in item.parts
+            and str(item.relative_to(REPO_ROOT)) not in EXPLAINING_FILES
         )
     assert found, "не найдено ни одного исходника — структура переехала?"
     return sorted(found)
@@ -86,6 +102,24 @@ def test_the_scan_is_not_vacuous() -> None:
     assert len(FOREIGN_TERMS) >= 8
     sources = _sources()
     assert len(sources) >= 10
+    # Освобождения не должны разрастись до «не сканируем тесты вовсе»: их
+    # ровно два, и оба названы поимённо.
+    assert len(EXPLAINING_FILES) <= 2
+    for name in EXPLAINING_FILES:
+        assert (REPO_ROOT / name).exists(), (
+            f"освобождение {name} пережило сам файл — снимите его"
+        )
+
+    # Состав области закрепляется целиком, а не «каждый названный каталог
+    # даёт файлы»: прежняя форма проверяла только то, что перечислено, и
+    # выбросить `tests` из списка можно было незаметно — оставшиеся три
+    # каталога продолжали давать файлы, и проверка молчала. Проверено
+    # мутацией: сужение проходило зелёным.
+    assert set(SCANNED_DIRS) == {"job_monitor", "api", "frontend", "tests"}, (
+        f"область сканирования изменилась: {SCANNED_DIRS}. Тесты в ней не "
+        "случайно — чужой канал прежнего автора прожил в фикстурах "
+        "тридцать два вхождения, пока каталог не сканировался"
+    )
     for directory in SCANNED_DIRS:
         assert any(
             str(item).startswith(str(REPO_ROOT / directory)) for item in sources

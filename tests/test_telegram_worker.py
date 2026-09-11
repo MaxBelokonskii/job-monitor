@@ -27,7 +27,7 @@ def conn(tmp_path, monkeypatch):
 @pytest.fixture
 def criteria():
     return SearchCriteria(
-        channels=["itvacancykz"], tg_keywords=["qa"], tg_exclude=["senior"],
+        channels=["qajobs"], tg_keywords=["qa"], tg_exclude=["senior"],
         template="привет",
     )
 
@@ -66,16 +66,16 @@ def test_extract_usernames():
 def test_post_matches_returns_the_matched_keyword(criteria):
     """Возвращается само слово, а не `bool`: оно идёт и в подстановку
     `{ключевое_слово}`, и в колонку `matched_keyword`."""
-    assert post_matches(IncomingPost("itvacancykz", "нужен QA", 1), criteria) == "qa"
-    assert post_matches(IncomingPost("itvacancykz", "нужен Senior QA", 2), criteria) is None
-    assert post_matches(IncomingPost("itvacancykz", "нужен повар", 3), criteria) is None
+    assert post_matches(IncomingPost("qajobs", "нужен QA", 1), criteria) == "qa"
+    assert post_matches(IncomingPost("qajobs", "нужен Senior QA", 2), criteria) is None
+    assert post_matches(IncomingPost("qajobs", "нужен повар", 3), criteria) is None
     assert post_matches(IncomingPost("other", "нужен QA", 4), criteria) is None
 
 
 def test_skips_bots_and_source_channels(criteria):
     assert is_eligible("@hr_anna", criteria, own_username="@me") is True
     assert is_eligible("@some_bot", criteria, own_username="@me") is False
-    assert is_eligible("@itvacancykz", criteria, own_username="@me") is False   # L10
+    assert is_eligible("@qajobs", criteria, own_username="@me") is False   # L10
     assert is_eligible("@me", criteria, own_username="@me") is False
 
 
@@ -87,8 +87,8 @@ async def test_sends_once_per_contact(conn, criteria, settings):
     дедупликация контактов или нет.
     """
     repo, sender = TgRepo(conn), Sender()
-    first = IncomingPost("itvacancykz", "Нужен QA, пишите @hr_anna", 1)
-    same_contact_other_post = IncomingPost("itvacancykz", "Опять QA: @hr_anna", 2)
+    first = IncomingPost("qajobs", "Нужен QA, пишите @hr_anna", 1)
+    same_contact_other_post = IncomingPost("qajobs", "Опять QA: @hr_anna", 2)
     assert await call(first, criteria, settings, repo, conn, sender, FROZEN) == ["@hr_anna"]
     assert await call(
         same_contact_other_post, criteria, settings, repo, conn, sender, FROZEN
@@ -102,7 +102,7 @@ async def test_the_same_post_is_processed_only_once(conn, criteria, settings):
     повторным событием или перечитанный на следующем круге, обрабатывался
     заново."""
     repo, sender = TgRepo(conn), Sender()
-    post = IncomingPost("itvacancykz", "Нужен QA, пишите @hr_anna", 7)
+    post = IncomingPost("qajobs", "Нужен QA, пишите @hr_anna", 7)
     assert await call(post, criteria, settings, repo, conn, sender, FROZEN) == ["@hr_anna"]
     assert await call(post, criteria, settings, repo, conn, sender, FROZEN) == []
     assert sender.sent == ["@hr_anna"]
@@ -112,7 +112,7 @@ async def test_respects_daily_limit_from_database(conn, criteria, settings):
     repo, sender = TgRepo(conn), Sender()
     repo.record_send("@old_one", None, None, NOW)
     repo.record_send("@old_two", None, None, NOW)
-    post = IncomingPost("itvacancykz", "QA нужен, @hr_anna", 11)
+    post = IncomingPost("qajobs", "QA нужен, @hr_anna", 11)
     assert await call(post, criteria, settings, repo, conn, sender, FROZEN) == []
     assert repo.sent_on(date(2026, 9, 8)) == 2
 
@@ -121,20 +121,20 @@ async def test_limit_resets_on_a_new_day_without_any_reset_job(conn, criteria, s
     repo, sender = TgRepo(conn), Sender()
     repo.record_send("@old_one", None, None, datetime(2026, 9, 7, 23, 0))
     repo.record_send("@old_two", None, None, datetime(2026, 9, 7, 23, 30))
-    post = IncomingPost("itvacancykz", "QA нужен, @hr_anna", 11)
+    post = IncomingPost("qajobs", "QA нужен, @hr_anna", 11)
     assert await call(post, criteria, settings, repo, conn, sender, FROZEN) == ["@hr_anna"]  # L9
 
 
 async def test_exclude_word_blocks_post(conn, criteria, settings):
     repo, sender = TgRepo(conn), Sender()
-    post = IncomingPost("itvacancykz", "Senior QA нужен, @hr_anna", 12)
+    post = IncomingPost("qajobs", "Senior QA нужен, @hr_anna", 12)
     assert await call(post, criteria, settings, repo, conn, sender, FROZEN) == []
 
 
 async def test_safe_mode_records_nothing(conn, criteria, settings):
     settings = settings.model_copy(update={"safe_mode": True})
     repo, sender = TgRepo(conn), Sender()
-    post = IncomingPost("itvacancykz", "QA нужен, @hr_anna", 11)
+    post = IncomingPost("qajobs", "QA нужен, @hr_anna", 11)
     assert await call(post, criteria, settings, repo, conn, sender, FROZEN) == []
     assert sender.sent == []
     assert repo.contacts_total() == 0
@@ -168,7 +168,7 @@ async def test_a_send_after_midnight_is_dated_today_not_yesterday(conn, criteria
 
     repo, sender = TgRepo(conn), Sender()
     settings = settings.model_copy(update={"max_per_day": 10})
-    post = IncomingPost("itvacancykz", "нужен QA: @hr_anna и @hr_boris", 14)
+    post = IncomingPost("qajobs", "нужен QA: @hr_anna и @hr_boris", 14)
 
     assert await call(post, criteria, settings, repo, conn, sender, lambda: next(ticks)) == [
         "@hr_anna", "@hr_boris",
@@ -190,7 +190,7 @@ async def test_the_post_lands_in_the_queue_with_its_contacts(conn, criteria, set
     from job_monitor import statuses
 
     repo, sender = TgRepo(conn), Sender()
-    post = IncomingPost("itvacancykz", "Нужен QA, пишите @hr_anna или @lead_qa", 21)
+    post = IncomingPost("qajobs", "Нужен QA, пишите @hr_anna или @lead_qa", 21)
     await call(post, criteria, GlobalSettings(safe_mode=True), repo, conn, sender, FROZEN)
 
     row = TgFoundRepo(conn).list()[0]
@@ -204,7 +204,7 @@ async def test_safe_mode_leaves_the_post_new(conn, criteria):
     from job_monitor import statuses
 
     repo, sender = TgRepo(conn), Sender()
-    post = IncomingPost("itvacancykz", "Нужен QA, пишите @hr_anna", 22)
+    post = IncomingPost("qajobs", "Нужен QA, пишите @hr_anna", 22)
     sent = await call(
         post, criteria, GlobalSettings(safe_mode=True), repo, conn, sender, FROZEN
     )
@@ -220,7 +220,7 @@ async def test_a_sent_post_is_marked_as_answered_by_the_robot(conn, criteria, se
     from job_monitor import statuses
 
     repo, sender = TgRepo(conn), Sender()
-    post = IncomingPost("itvacancykz", "Нужен QA, пишите @hr_anna", 23)
+    post = IncomingPost("qajobs", "Нужен QA, пишите @hr_anna", 23)
     await call(post, criteria, settings, repo, conn, sender, FROZEN)
 
     assert sender.sent == ["@hr_anna"]
@@ -237,7 +237,7 @@ async def test_a_post_nobody_could_be_written_to_stays_new(conn, criteria, setti
 
     repo, sender = TgRepo(conn), Sender()
     repo.ensure_contact("@hr_anna", datetime(2026, 9, 1, 12, 0, 0))
-    post = IncomingPost("itvacancykz", "Нужен QA, пишите @hr_anna", 24)
+    post = IncomingPost("qajobs", "Нужен QA, пишите @hr_anna", 24)
 
     sent = await call(post, criteria, settings, repo, conn, sender, FROZEN)
 
@@ -256,7 +256,7 @@ async def test_a_repeated_post_is_not_counted_as_a_second_find(conn, criteria, s
     from job_monitor.workers.telegram import counts_as_a_find
 
     found_repo = TgFoundRepo(conn)
-    post = IncomingPost("itvacancykz", "Нужен QA, пишите @hr_anna", 31)
+    post = IncomingPost("qajobs", "Нужен QA, пишите @hr_anna", 31)
 
     assert counts_as_a_find(post, criteria, found_repo) is True
 
@@ -270,5 +270,5 @@ async def test_a_post_that_does_not_match_is_never_a_find(conn, criteria):
     проверку на совпадение — иначе в метрику попал бы любой пост канала."""
     from job_monitor.workers.telegram import counts_as_a_find
 
-    off_topic = IncomingPost("itvacancykz", "Продам гараж, @seller", 32)
+    off_topic = IncomingPost("qajobs", "Продам гараж, @seller", 32)
     assert counts_as_a_find(off_topic, criteria, TgFoundRepo(conn)) is False

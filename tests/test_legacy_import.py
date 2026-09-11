@@ -23,7 +23,7 @@ def legacy(tmp_path):
     source = tmp_path / "legacy"
     (source / "logs").mkdir(parents=True)
     (source / "config.json").write_text(json.dumps({
-        "channels": ["itvacancykz"], "max_per_day": 7, "api_hash": "must-be-dropped",
+        "channels": ["qajobs"], "max_per_day": 7, "api_hash": "must-be-dropped",
     }), encoding="utf-8")
     (source / "all_sent_users.txt").write_text("@a\n@b\n@a\n", encoding="utf-8")
     (source / "logs" / "sent_log_2026-04-04.txt").write_text(
@@ -41,7 +41,7 @@ def test_imports_settings_without_secrets(conn, legacy):
     current = load_settings(conn)
     assert current.max_per_day == 7
     # Каналы — критерий: они уезжают в активный пресет, а не в настройки.
-    assert active_criteria(conn).channels == ["itvacancykz"]
+    assert active_criteria(conn).channels == ["qajobs"]
     assert "api_hash" in " ".join(report.skipped)
 
 
@@ -179,7 +179,7 @@ def test_out_of_range_setting_is_reported_and_the_rest_is_imported(conn, legacy)
     после прогона было по нулям.
     """
     (legacy / "config.json").write_text(json.dumps({
-        "channels": ["itvacancykz"], "max_per_day": 500, "history_limit": 42,
+        "channels": ["qajobs"], "max_per_day": 500, "history_limit": 42,
     }), encoding="utf-8")
 
     report = import_legacy(conn, legacy)
@@ -189,7 +189,7 @@ def test_out_of_range_setting_is_reported_and_the_rest_is_imported(conn, legacy)
     assert current.max_per_day == 25, "отвергнутое поле должно остаться значением по умолчанию"
     assert current.history_limit == 42, "валидные поля обязаны доехать"
     # Каналы — критерий: они уезжают в активный пресет, а не в настройки.
-    assert active_criteria(conn).channels == ["itvacancykz"]
+    assert active_criteria(conn).channels == ["qajobs"]
     assert report.settings_keys == 1, "в настройках остался только history_limit"
     assert report.criteria_keys == 1, "каналы посчитаны как критерий, а не потеряны"
     # Главное: следующие два блока не должны зависеть от исхода первого.

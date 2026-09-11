@@ -105,7 +105,7 @@ def test_an_excluded_title_is_dropped_and_a_matching_one_is_kept():
         _vacancy_card("Senior QA Engineer", "10"),
         _vacancy_card("QA инженер (junior)", "11"),
         _vacancy_card("Team Lead QA", "12"),
-        _vacancy_card("Тестировщик без опыта", "13"),
+        _vacancy_card("Тестировщик ПО", "13"),
     ])
 
     found = hh.get_vacancies_from_page(driver, settings)

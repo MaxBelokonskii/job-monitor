@@ -37,8 +37,8 @@ def test_settings_save_replaces_not_appends(conn):
 def test_record_send_dedupes_contacts_but_keeps_history(conn):
     repo = TgRepo(conn)
     assert repo.was_sent("@vasya") is False
-    repo.record_send("@vasya", "itvacancykz", "QA junior", NOW)
-    repo.record_send("@vasya", "itvacancykz", "QA junior", NOW)
+    repo.record_send("@vasya", "qajobs", "QA junior", NOW)
+    repo.record_send("@vasya", "qajobs", "QA junior", NOW)
     assert repo.was_sent("@vasya") is True
     assert repo.contacts_total() == 1          # L1: дублей больше нет
     assert repo.sent_on(DAY) == 2              # но история отправок полная
@@ -88,7 +88,7 @@ def test_record_send_rolls_back_contacts_insert_on_failure(tmp_path):
     repo = TgRepo(raw_conn)
     raw_conn.fail_sends = True
     with pytest.raises(sqlite3.IntegrityError):
-        repo.record_send("@doomed", "itvacancykz", "preview", NOW)
+        repo.record_send("@doomed", "qajobs", "preview", NOW)
     raw_conn.fail_sends = False
 
     assert repo.was_sent("@doomed") is False
@@ -115,7 +115,7 @@ def test_ensure_contact_creates_contact_without_a_send_row(conn):
 
 def test_ensure_contact_is_a_noop_if_contact_already_exists(conn):
     repo = TgRepo(conn)
-    repo.record_send("@known", "itvacancykz", "preview", NOW)
+    repo.record_send("@known", "qajobs", "preview", NOW)
     repo.ensure_contact("@known", datetime(2020, 1, 1))
     assert repo.contacts_total() == 1
     sends = conn.execute("SELECT COUNT(*) AS n FROM tg_sends").fetchone()["n"]
