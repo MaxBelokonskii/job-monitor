@@ -113,3 +113,57 @@ def test_no_temporary_file_survives_a_failed_write(monkeypatch) -> None:
     with pytest.raises(OSError):
         resume_store.store("cv.pdf", b"x")
     assert list(paths.resume_dir().iterdir()) == [], "остался временный файл"
+
+
+# ── M-4: тело не держится в памяти целиком ────────────────────────────
+
+
+def test_reception_stops_at_the_first_chunk_over_the_limit() -> None:
+    """Предел проверяется по ходу приёма, а не после него.
+
+    Раньше роут делал `await request.body()`: десять мегабайт оказывались
+    в памяти процесса целиком, и только потом отвергались. Теперь кусок,
+    на котором сумма перевалила за предел, — последний, что мы вообще
+    прочитали.
+    """
+    chunk = b"x" * (1024 * 1024)
+    written = 0
+    with pytest.raises(resume_store.ResumeRejected, match="больше"):
+        with resume_store.receiving("cv.pdf") as incoming:
+            for _ in range(20):          # двадцать мегабайт при пределе в десять
+                incoming.write(chunk)
+                written += 1
+    assert written == 10, (
+        f"прочитано {written} МБ вместо 10 — приём не останавливается на пределе"
+    )
+
+
+def test_an_aborted_reception_leaves_nothing_behind() -> None:
+    """Временный файл убирается и при отказе: иначе каталог данных копил
+    бы недогруженные обрывки, невидимые ни в одном списке."""
+    with pytest.raises(resume_store.ResumeRejected):
+        with resume_store.receiving("cv.pdf") as incoming:
+            incoming.write(b"x" * (11 * 1024 * 1024))
+    assert list(paths.resume_dir().iterdir()) == []
+
+
+def test_the_extension_is_checked_before_a_single_byte_is_read() -> None:
+    """Иначе отказ по расширению стоил бы чтения всего тела — и клиенту
+    хватило бы неподходящего имени, чтобы заставить приложение принять
+    десять мегабайт впустую."""
+    with pytest.raises(resume_store.ResumeRejected, match="расширение"):
+        with resume_store.receiving("cv.zip"):
+            pytest.fail("приём открылся для неподдерживаемого расширения")
+
+
+def test_nothing_is_visible_until_commit() -> None:
+    """До `commit()` файл лежит под временным именем: наружу он появляется
+    одним `os.replace`, то есть либо целиком, либо никак."""
+    with resume_store.receiving("cv.pdf") as incoming:
+        incoming.write(b"%PDF-1.4 x")
+        visible = [p.name for p in paths.resume_dir().iterdir()
+                   if not p.name.startswith(".")]
+        assert visible == [], f"недописанный файл уже виден: {visible}"
+        stored_name, size = incoming.commit()
+    assert size == len(b"%PDF-1.4 x")
+    assert resume_store.path_of(stored_name).exists()

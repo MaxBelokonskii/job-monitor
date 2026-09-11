@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from datetime import datetime
+from pathlib import Path
 
 from pydantic import ValidationError
 
@@ -34,8 +35,10 @@ LEGACY_CRITERIA_FIELDS: dict[str, str] = {
     "hh_resume_id": "hh_resume_id",
 }
 
-# Уезжают из settings, но в критерии не переносятся: регион стал константой
-# (D8), а `file_path` заменён ссылкой на библиотеку резюме (L14/D10).
+# Уезжают из settings, но в критерии напрямую не переносятся: регион стал
+# константой (D8), а `file_path` — ссылкой на библиотеку резюме (L14/D10).
+# Сам файл при этом не теряется: `_adopt_legacy_resume` забирает его в
+# библиотеку и подставляет `resume_id`.
 LEGACY_DROPPED_FIELDS = ("hh_area_ids", "file_path")
 
 
@@ -128,11 +131,59 @@ def import_legacy_criteria(conn: sqlite3.Connection, now: datetime) -> int | Non
         return None
 
     raw = {LEGACY_CRITERIA_FIELDS[key]: stored[key] for key in present}
+    resume_id = _adopt_legacy_resume(conn, stored.get("file_path"), now)
+    if resume_id is not None:
+        raw["resume_id"] = resume_id
     criteria = _tolerant(raw)
     preset_id = repo.create(LEGACY_PRESET_NAME, criteria.model_dump(), now)
     _strip_legacy(settings_repo)
     set_active(conn, preset_id)
     return preset_id
+
+
+def _adopt_legacy_resume(
+    conn: sqlite3.Connection, file_path: str | None, now: datetime
+) -> int | None:
+    """Забирает резюме из старого `file_path` в библиотеку.
+
+    Возвращает идентификатор записи или `None`, если брать нечего. В
+    `file_path` лежит путь к резюме, которым человек уже откликался, и
+    просто отбросить его значило бы: библиотека пуста, пресет без
+    вложения, ни одного сообщения об этом — а узнал бы он по молча
+    уходящим откликам без резюме.
+
+    Ни один отказ не срывает перенос остального. Путь мог протухнуть
+    (файл переименовали, диск переставили), а старая версия не проверяла
+    расширение вовсе, так что там может лежать хоть архив. Контакты и
+    история вакансий важнее вложения — это тот же урок, что уже усвоен в
+    `_tolerant`: один негодный ключ не должен уносить весь перенос.
+    """
+    if not file_path:
+        return None
+
+    from job_monitor import resume_store
+    from job_monitor.db.repositories import ResumesRepo
+
+    source = Path(file_path)
+    try:
+        data = source.read_bytes()
+    except OSError as error:
+        logger.warning(
+            "резюме из старых настроек не прочитать (%s): перенос продолжается "
+            "без вложения, загрузите файл через интерфейс", error,
+        )
+        return None
+
+    try:
+        stored_name, size = resume_store.store(source.name, data)
+    except resume_store.ResumeRejected as error:
+        logger.warning(
+            "резюме из старых настроек не принято библиотекой (%s): перенос "
+            "продолжается без вложения", error,
+        )
+        return None
+
+    return ResumesRepo(conn).add(source.name, stored_name, size, now)
 
 
 def _strip_legacy(settings_repo: SettingsRepo) -> None:

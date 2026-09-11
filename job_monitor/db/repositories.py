@@ -538,6 +538,28 @@ class ResumesRepo:
         ).fetchone()
         return dict(row) if row else None
 
+    def replace_file(
+        self, resume_id: int, original_name: str, stored_name: str,
+        size_bytes: int, now: datetime,
+    ) -> bool:
+        """Меняет файл, сохраняя идентификатор строки.
+
+        Именно сохраняя: на `id` ссылаются пресеты (`criteria.resume_id`),
+        и пересоздание строки означало бы отвязать резюме от каждого из
+        них — то есть заставить человека пройти по всем пресетам после
+        обновления собственного резюме.
+        """
+        with transaction(self._conn):
+            cursor = self._conn.execute(
+                "UPDATE resumes SET original_name = ?, stored_name = ?,"
+                " size_bytes = ?, uploaded_at = ? WHERE id = ?",
+                (
+                    original_name, stored_name, size_bytes,
+                    now.isoformat(timespec="seconds"), resume_id,
+                ),
+            )
+        return cursor.rowcount == 1
+
     def delete(self, resume_id: int) -> None:
         with transaction(self._conn):
             self._conn.execute("DELETE FROM resumes WHERE id = ?", (resume_id,))

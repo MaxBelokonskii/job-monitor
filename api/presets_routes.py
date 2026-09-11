@@ -12,20 +12,37 @@ from pydantic import BaseModel, ValidationError
 from job_monitor import presets as presets_service
 from job_monitor.criteria import SearchCriteria
 from job_monitor.db.connection import get_connection
-from job_monitor.db.repositories import PresetsRepo
+from job_monitor.db.repositories import PresetsRepo, ResumesRepo
 from job_monitor.settings import load_settings
-from job_monitor.workers.manager import WorkerState, manager
+from job_monitor.workers.manager import WorkerNotRunning, WorkerState, manager
 
 router = APIRouter(prefix="/api/presets", tags=["presets"])
 
 
 class PresetCreate(BaseModel):
+    # Число сюда не пройдёт: pydantic 2, в отличие от первой версии, не
+    # приводит `int` к `str` — 422 отдаётся без нашего участия. Проверено
+    # мутацией: `StrictStr` здесь не добавлял ничего и убран как мёртвый
+    # вес. Приведение, из-за которого пресет получал имя "123", жило не
+    # тут, а в `patch_preset` ниже, где тело — сырой словарь.
     name: str
     copy_from: int | None = None
 
 
-def _summary(row: dict, active_id: int | None) -> dict[str, Any]:
+def _summary(
+    row: dict, active_id: int | None, resume_names: dict[int, str]
+) -> dict[str, Any]:
+    """Сводка пресета для списка.
+
+    `resume_name` рядом с `resume_id`, потому что показать надо имя, а
+    списки пресетов и резюме грузятся независимо: без имени чип пресета
+    до второго ответа показывал бы число или пустоту. `None`, если
+    вложения нет или ссылка указывает на удалённое резюме — связь живёт
+    внутри JSON-документа критериев, а не внешним ключом, так что
+    рассогласование возможно, и список из-за него падать не должен.
+    """
     criteria = row["criteria"]
+    resume_id = criteria.get("resume_id")
     return {
         "id": row["id"],
         "name": row["name"],
@@ -33,7 +50,8 @@ def _summary(row: dict, active_id: int | None) -> dict[str, Any]:
         "is_active": row["id"] == active_id,
         "channels_count": len(criteria.get("channels") or []),
         "professions_count": len(criteria.get("professions") or []),
-        "resume_id": criteria.get("resume_id"),
+        "resume_id": resume_id,
+        "resume_name": resume_names.get(resume_id) if resume_id is not None else None,
     }
 
 
@@ -59,7 +77,8 @@ async def list_presets() -> list[dict[str, Any]]:
     conn = get_connection()
     presets_service.ensure_default(conn, datetime.now())
     active = _active_id(conn)
-    return [_summary(row, active) for row in PresetsRepo(conn).list()]
+    names = {row["id"]: row["original_name"] for row in ResumesRepo(conn).list()}
+    return [_summary(row, active, names) for row in PresetsRepo(conn).list()]
 
 
 @router.post("")
@@ -118,7 +137,13 @@ async def patch_preset(preset_id: int, patch: dict) -> dict[str, str]:
 
     stripped: str | None = None
     if new_name is not None:
-        stripped = str(new_name).strip()
+        if not isinstance(new_name, str):
+            # См. `PresetCreate.name`: приводить число к строке молча —
+            # значит записать в базу то, чего человек не вводил.
+            raise HTTPException(
+                status_code=400, detail="имя пресета должно быть строкой"
+            )
+        stripped = new_name.strip()
         if not stripped:
             raise HTTPException(
                 status_code=400, detail="имя пресета не может быть пустым"
@@ -186,16 +211,28 @@ async def activate_preset(preset_id: int) -> dict[str, Any]:
 
     stopped: list[str] = []
     for name in manager.running():
-        status = await manager.stop(name)
+        try:
+            status = await manager.stop(name)
+        except WorkerNotRunning:
+            # Воркер успел упасть сам между `running()` и `stop()`. Это не
+            # ошибка: останавливать нечего, а именно остановки мы и
+            # добивались. В `stopped` он не попадает — мы его не
+            # останавливали.
+            continue
         if status.state is not WorkerState.stopped:
             # Переключение наполовину хуже отказа: Selenium может стоять
             # посреди отклика, и смена резюме под ним даёт отклик не тем
             # документом (решение D9). Останавливаемся ДО смены активного
             # пресета, поэтому отказ не оставляет полусостояния.
-            raise HTTPException(
-                status_code=409,
-                detail=f"воркер {name} не остановился: {status.last_error}",
-            )
+            #
+            # В тексте отказа названо и то, что УЖЕ остановлено: иначе
+            # человек видит «переключить не удалось» и не понимает, почему
+            # один воркер стоит, а другой работает — объяснения этому нет
+            # больше нигде.
+            detail = f"воркер {name} не остановился: {status.last_error}"
+            if stopped:
+                detail += f". Уже остановлены: {', '.join(stopped)}"
+            raise HTTPException(status_code=409, detail=detail)
         stopped.append(name)
 
     presets_service.set_active(conn, preset_id)

@@ -164,6 +164,29 @@ def test_every_markup_action_has_a_handler() -> None:
     assert not missing, f"data-action(s) with no entry in ACTIONS: {sorted(missing)} — dead buttons"
 
 
+def test_every_dynamic_action_has_a_handler() -> None:
+    """M-13. Обратная сторона проверки выше — и до сих пор её не было.
+
+    `test_every_handler_is_reachable` вычитает динамические имена из
+    ACTIONS, чтобы не ругаться на кнопки, которых нет в разметке. Но
+    связь в другую сторону не проверял никто: убери `foundApply` из
+    ACTIONS — и кнопка «Откликнулся» в очереди найденного молча
+    перестанет работать. Клик доходит до `runAction`, `ACTIONS[name]`
+    оказывается `undefined`, функция возвращается — ни ошибки в консоли,
+    ни следа. Проверено мутацией: без этого теста такая правка проходила
+    зелёной.
+
+    Кнопки, создаваемые кодом, — это как раз вся очередь найденного,
+    список пресетов и библиотека резюме, то есть главные действия
+    приложения.
+    """
+    missing = _dynamic_action_names() - _action_map_keys()
+    assert not missing, (
+        f"кнопки создаются кодом, а обработчика в ACTIONS нет: {sorted(missing)} — "
+        "нажатие не сделает ничего и не скажет ничего"
+    )
+
+
 def _dynamic_action_names() -> set[str]:
     """`data-action`, которые проставляет сам JS на созданных им узлах.
 
@@ -177,6 +200,12 @@ def _dynamic_action_names() -> set[str]:
 
 
 def test_every_handler_is_reachable() -> None:
+    """Мёртвых записей в ACTIONS быть не должно.
+
+    Вторая половина связи — в `test_every_dynamic_action_has_a_handler`:
+    эта проверка ловит обработчик, который никто не зовёт, та — кнопку,
+    у которой нет обработчика.
+    """
     unused = _action_map_keys() - _markup_action_names() - _dynamic_action_names()
     assert not unused, f"ACTIONS entries nothing can reach: {sorted(unused)}"
 

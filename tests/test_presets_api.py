@@ -311,3 +311,131 @@ def test_a_valid_patch_still_applies_everything(client) -> None:
     preset = client.get(f"/api/presets/{preset_id}").json()
     assert preset["name"] == "Стало"
     assert preset["criteria"]["hh_experience"] == "between1And3"
+
+
+# ── Замечания ревью подпроекта 1 ──────────────────────────────────────
+
+
+def test_a_name_must_be_a_string(client) -> None:
+    """M-12. `{"name": 123}` принимался и сохранялся строкой `"123"`.
+
+    Молчаливое приведение типа — худший исход из трёх возможных: клиент
+    не узнаёт, что отправил не то, а в базе оказывается значение, которого
+    он не вводил. Отказ честнее.
+    """
+    created = client.post("/api/presets", json={"name": "Целое имя"}).json()
+    reply = client.patch(f"/api/presets/{created['id']}", json={"name": 123})
+    assert reply.status_code == 400
+    assert client.get(f"/api/presets/{created['id']}").json()["name"] == "Целое имя"
+
+
+def test_a_name_must_be_a_string_on_creation_too(client) -> None:
+    """Та же гарантия на другом конце: создание не должно быть лазейкой.
+
+    Её даёт pydantic 2, а не наш код — в отличие от первой версии он не
+    приводит `int` к `str`. Проверка остаётся, потому что закрепляет
+    свойство, а не реализацию: перейдём однажды на сырой словарь, как в
+    `patch_preset`, — и лазейка откроется молча.
+    """
+    assert client.post("/api/presets", json={"name": 123}).status_code == 422
+
+
+def test_the_summary_names_the_resume_it_uses(client) -> None:
+    """M-7. Сводка отдавала `resume_id` — число, по которому интерфейсу
+    приходилось идти в библиотеку, чтобы показать «какое резюме». Список
+    пресетов и список резюме грузятся независимо, так что до второго
+    ответа чип пресета показывал бы число или пустоту."""
+    # Имя едет в процентном кодировании: заголовки HTTP латиницей, а имя
+    # файла может быть каким угодно (так же его шлёт и фронтенд).
+    from urllib.parse import quote
+
+    resume = client.post(
+        "/api/resumes", content=b"%PDF-1.4 x",
+        headers={"X-Filename": quote("Моё резюме.pdf")},
+    ).json()
+    created = client.post("/api/presets", json={"name": "С резюме"}).json()
+    client.patch(f"/api/presets/{created['id']}", json={"resume_id": resume["id"]})
+
+    row = next(p for p in client.get("/api/presets").json() if p["id"] == created["id"])
+    assert row["resume_name"] == "Моё резюме.pdf"
+
+
+def test_a_preset_without_a_resume_says_so(client) -> None:
+    """Обратная сторона: отсутствие вложения — это `None`, а не пустая
+    строка и не выдуманное имя."""
+    created = client.post("/api/presets", json={"name": "Без резюме"}).json()
+    row = next(p for p in client.get("/api/presets").json() if p["id"] == created["id"])
+    assert row["resume_id"] is None
+    assert row["resume_name"] is None
+
+
+def test_a_preset_pointing_at_a_deleted_resume_does_not_break_the_list(client) -> None:
+    """Ссылка на резюме живёт внутри JSON-документа критериев, а не
+    внешним ключом: рассогласование возможно, и список пресетов не должен
+    из-за него падать."""
+    created = client.post("/api/presets", json={"name": "Битая ссылка"}).json()
+    client.patch(f"/api/presets/{created['id']}", json={"resume_id": 999999})
+
+    row = next(p for p in client.get("/api/presets").json() if p["id"] == created["id"])
+    assert row["resume_id"] == 999999
+    assert row["resume_name"] is None
+
+
+def test_a_worker_that_died_on_its_own_does_not_break_activation(client, monkeypatch) -> None:
+    """M-5. `activate_preset` спрашивает `manager.running()`, потом зовёт
+    `stop()` для каждого. Воркер, упавший сам между этими двумя вызовами,
+    даёт `WorkerNotRunning` — и активация отвечала 500.
+
+    Но «воркер уже остановился» — это ровно то, чего мы добивались:
+    останавливать нечего, можно переключаться.
+    """
+    from job_monitor.workers import manager as manager_module
+    from job_monitor.workers.manager import WorkerNotRunning, manager
+
+    created = client.post("/api/presets", json={"name": "Гонка"}).json()
+
+    monkeypatch.setattr(manager, "running", lambda: ["hh"])
+
+    async def already_gone(name):
+        raise WorkerNotRunning(name)
+
+    monkeypatch.setattr(manager, "stop", already_gone)
+
+    reply = client.post(f"/api/presets/{created['id']}/activate")
+    assert reply.status_code == 200, f"гонка дала {reply.status_code}: {reply.text}"
+    assert reply.json()["activated"] == created["id"]
+    assert reply.json()["stopped"] == [], (
+        "воркер, умерший сам, не был остановлен нами — в списке ему не место"
+    )
+
+
+def test_a_refused_activation_says_what_was_already_stopped(client, monkeypatch) -> None:
+    """M-6. На 409 список уже остановленных воркеров терялся. Человек
+    видел «переключить не удалось» и не знал, что Telegram при этом встал:
+    возвращался к экрану, где один воркер работает, другой нет, и
+    объяснения этому нет нигде."""
+    from job_monitor.workers.manager import WorkerState, manager
+
+    created = client.post("/api/presets", json={"name": "Полуостановка"}).json()
+
+    class Status:
+        def __init__(self, state, error=None):
+            self.state, self.last_error = state, error
+
+    monkeypatch.setattr(manager, "running", lambda: ["tg", "hh"])
+
+    async def stop(name):
+        if name == "tg":
+            return Status(WorkerState.stopped)
+        return Status(WorkerState.error, "таймаут остановки")
+
+    monkeypatch.setattr(manager, "stop", stop)
+
+    reply = client.post(f"/api/presets/{created['id']}/activate")
+    assert reply.status_code == 409
+    detail = reply.json()["detail"]
+    assert "hh" in detail and "таймаут" in detail
+    assert "tg" in detail, (
+        "не сказано, что Telegram уже остановлен — человек не поймёт, "
+        f"почему один воркер стоит: {detail!r}"
+    )

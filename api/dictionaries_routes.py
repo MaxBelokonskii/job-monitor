@@ -18,6 +18,7 @@ from job_monitor.criteria import (
     HH_EXPERIENCE,
     HH_SCHEDULE,
 )
+from job_monitor.workers.telegram import PLACEHOLDERS
 
 router = APIRouter(prefix="/api/dictionaries", tags=["dictionaries"])
 
@@ -33,4 +34,10 @@ async def dictionaries() -> dict[str, Any]:
         # занятости и графиков, и одно значение сужает выдачу, отсекая
         # вакансии, помеченные сразу двумя; опыт — одно, как на самом hh.ru.
         "multi": ["employment", "schedule"],
+        # Подстановки шаблона — отсюда же, а не списком в разметке. Два
+        # перечня одного и того же расходятся: добавим четвёртую — интерфейс
+        # о ней не узнает; уберём третью — он продолжит её предлагать, и
+        # человек вставит в шаблон текст, который уйдёт живому адресату
+        # вместе с фигурными скобками.
+        "placeholders": list(PLACEHOLDERS),
     }

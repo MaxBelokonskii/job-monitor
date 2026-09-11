@@ -185,10 +185,100 @@ def test_a_failed_row_delete_keeps_the_file(client, monkeypatch) -> None:
     with pytest.raises(sqlite3.OperationalError):
         client.delete(f"/api/resumes/{created['id']}")
 
-    row = next(
-        item for item in client.get("/api/resumes").json() if item["id"] == created["id"]
-    )
+    # Имя на диске берётся из репозитория, а не из ответа API: наружу оно
+    # намеренно не отдаётся (M-11). Проверка при этом остаётся о том же —
+    # что файл на месте, когда строка на месте.
+    from job_monitor.db.connection import get_connection
+    from job_monitor.db.repositories import ResumesRepo
+
+    row = ResumesRepo(get_connection()).get(created["id"])
+    assert row is not None, "строка исчезла, хотя удаление не удалось"
     assert resume_store.path_of(row["stored_name"]).exists(), (
         "строка осталась, а файл стёрт — скачивание такой записи даёт 404 "
         "без единого способа починить"
     )
+
+
+# ── Замечания ревью подпроекта 1 ──────────────────────────────────────
+
+
+def test_the_list_does_not_expose_the_name_on_disk(client) -> None:
+    """M-11. `stored_name` — внутреннее имя файла в каталоге данных, и
+    наружу ему незачем: клиент обращается к резюме по идентификатору
+    строки. Отданное поле рано или поздно становится полем, на которое
+    опираются, — а это имя мы генерируем случайным именно затем, чтобы
+    чужой файл нельзя было угадать."""
+    client.post("/api/resumes", content=b"%PDF-1.4 x", headers={"X-Filename": "cv.pdf"})
+    row = client.get("/api/resumes").json()[0]
+    assert "stored_name" not in row, f"имя на диске отдаётся наружу: {sorted(row)}"
+    assert sorted(row) == ["id", "original_name", "size_bytes", "uploaded_at"]
+
+
+def test_a_resume_file_can_be_replaced_in_place(client) -> None:
+    """M-9. Заменить файл было нечем: только удалить и загрузить заново, а
+    удаление резюме, на которое ссылается пресет, запрещено — то есть
+    обновить своё резюме было нельзя вообще, не разобрав пресеты.
+
+    Замена сохраняет идентификатор, поэтому пресеты продолжают работать.
+    """
+    created = client.post(
+        "/api/resumes", content=b"%PDF-1.4 first", headers={"X-Filename": "cv.pdf"}
+    ).json()
+
+    reply = client.put(
+        f"/api/resumes/{created['id']}",
+        content=b"%PDF-1.4 second version, longer",
+        headers={"X-Filename": "cv-2026.pdf"},
+    )
+    assert reply.status_code == 200
+    assert reply.json()["id"] == created["id"], "замена обязана сохранить идентификатор"
+
+    rows = client.get("/api/resumes").json()
+    assert len(rows) == 1, "замена не должна плодить записи"
+    assert rows[0]["original_name"] == "cv-2026.pdf"
+    assert rows[0]["size_bytes"] == len(b"%PDF-1.4 second version, longer")
+
+    assert client.get(f"/api/resumes/{created['id']}/download").content == (
+        b"%PDF-1.4 second version, longer"
+    )
+
+
+def test_replacing_a_resume_removes_the_old_file(client) -> None:
+    """Иначе каталог данных копил бы файлы, которых нет ни в одном
+    списке, — тот же мусор, что закрывало M-3, только с другой стороны."""
+    from job_monitor import paths
+
+    created = client.post(
+        "/api/resumes", content=b"%PDF-1.4 first", headers={"X-Filename": "cv.pdf"}
+    ).json()
+    before = set(paths.resume_dir().iterdir())
+
+    client.put(
+        f"/api/resumes/{created['id']}",
+        content=b"%PDF-1.4 second", headers={"X-Filename": "cv.pdf"},
+    )
+
+    after = set(paths.resume_dir().iterdir())
+    assert len(after) == len(before), f"старый файл остался: {sorted(p.name for p in after)}"
+
+
+def test_replacing_a_missing_resume_is_404(client) -> None:
+    assert client.put(
+        "/api/resumes/999999", content=b"%PDF-1.4 x", headers={"X-Filename": "cv.pdf"}
+    ).status_code == 404
+
+
+def test_a_rejected_replacement_keeps_the_old_file(client) -> None:
+    """Отказ по расширению не должен оставлять запись без файла: до сих
+    пор это был самый частый класс дефектов в этом роутере."""
+    created = client.post(
+        "/api/resumes", content=b"%PDF-1.4 first", headers={"X-Filename": "cv.pdf"}
+    ).json()
+
+    reply = client.put(
+        f"/api/resumes/{created['id']}",
+        content=b"zip-archive", headers={"X-Filename": "cv.zip"},
+    )
+    assert reply.status_code == 400
+
+    assert client.get(f"/api/resumes/{created['id']}/download").content == b"%PDF-1.4 first"

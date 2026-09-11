@@ -224,3 +224,94 @@ def test_a_broken_settings_block_does_not_cost_contacts_and_vacancies(conn, lega
     assert any("настройки" in note for note in report.skipped), report.skipped
     assert TgRepo(conn).contacts_total() == 2
     assert HhRepo(conn).exists("111") is True
+
+
+# ── M-8: file_path из старых настроек ─────────────────────────────────
+
+
+def test_the_old_resume_file_is_taken_into_the_library(tmp_path, monkeypatch) -> None:
+    """M-8. `file_path` из старых настроек просто отбрасывался.
+
+    В нём лежал путь к резюме, которое человек уже выбрал и которым уже
+    откликался. После обновления оно исчезало без следа: библиотека
+    пуста, пресет без вложения, и никакого сообщения об этом. Человек
+    узнавал бы об этом по молчаливо уходящим откликам без резюме.
+    """
+    from datetime import datetime
+
+    from job_monitor import paths, resume_store
+    from job_monitor.db.connection import connect
+    from job_monitor.db.repositories import ResumesRepo, SettingsRepo
+    from job_monitor.presets import import_legacy_criteria
+
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path / "data"))
+    legacy_file = tmp_path / "Резюме Иванов.pdf"
+    legacy_file.write_bytes("%PDF-1.4 старое резюме".encode())
+
+    conn = connect(str(tmp_path / "t.db"))
+    conn.execute("DELETE FROM presets")
+    SettingsRepo(conn).save({"channels": ["qajobs"], "file_path": str(legacy_file)})
+
+    preset_id = import_legacy_criteria(conn, datetime(2026, 9, 11, 12, 0, 0))
+    assert preset_id is not None
+
+    library = ResumesRepo(conn).list()
+    assert len(library) == 1, "старое резюме не попало в библиотеку"
+    assert library[0]["original_name"] == "Резюме Иванов.pdf"
+    assert resume_store.path_of(library[0]["stored_name"]).read_bytes() == (
+        "%PDF-1.4 старое резюме".encode()
+    )
+
+    from job_monitor.db.repositories import PresetsRepo
+
+    criteria = PresetsRepo(conn).get(preset_id)["criteria"]
+    assert criteria["resume_id"] == library[0]["id"], (
+        "резюме перенесено, но пресет на него не ссылается — отклики уйдут "
+        "без вложения"
+    )
+
+
+def test_a_missing_old_resume_does_not_break_the_import(tmp_path, monkeypatch) -> None:
+    """Путь мог протухнуть: файл переименовали, диск переставили. Перенос
+    контактов и вакансий из-за этого падать не должен — это ровно тот
+    дефект, который уже чинили в `migrate-legacy`."""
+    from datetime import datetime
+
+    from job_monitor.db.connection import connect
+    from job_monitor.db.repositories import PresetsRepo, ResumesRepo, SettingsRepo
+    from job_monitor.presets import import_legacy_criteria
+
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path / "data"))
+    conn = connect(str(tmp_path / "t.db"))
+    conn.execute("DELETE FROM presets")
+    SettingsRepo(conn).save({
+        "channels": ["qajobs"], "file_path": str(tmp_path / "которого нет.pdf"),
+    })
+
+    preset_id = import_legacy_criteria(conn, datetime(2026, 9, 11, 12, 0, 0))
+    assert preset_id is not None, "перенос сорвался из-за пропавшего файла"
+    assert ResumesRepo(conn).list() == []
+    assert PresetsRepo(conn).get(preset_id)["criteria"]["resume_id"] is None
+    assert PresetsRepo(conn).get(preset_id)["criteria"]["channels"] == ["qajobs"]
+
+
+def test_an_unsupported_old_resume_does_not_break_the_import(tmp_path, monkeypatch) -> None:
+    """Старая версия не проверяла расширение вовсе, так что в `file_path`
+    может лежать что угодно — вплоть до `.zip`. Библиотека такое не
+    принимает, и это не повод срывать перенос остального."""
+    from datetime import datetime
+
+    from job_monitor.db.connection import connect
+    from job_monitor.db.repositories import ResumesRepo, SettingsRepo
+    from job_monitor.presets import import_legacy_criteria
+
+    monkeypatch.setenv("JOB_MONITOR_DATA_DIR", str(tmp_path / "data"))
+    archive = tmp_path / "резюме.zip"
+    archive.write_bytes(b"PK\x03\x04")
+
+    conn = connect(str(tmp_path / "t.db"))
+    conn.execute("DELETE FROM presets")
+    SettingsRepo(conn).save({"channels": ["qajobs"], "file_path": str(archive)})
+
+    assert import_legacy_criteria(conn, datetime(2026, 9, 11, 12, 0, 0)) is not None
+    assert ResumesRepo(conn).list() == []

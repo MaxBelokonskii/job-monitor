@@ -82,10 +82,10 @@ async function apiSend(method, path, body = {}) {
 // apiSend: 403 обязан поднимать баннер протухшего токена, а не-JSON тело не
 // должно бросать исключение. Третий вызывающий `fetch` в этом файле — это
 // третья копия этих двух правил, и одна из копий однажды отстанет.
-async function apiUpload(path, filename, blob) {
+async function apiUpload(path, filename, blob, method = 'POST') {
   try {
     const res = await fetch(API + path, {
-      method: 'POST',
+      method,
       headers: headers({ 'X-Filename': encodeURIComponent(filename) }),
       body: blob,
     });
@@ -650,19 +650,38 @@ function removeEx(i) { tgState.exclude.splice(i, 1); renderKeywords(); }
 // лишний разборщик недоверенного ввода ради одного поля.
 
 // Delegated `change` handler: every action is called as action(arg, event).
+// Какую запись заменяем. `null` — обычная загрузка нового файла.
+// Хранится здесь, а не в атрибуте: выбор файла идёт через один скрытый
+// `<input type=file>` на всю страницу, и к моменту `change` кнопки,
+// вызвавшей диалог, в событии уже нет.
+let replacingResumeId = null;
+
+function replaceResume(id) {
+  replacingResumeId = Number(id);
+  const input = document.getElementById('fileInput');
+  if (input) input.click();
+}
+
 async function uploadResume(_arg, event) {
   const file = event.target.files[0];
+  // Цель сбрасывается ДО первого выхода: иначе отменённый диалог замены
+  // оставил бы её взведённой, и следующая обычная загрузка молча заменила
+  // бы чужую запись.
+  const replacing = replacingResumeId;
+  replacingResumeId = null;
   if (!file) return;
   event.target.value = '';   // тот же файл можно выбрать повторно
   const label = document.getElementById('fileZoneLabel');
-  if (label) label.textContent = 'Загружаю…';
-  const body = await apiUpload('/resumes', file.name, file);
+  if (label) label.textContent = replacing === null ? 'Загружаю…' : 'Заменяю…';
+  const body = replacing === null
+    ? await apiUpload('/resumes', file.name, file)
+    : await apiUpload(`/resumes/${replacing}`, file.name, file, 'PUT');
   if (label) label.textContent = 'Нажмите чтобы загрузить файл';
   if (!body || body.id === undefined) {
     showToast(configErrorDetail(body) || 'Не удалось загрузить резюме');
     return;
   }
-  showToast('Резюме загружено: ' + file.name);
+  showToast((replacing === null ? 'Резюме загружено: ' : 'Резюме заменено: ') + file.name);
   await loadResumes();
 }
 
@@ -693,6 +712,16 @@ async function loadResumes() {
     item.id === chosen
       ? el('span', { class: 'preset-meta', text: 'выбрано в пресете' })
       : null,
+    // Замена, а не «удалить и загрузить заново»: удаление резюме, на
+    // которое ссылается пресет, запрещено — и без этой кнопки обновить
+    // собственное резюме было нельзя, не разобрав сначала пресеты.
+    el('button', {
+      class: 'btn btn-secondary',
+      style: 'font-size:11.5px',
+      text: 'Заменить',
+      'data-action': 'replaceResume',
+      'data-arg': String(item.id),
+    }),
     el('button', {
       class: 'btn-del',
       text: '×',
@@ -1673,6 +1702,13 @@ async function loadActiveCriteria() {
     }
     renderChoiceBox('hhScheduleBox', dict.schedule, criteria.hh_schedule || [], 'hh-schedule');
     renderChoiceBox('hhEmploymentBox', dict.employment, criteria.hh_employment || [], 'hh-employment');
+    // Подсказка про подстановки — из справочника, а не списком в
+    // разметке: там она разошлась бы с render_template при первой правке,
+    // и человек вставил бы в шаблон то, что уйдёт адресату как есть.
+    const hint = document.getElementById('templateHint');
+    if (hint && Array.isArray(dict.placeholders)) {
+      hint.textContent = 'Подстановки: ' + dict.placeholders.join(', ');
+    }
   }
   await loadResumes();
 }
@@ -1727,6 +1763,7 @@ const ACTIONS = {
   addEx,
   pickFile,
   uploadResume,
+  replaceResume,
   deleteResume,
   activatePreset,
   createPreset,
