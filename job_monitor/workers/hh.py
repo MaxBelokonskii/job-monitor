@@ -213,24 +213,74 @@ class HhLogin:
 # ── Selenium-функции, перенесённые из hh_monitor.py без изменения логики ──
 
 
+#: Cookie, которым hh.ru сам помечает роль сессии: `anonymous` у гостя,
+#: `applicant` или `employer` у вошедшего.
+HH_ROLE_COOKIE = "hhrole"
+HH_ROLE_ANONYMOUS = "anonymous"
+#: Запасной признак: ссылка профиля в шапке. У гостя она ведёт на страницу
+#: входа, у вошедшего — в личный кабинет.
+HH_PROFILE_LINK = "//a[@data-qa='mainmenu_profile-link']"
+
+
 def is_logged_in(driver: Any) -> bool:
+    """Вошёл ли пользователь в hh.ru.
+
+    Смотрит на cookie `hhrole`, а не на разметку. Прежняя версия искала три
+    XPath — `mainmenu-userBlock`, `account-personal-link`,
+    `bloko-header-1`, — и к сентябрю 2026 не осталось ни одного: hh.ru
+    перешёл с дефисов на подчёркивания (`mainmenu_profile-link`).
+    Проверено в браузере на живом сайте.
+
+    Следствие было не косметическим. Вход не подтверждался НИКОГДА:
+    `confirm()` получал False и оставлял окно открытым с предложением
+    войти ещё раз, а `_blocking_loop` по той же причине отказывался
+    стартовать даже с годными cookies. hh.ru не работал вовсе, и понять
+    это по интерфейсу было нельзя.
+
+    Cookie надёжнее разметки, потому что это часть механизма авторизации,
+    а не оформления: его значение меняет сам hh.ru при входе и выходе, и
+    редизайн шапки его не трогает. Узел `mainmenu_profile-link`, для
+    сравнения, существует и у гостя — просто говорит «Войти», так что его
+    НАЛИЧИЕ признаком входа не является; признак — куда он ведёт.
+
+    Любая неопределённость трактуется как «не вошёл». Обратная ошибка
+    дороже: воркер пошёл бы откликаться разлогиненным и решил бы, что
+    вакансии просто не находятся.
+    """
     try:
-        driver.get("https://hh.ru")
+        driver.get(HOME_URL)
         time.sleep(3)
-        indicators = [
-            "//div[@data-qa='mainmenu-userBlock']",
-            "//a[@data-qa='account-personal-link']",
-            "//span[@data-qa='bloko-header-1']",
-        ]
-        for xpath in indicators:
-            try:
-                driver.find_element(By.XPATH, xpath)
-                return True
-            except NoSuchElementException:
-                continue
+        role = _cookie_value(driver, HH_ROLE_COOKIE)
+        if role is not None:
+            return role != HH_ROLE_ANONYMOUS
+        # Cookie пропал — возможно, hh.ru его переименовал. Молча вернуть
+        # False значит повторить ту же немоту, из-за которой прежний дефект
+        # и прожил незамеченным.
+        log.warning(
+            "hh.ru не выставил cookie %r — определяю вход по ссылке профиля; "
+            "если это повторяется, проверьте разметку сайта", HH_ROLE_COOKIE,
+        )
+        return _profile_link_is_personal(driver)
+    except Exception as error:  # noqa: BLE001 — «не смогли проверить» это тоже «не вошёл»
+        log.warning("не удалось проверить вход в hh.ru: %s", error)
         return False
-    except Exception:
+
+
+def _cookie_value(driver: Any, name: str) -> str | None:
+    for cookie in driver.get_cookies():
+        if cookie.get("name") == name:
+            return cookie.get("value")
+    return None
+
+
+def _profile_link_is_personal(driver: Any) -> bool:
+    """Ведёт ли ссылка профиля в кабинет, а не на страницу входа."""
+    try:
+        href = driver.find_element(By.XPATH, HH_PROFILE_LINK).get_attribute("href") or ""
+    except NoSuchElementException:
+        log.warning("ссылка профиля в шапке hh.ru не найдена — считаю, что входа нет")
         return False
+    return "/account/login" not in href
 
 
 def setup_driver(headless: bool = False) -> "webdriver.Chrome":

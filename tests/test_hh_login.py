@@ -401,3 +401,121 @@ def test_a_real_selenium_failure_inside_confirm_is_not_disguised_as_a_400(client
         app_login._is_logged_in = saved_check
         app_login._driver = None
         app_login.state = HhLoginState.logged_out
+
+
+# ── Определение входа: cookie, а не разметка ──────────────────────────
+
+
+class CookieDriver:
+    """Драйвер, у которого есть cookies и (необязательно) разметка.
+
+    `is_logged_in` до сих пор не имел ни одного теста: везде, где он
+    встречается, его подменяли заглушкой. Ровно поэтому никто и не заметил,
+    что он перестал работать — 828 тестов проходили мимо единственной
+    функции, которая смотрит на живую разметку hh.ru.
+    """
+
+    def __init__(self, cookies: dict[str, str], profile_href: str | None = None):
+        self._cookies = cookies
+        self._profile_href = profile_href
+        self.visited: list[str] = []
+
+    def get(self, url: str) -> None:
+        self.visited.append(url)
+
+    def get_cookies(self) -> list[dict]:
+        return [{"name": k, "value": v} for k, v in self._cookies.items()]
+
+    def find_element(self, by, value):
+        from selenium.common.exceptions import NoSuchElementException
+
+        if self._profile_href is None:
+            raise NoSuchElementException(value)
+
+        class Node:
+            def __init__(self, href):
+                self._href = href
+
+            def get_attribute(self, name):
+                return self._href if name == "href" else None
+
+        return Node(self._profile_href)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_waiting(monkeypatch):
+    """`is_logged_in` спит три секунды, ожидая загрузки страницы."""
+    monkeypatch.setattr("job_monitor.workers.hh.time.sleep", lambda _s: None)
+
+
+def test_an_applicant_session_is_recognised_as_logged_in():
+    """Регресс на дефект, найденный при первом живом входе.
+
+    Проверка искала три XPath — `mainmenu-userBlock`,
+    `account-personal-link`, `bloko-header-1`. К сентябрю 2026 не осталось
+    ни одного: hh.ru перешёл с дефисов на подчёркивания. Проверено в
+    браузере на живом hh.ru — все три отсутствуют.
+
+    Следствие было не косметическим: вход не подтверждался никогда, а
+    воркер отказывался стартовать даже с годными cookies. hh.ru не работал
+    вовсе.
+    """
+    from job_monitor.workers.hh import is_logged_in
+
+    assert is_logged_in(CookieDriver({"hhrole": "applicant", "hhuid": "x"})) is True
+
+
+def test_an_anonymous_session_is_not_logged_in():
+    from job_monitor.workers.hh import is_logged_in
+
+    assert is_logged_in(CookieDriver({"hhrole": "anonymous", "hhuid": "x"})) is False
+
+
+def test_an_employer_session_counts_as_logged_in():
+    """Роль может быть не только `applicant`: важно лишь, что она не
+    гостевая. Сравнение с «анонимом», а не перечисление ролей, — чтобы
+    новая роль не стала молчаливым отказом."""
+    from job_monitor.workers.hh import is_logged_in
+
+    assert is_logged_in(CookieDriver({"hhrole": "employer"})) is True
+
+
+def test_without_the_role_cookie_it_falls_back_to_the_profile_link(caplog):
+    """Если hh.ru переименует cookie, проверка не должна молча сломаться —
+    как сломалась прежняя. Запасной признак: ссылка профиля ведёт на
+    страницу входа, значит вошедшего нет."""
+    from job_monitor.workers.hh import is_logged_in
+
+    anonymous = CookieDriver({}, profile_href="https://hh.ru/account/login?role=applicant")
+    personal = CookieDriver({}, profile_href="https://hh.ru/applicant/resumes")
+
+    assert is_logged_in(anonymous) is False
+    assert is_logged_in(personal) is True
+    assert "hhrole" in caplog.text, "переход на запасной признак не отмечен в журнале"
+
+
+def test_an_unreadable_page_is_not_reported_as_logged_in():
+    """Осторожная сторона: не смогли определить — значит «не вошёл».
+    Обратная ошибка дороже: воркер пошёл бы откликаться разлогиненным."""
+    from job_monitor.workers.hh import is_logged_in
+
+    assert is_logged_in(CookieDriver({})) is False
+
+
+def test_the_check_does_not_swallow_the_reason(caplog):
+    """Прежняя версия ловила `Exception` и возвращала False молча: сбой
+    драйвера выглядел для человека как «вы не вошли», и в журнале не было
+    ни строчки. Именно эта немота и сделала дефект непрозрачным."""
+    import logging
+
+    from job_monitor.workers.hh import is_logged_in
+
+    class BrokenDriver:
+        def get(self, url):
+            raise RuntimeError("chromedriver не отвечает")
+
+    with caplog.at_level(logging.WARNING):
+        assert is_logged_in(BrokenDriver()) is False
+    assert "chromedriver не отвечает" in caplog.text, (
+        "причина отказа нигде не названа — человек увидит «вы не вошли»"
+    )
