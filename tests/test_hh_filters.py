@@ -461,3 +461,38 @@ def test_a_card_without_a_salary_says_so_and_does_not_invent_one():
     assert found[0]["salary"] == "Не указана", (
         f"выдумана зарплата из постороннего числа: {found[0]['salary']!r}"
     )
+
+
+# ── Поиск по названию вакансии, а не по всему тексту ──────────────────
+
+
+def test_the_search_matches_the_job_title_only():
+    """Измерено на живом hh.ru с критериями партнёра.
+
+    Без `search_field=name` по запросу «Frontend-разработчик» приходили
+    Senior PHP Developer, Java-разработчик, DevOps, системный аналитик,
+    менеджер интернет-проектов: hh.ru ищет по всему тексту вакансии, и
+    достаточно упоминания фронтенда где-нибудь в описании. В очереди
+    оказалось 39 посторонних записей из 64 — шестьдесят один процент.
+
+    С параметром — 19 вакансий, все девятнадцать про фронтенд.
+
+    Очередь существует, чтобы человек её ПРОЧИТАЛ и решил, откликаться ли.
+    Список, где три записи из пяти чужие, эту работу не облегчает, а
+    создаёт: проще открыть hh.ru самому.
+    """
+    from job_monitor.criteria import SearchCriteria
+    from job_monitor.workers.hh import build_search_url
+
+    url = build_search_url("Frontend-разработчик", SearchCriteria())
+    assert "search_field=name" in url
+
+
+def test_the_search_field_is_not_a_setting():
+    """Как и регион (решение D8): поле «Профессии на hh.ru» и означает
+    название должности. Искать по описанию — другой инструмент, а не
+    другая галочка; расширяется это добавлением вариантов названия, что
+    интерфейс и предлагает списком."""
+    from job_monitor.criteria import SearchCriteria
+
+    assert not hasattr(SearchCriteria(), "hh_search_field")
