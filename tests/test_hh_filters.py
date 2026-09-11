@@ -257,3 +257,207 @@ def test_a_vacancy_without_an_apply_button_is_not_counted_as_applied():
         GlobalSettings(),
     )
     assert applied is False
+
+
+# ── Разметка hh.ru: разбор не должен зависеть от тега ─────────────────
+
+import re as _re
+
+
+class TagStrictElement:
+    """Элемент, который знает свой тег и сопоставляет XPath как Selenium.
+
+    Прежний двойник (`FakeElement` выше) искал по вхождению подстроки и тег
+    игнорировал — то есть был снисходительнее настоящего браузера ровно в
+    том измерении, где потом всё и сломалось: hh.ru сменил `div` на
+    `section` и `article`, XPath `//div[@data-qa='…']` перестал совпадать
+    на живом сайте, а в тестах продолжал «находить» элемент.
+
+    Двойник обязан быть строг там, где строга реальность.
+    """
+
+    _XPATH = _re.compile(r"\.?//(?P<tag>[\w*]+)\[@data-qa='(?P<qa>[^']+)'\]")
+
+    def __init__(self, tag: str, data_qa: str = "", text: str = "",
+                 attributes: dict | None = None, children: list | None = None):
+        self.tag = tag
+        self.data_qa = data_qa
+        self._own_text = text
+        self._attributes = attributes or {}
+        self.children = children or []
+
+    @property
+    def text(self) -> str:
+        """Текст поддерева, как у настоящего Selenium, а не только свой.
+
+        Важно для разбора зарплаты: у hh.ru её узел остался без единого
+        `data-qa`, и добыть её можно только из текста карточки.
+        """
+        parts = [self._own_text] + [c.text for c in self.children]
+        return "\n".join(p for p in parts if p)
+
+    def get_attribute(self, name: str):
+        return self._attributes.get(name)
+
+    def _matches(self, selector: str) -> bool:
+        found = self._XPATH.search(selector)
+        if not found:
+            return False
+        tag, qa = found.group("tag"), found.group("qa")
+        return self.data_qa == qa and tag in ("*", self.tag)
+
+    def _walk(self):
+        for child in self.children:
+            yield child
+            yield from child._walk()
+
+    def find_element(self, by, selector):
+        for node in self._walk():
+            if node._matches(selector):
+                return node
+        raise NoSuchElementException(selector)
+
+    def find_elements(self, by, selector):
+        return [node for node in self._walk() if node._matches(selector)]
+
+
+def _hh_page_as_it_is_today() -> TagStrictElement:
+    """Разметка страницы поиска hh.ru на сентябрь 2026.
+
+    Теги проверены в браузере на живом сайте: контейнер результатов —
+    `section`, карточка вакансии — `article`, адрес — `span`. Раньше все
+    три были `div`.
+    """
+    card = TagStrictElement("article", "vacancy-serp__vacancy", children=[
+        TagStrictElement("a", "serp-item__title", text="Frontend-разработчик",
+                         attributes={"href": "https://hh.ru/vacancy/42?from=serp"}),
+        TagStrictElement("a", "vacancy-serp__vacancy-employer", text="ООО Ромашка"),
+        TagStrictElement("span", "vacancy-serp__vacancy-address", text="Москва"),
+    ])
+    return TagStrictElement("html", children=[
+        TagStrictElement("section", "vacancy-serp__results", children=[card]),
+    ])
+
+
+class TodaysHhDriver:
+    def __init__(self):
+        self._root = _hh_page_as_it_is_today()
+        self.visited: list[str] = []
+
+    def get(self, url):
+        self.visited.append(url)
+
+    def find_element(self, by, selector):
+        return self._root.find_element(by, selector)
+
+    def find_elements(self, by, selector):
+        return self._root.find_elements(by, selector)
+
+
+def test_the_parser_reads_todays_hh_markup():
+    """Регресс на дефект, найденный при первом живом запуске воркера.
+
+    Журнал показывал «Результаты поиска не загрузились» по разу на каждую
+    профессию, а на самой странице было 49 вакансий: `h1` их называл.
+    Причина — XPath `//div[@data-qa='vacancy-serp__results']`, тогда как
+    hh.ru перешёл на семантическую разметку и контейнер стал `section`, а
+    карточка — `article`.
+
+    Дефект стоил всего поиска: воркер отчитывался «работает» и не находил
+    ничего.
+    """
+    from job_monitor.criteria import SearchCriteria
+    from job_monitor.workers.hh import get_vacancies_from_page
+
+    found = get_vacancies_from_page(TodaysHhDriver(), SearchCriteria())
+
+    assert len(found) == 1, "страница сегодняшней разметки прочитана как пустая"
+    assert found[0]["vacancy_id"] == "42"
+    assert found[0]["title"] == "Frontend-разработчик"
+    assert found[0]["company"] == "ООО Ромашка"
+    assert found[0]["city"] == "Москва"
+
+
+def test_the_parser_does_not_depend_on_the_tag():
+    """Свойство, а не конкретные теги: `data-qa` — собственный крючок
+    hh.ru для тестов, он переживает редизайн; тег относится к оформлению и
+    уже поменялся под нами один раз.
+
+    Поэтому проверка не «контейнер это section», а «разбор работает при
+    любом теге»: следующая смена не должна ничего ломать.
+    """
+    from job_monitor.criteria import SearchCriteria
+    from job_monitor.workers.hh import get_vacancies_from_page
+
+    for tag_results, tag_card in (("div", "div"), ("section", "article"), ("main", "li")):
+        driver = TodaysHhDriver()
+        driver._root = TagStrictElement("html", children=[
+            TagStrictElement(tag_results, "vacancy-serp__results", children=[
+                TagStrictElement(tag_card, "vacancy-serp__vacancy", children=[
+                    TagStrictElement("a", "serp-item__title", text="QA",
+                                     attributes={"href": "https://hh.ru/vacancy/7"}),
+                ]),
+            ]),
+        ])
+        found = get_vacancies_from_page(driver, SearchCriteria())
+        assert len(found) == 1, f"разбор сломался на тегах {tag_results}/{tag_card}"
+
+
+def _card_with_salary(salary_line: str) -> TagStrictElement:
+    """Карточка, где зарплата написана, но крючка `data-qa` у неё нет."""
+    return TagStrictElement("article", "vacancy-serp__vacancy", children=[
+        TagStrictElement("a", "serp-item__title", text="Frontend-разработчик",
+                         attributes={"href": "https://hh.ru/vacancy/42"}),
+        TagStrictElement("div", children=[TagStrictElement("span", text=salary_line)]),
+    ])
+
+
+def _page_of(card: TagStrictElement) -> TodaysHhDriver:
+    driver = TodaysHhDriver()
+    driver._root = TagStrictElement("html", children=[
+        TagStrictElement("section", "vacancy-serp__results", children=[card]),
+    ])
+    return driver
+
+
+@pytest.mark.parametrize("строка, ожидается", [
+    ("от 150 000 ₽ за месяц, на руки", "от 150 000 ₽ за месяц, на руки"),
+    ("100 000 – 180 000 ₽ за месяц", "100 000 – 180 000 ₽ за месяц"),
+    ("до 4 500 $ за месяц", "до 4 500 $ за месяц"),
+])
+def test_the_salary_is_read_from_the_card_text(строка, ожидается):
+    """У узла зарплаты не осталось ни одного `data-qa` — проверено в
+    браузере на живом hh.ru. Раньше он назывался
+    `vacancy-serp__vacancy-compensation`, теперь это голый `span` внутри
+    безымянных `div`.
+
+    Зарплата не влияет на поведение (фильтр по ней уходит в адрес поиска),
+    но по карточке человек решает, откликаться ли руками. Писать «Не
+    указана» там, где стоит «от 150 000 ₽», — врать в том единственном
+    месте, ради которого весь список и существует.
+    """
+    from job_monitor.criteria import SearchCriteria
+    from job_monitor.workers.hh import get_vacancies_from_page
+
+    found = get_vacancies_from_page(_page_of(_card_with_salary(строка)), SearchCriteria())
+    assert found[0]["salary"] == ожидается
+
+
+def test_a_card_without_a_salary_says_so_and_does_not_invent_one():
+    """Обратная сторона: разбор по тексту не должен принимать за деньги
+    случайное число — «Сейчас смотрят 6 человек», «4.7 • 10829 отзывов»,
+    номер вакансии. Такие строки в карточке есть всегда."""
+    from job_monitor.criteria import SearchCriteria
+    from job_monitor.workers.hh import get_vacancies_from_page
+
+    card = TagStrictElement("article", "vacancy-serp__vacancy", children=[
+        TagStrictElement("a", "serp-item__title", text="QA",
+                         attributes={"href": "https://hh.ru/vacancy/7"}),
+        TagStrictElement("span", text="Сейчас смотрят 6 человек"),
+        TagStrictElement("span", text="4.7 • 10829 отзывов"),
+        TagStrictElement("span", text="Опыт 3-6 лет"),
+    ])
+    found = get_vacancies_from_page(_page_of(card), SearchCriteria())
+    assert found[0]["salary"] == "Не указана", (
+        f"выдумана зарплата из постороннего числа: {found[0]['salary']!r}"
+    )
