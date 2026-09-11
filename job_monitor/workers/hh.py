@@ -458,10 +458,15 @@ def apply_to_vacancy(
         time.sleep(random.uniform(2, 4))
 
         apply_btn = None
+        # Тег не указан по той же причине, что и в `get_vacancies_from_page`:
+        # он относится к оформлению и уже менялся под нами. Раньше здесь
+        # было по два селектора на каждое имя — `//a[…]` и `//button[…]`, —
+        # то есть та же мысль, выраженная перечислением; теперь она
+        # выражена прямо. Последний селектор остаётся запасным на случай,
+        # если исчезнет и `data-qa`.
         selectors = [
-            "//a[@data-qa='vacancy-response-link-top']",
-            "//button[@data-qa='vacancy-response-link-top']",
-            "//a[@data-qa='vacancy-response-link-bottom']",
+            "//*[@data-qa='vacancy-response-link-top']",
+            "//*[@data-qa='vacancy-response-link-bottom']",
             "//button[contains(@class, 'vacancy-response')]",
         ]
         for sel in selectors:
