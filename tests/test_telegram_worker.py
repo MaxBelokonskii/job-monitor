@@ -272,3 +272,93 @@ async def test_a_post_that_does_not_match_is_never_a_find(conn, criteria):
 
     off_topic = IncomingPost("qajobs", "Продам гараж, @seller", 32)
     assert counts_as_a_find(off_topic, criteria, TgFoundRepo(conn)) is False
+
+
+# ── Чтение истории каналов ────────────────────────────────────────────
+
+
+async def test_history_is_scanned_channel_by_channel():
+    """Настройка «Читать историю каналов» не делала НИЧЕГО.
+
+    Переключатель был в интерфейсе, значение сохранялось в базу, рядом
+    стояла вторая настройка «сколько сообщений читать» — и ни одну из них
+    не читала ни одна строка воркера. Человек включал историю, перезапускал
+    воркер и получал ту же пустую очередь, без единого объяснения.
+
+    Это обещание интерфейса, за которым не было кода, — тот же класс, что
+    карточка «Регион поиска» с выбором там, где константа.
+    """
+    from job_monitor.workers.telegram import scan_history
+
+    прочитано = []
+
+    async def fetch(channel, limit):
+        прочитано.append((channel, limit))
+        for message_id in range(1, 3):
+            yield message_id, f"пост {message_id} из {channel}"
+
+    обработано = []
+
+    async def handle(post):
+        обработано.append((post.channel, post.message_id, post.text))
+
+    await scan_history(["qajobs", "itjobs"], fetch, handle, limit=50)
+
+    assert прочитано == [("qajobs", 50), ("itjobs", 50)]
+    assert len(обработано) == 4
+    assert обработано[0] == ("qajobs", 1, "пост 1 из qajobs")
+
+
+async def test_an_unreachable_channel_does_not_stop_the_scan():
+    """Канал мог быть переименован, удалён или закрыт для этого аккаунта.
+    Терять из-за него остальные шесть — значит наказывать человека за
+    опечатку в одном названии."""
+    from job_monitor.workers.telegram import scan_history
+
+    async def fetch(channel, limit):
+        if channel == "битый":
+            raise ValueError("Cannot find any entity corresponding to \"битый\"")
+        yield 1, "вакансия"
+
+    обработано = []
+
+    async def handle(post):
+        обработано.append(post.channel)
+
+    await scan_history(["битый", "живой"], fetch, handle, limit=10)
+
+    assert обработано == ["живой"], "сканирование оборвалось на первом же отказе"
+
+
+async def test_an_empty_message_is_skipped():
+    """У поста может не быть текста вовсе — одна картинка или файл.
+    Живой обработчик такие пропускает, история обязана вести себя так же."""
+    from job_monitor.workers.telegram import scan_history
+
+    async def fetch(channel, limit):
+        yield 1, ""
+        yield 2, None
+        yield 3, "настоящая вакансия"
+
+    обработано = []
+
+    async def handle(post):
+        обработано.append(post.message_id)
+
+    await scan_history(["qajobs"], fetch, handle, limit=10)
+    assert обработано == [3]
+
+
+async def test_the_worker_reads_the_setting_it_offers(conn):
+    """Связь настройки с поведением. Проверяется на уровне модуля: сам
+    `run_worker` требует живого Telethon, а вот то, что он СМОТРИТ на
+    `parse_history` и `history_limit`, проверить можно и нужно — именно
+    отсутствие этой связи и было дефектом."""
+    import inspect
+
+    from job_monitor.workers import telegram
+
+    source = inspect.getsource(telegram.run_worker)
+    assert "parse_history" in source, "воркер не смотрит на «читать историю»"
+    assert "history_limit" in source, "воркер не смотрит на «сколько сообщений»"
+    assert "scan_history" in source, "история не сканируется при запуске"
