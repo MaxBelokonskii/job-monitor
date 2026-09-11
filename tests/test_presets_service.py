@@ -67,7 +67,7 @@ def test_legacy_settings_become_the_first_preset(conn) -> None:
     """Перенос существующих настроек: критерии уезжают в пресет
     «Импортированные настройки», глобальное остаётся в settings."""
     SettingsRepo(conn).save({
-        "channels": ["itvacancykz"],
+        "channels": ["qajobs"],
         "keywords": ["qa", "тестировщик"],
         "exclude": ["senior"],
         "template": "здравствуйте",
@@ -92,7 +92,7 @@ def test_legacy_settings_become_the_first_preset(conn) -> None:
     stored = PresetsRepo(conn).get(preset_id)
     assert stored["name"] == "Импортированные настройки"
     criteria = SearchCriteria(**stored["criteria"])
-    assert criteria.channels == ["itvacancykz"]
+    assert criteria.channels == ["qajobs"]
     assert criteria.tg_keywords == ["qa", "тестировщик"]
     assert criteria.tg_exclude == ["senior"]
     assert criteria.professions == ["QA"], "hh_keywords должны стать professions"

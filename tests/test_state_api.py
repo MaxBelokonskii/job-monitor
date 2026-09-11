@@ -29,7 +29,7 @@ def isolated_state(tmp_path, monkeypatch):
 def test_counts_come_from_database(client):
     conn = connection.get_connection()
     now = datetime.now()
-    TgRepo(conn).record_send("@hr_anna", "itvacancykz", "QA", now)
+    TgRepo(conn).record_send("@hr_anna", "qajobs", "QA", now)
     HhRepo(conn).upsert({"vacancy_id": "1", "title": "QA", "status": "отклик отправлен",
                          "found_at": now.isoformat(), "applied_at": now.isoformat()})
     body = client.get("/api/state", headers=AUTH).json()
@@ -183,8 +183,8 @@ def test_api_hash_set_is_true_once_the_hash_is_stored(client, tmp_path):
 
 def test_tg_chats_returns_an_empty_string_when_there_is_no_preview(client):
     conn = connection.get_connection()
-    TgRepo(conn).record_send("@no_preview", "itvacancykz", None, datetime(2024, 1, 2, 3, 4))
-    TgRepo(conn).record_send("@with_preview", "itvacancykz", "Ищем QA",
+    TgRepo(conn).record_send("@no_preview", "qajobs", None, datetime(2024, 1, 2, 3, 4))
+    TgRepo(conn).record_send("@with_preview", "qajobs", "Ищем QA",
                              datetime(2024, 1, 2, 3, 5))
 
     rows = client.get("/api/tg/chats", headers=AUTH).json()
