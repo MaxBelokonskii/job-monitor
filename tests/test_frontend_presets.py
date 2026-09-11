@@ -208,3 +208,48 @@ def test_a_rejected_criteria_save_is_not_reported_as_saved() -> None:
     """
     result = _run_node(f"(async () => {{\n{script}\n}})();")
     assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
+
+
+# ── M-10: подстановки шаблона не дублируются руками ───────────────────
+
+
+def test_the_template_placeholders_come_from_the_backend() -> None:
+    """M-10. `PLACEHOLDERS` в `workers/telegram.py` не читал никто, а
+    подсказка в интерфейсе была написана руками.
+
+    Два списка одного и того же: добавим четвёртую подстановку в
+    `render_template` — интерфейс о ней не узнает, а уберём третью — он
+    продолжит её предлагать, и человек вставит в шаблон текст, который
+    уйдёт живому человеку как есть, с фигурными скобками.
+    """
+    index = _index_source()
+    assert "{канал}" not in index, (
+        "подстановки перечислены прямо в разметке — они разойдутся с "
+        "render_template при первой правке"
+    )
+    assert "placeholders" in _app_source(), (
+        "интерфейс не запрашивает подстановки у бэкенда"
+    )
+
+
+def test_the_dictionaries_endpoint_serves_the_placeholders(client) -> None:
+    """Обратная сторона: список обязан приходить, и приходить настоящий —
+    тот же кортеж, который подставляет `render_template`."""
+    from job_monitor.workers.telegram import PLACEHOLDERS
+
+    served = client.get("/api/dictionaries").json()["placeholders"]
+    assert served == list(PLACEHOLDERS)
+
+
+def test_every_served_placeholder_is_actually_substituted() -> None:
+    """Самая дорогая проверка из трёх: подсказка не должна обещать
+    подстановку, которой нет. Обещанная и не выполненная подстановка
+    уходит в личку живому человеку вместе с фигурными скобками."""
+    from job_monitor.workers.telegram import PLACEHOLDERS, render_template
+
+    rendered = render_template(
+        " ".join(PLACEHOLDERS), "qajobs", "qa", "QA Engineer"
+    )
+    assert "{" not in rendered, (
+        f"подстановка обещана, но не выполняется: {rendered}"
+    )
