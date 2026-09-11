@@ -28,6 +28,50 @@ router = APIRouter(prefix="/api/resumes", tags=["resumes"])
 FILENAME_HEADER = "X-Filename"
 
 
+def _view(row: dict) -> dict[str, Any]:
+    """Запись библиотеки наружу.
+
+    `stored_name` сюда не попадает: это внутреннее имя файла в каталоге
+    данных, а клиент обращается к резюме по идентификатору строки. Имя
+    генерируется случайным именно затем, чтобы чужой файл нельзя было
+    угадать, — отдавать его наружу значит обесценивать эту меру.
+    """
+    return {
+        "id": row["id"],
+        "original_name": row["original_name"],
+        "size_bytes": row["size_bytes"],
+        "uploaded_at": row["uploaded_at"],
+    }
+
+
+def _filename_from(request: Request) -> str:
+    raw_name = request.headers.get(FILENAME_HEADER, "")
+    if not raw_name:
+        raise HTTPException(
+            status_code=400,
+            detail=f"не указано имя файла: нужен заголовок {FILENAME_HEADER}",
+        )
+    return unquote(raw_name)
+
+
+async def _receive(request: Request, original_name: str) -> tuple[str, int]:
+    """Принимает тело потоком и возвращает `(имя на диске, размер)`.
+
+    Куски пишутся на диск по мере прихода, а не копятся в памяти: держать
+    десять мегабайт на каждую загрузку незачем, когда файл всё равно едет
+    в файл. Предел проверяется по ходу, поэтому слишком большое тело
+    обрывается на первом лишнем куске — заголовку `content-length` здесь
+    не верят вовсе, он приходит от клиента.
+    """
+    try:
+        with resume_store.receiving(original_name) as incoming:
+            async for chunk in request.stream():
+                incoming.write(chunk)
+            return incoming.commit()
+    except resume_store.ResumeRejected as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
 @router.post("")
 async def upload_resume(request: Request) -> dict[str, Any]:
     """Принимает файл телом запроса и возвращает его запись в библиотеке.
@@ -38,34 +82,8 @@ async def upload_resume(request: Request) -> dict[str, Any]:
     которого нет; а если вставка строки не удалась, файл стирается обратно,
     иначе он остался бы в каталоге навсегда и невидимым для интерфейса.
     """
-    raw_name = request.headers.get(FILENAME_HEADER, "")
-    if not raw_name:
-        raise HTTPException(
-            status_code=400,
-            detail=f"не указано имя файла: нужен заголовок {FILENAME_HEADER}",
-        )
-    original_name = unquote(raw_name)
-
-    # Отказ по объявленному размеру ДО чтения тела: иначе десятки мегабайт
-    # сначала окажутся в памяти процесса и только потом будут отвергнуты.
-    #
-    # Это оптимизация, а не защита, и тестом она не закрепляется: снятие
-    # этой проверки не меняет ни кода ответа, ни содержимого — слишком
-    # большой файл всё равно отвергает `resume_store.store`. Мутация,
-    # убирающая её, проходит зелёной, и это ожидаемо.
-    declared = request.headers.get("content-length")
-    if declared and declared.isdigit() and int(declared) > resume_store.MAX_BYTES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"файл больше {resume_store.MAX_BYTES // (1024 * 1024)} МБ",
-        )
-
-    data = await request.body()
-    try:
-        stored_name, size = resume_store.store(original_name, data)
-    except resume_store.ResumeRejected as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-
+    original_name = _filename_from(request)
+    stored_name, size = await _receive(request, original_name)
     try:
         resume_id = ResumesRepo(get_connection()).add(
             original_name, stored_name, size, datetime.now()
@@ -79,9 +97,40 @@ async def upload_resume(request: Request) -> dict[str, Any]:
     return {"id": resume_id, "original_name": original_name, "size_bytes": size}
 
 
+@router.put("/{resume_id}")
+async def replace_resume(resume_id: int, request: Request) -> dict[str, Any]:
+    """Меняет файл резюме, сохраняя запись.
+
+    Без этого роута обновить собственное резюме было нельзя: удалить и
+    загрузить заново — единственный путь, а удаление резюме, на которое
+    ссылается пресет, запрещено (и правильно: пресет остался бы указывать
+    в пустоту). Получался тупик на самом обычном действии.
+
+    Идентификатор сохраняется, поэтому пресеты продолжают работать.
+    Старый файл стирается ПОСЛЕ успешной замены строки: обратный порядок
+    оставил бы запись, указывающую в пустоту, — тот же дефект, что
+    закрывало M-3.
+    """
+    conn = get_connection()
+    repo = ResumesRepo(conn)
+    previous = repo.get(resume_id)
+    if previous is None:
+        raise HTTPException(status_code=404, detail="резюме не найдено")
+
+    original_name = _filename_from(request)
+    stored_name, size = await _receive(request, original_name)
+    try:
+        repo.replace_file(resume_id, original_name, stored_name, size, datetime.now())
+    except Exception:
+        resume_store.remove(stored_name)
+        raise
+    resume_store.remove(previous["stored_name"])
+    return {"id": resume_id, "original_name": original_name, "size_bytes": size}
+
+
 @router.get("")
 async def list_resumes() -> list[dict[str, Any]]:
-    return ResumesRepo(get_connection()).list()
+    return [_view(row) for row in ResumesRepo(get_connection()).list()]
 
 
 @router.get("/{resume_id}/download")

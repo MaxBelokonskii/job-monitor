@@ -14,6 +14,8 @@ from __future__ import annotations
 import os
 import secrets
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from job_monitor import paths
@@ -54,36 +56,91 @@ def _extension_of(original_name: str) -> str:
     return suffix
 
 
-def store(original_name: str, data: bytes) -> tuple[str, int]:
-    """Сохраняет файл и возвращает `(имя на диске, размер)`.
+class Incoming:
+    """Приём файла кусками во временный файл.
 
-    Имя на диске — случайный токен плюс расширение. Не идентификатор из БД:
-    иначе имя пришлось бы знать до вставки строки, а угадать чужой файл по
-    последовательному номеру было бы можно.
+    Существует ради того, чтобы тело запроса не держать целиком в памяти:
+    десять мегабайт на каждую загрузку — плата, которую незачем вносить,
+    когда файл всё равно едет на диск. Предел проверяется по ходу приёма,
+    поэтому слишком большой файл отвергается на первом же лишнем куске, а
+    не после того, как целиком прочитан.
+
+    Записи наружу не видно, пока не вызван `commit()`: до него файл лежит
+    под временным именем с точкой в начале, а `commit()` переносит его
+    одним `os.replace` — то есть либо файл есть целиком, либо его нет.
     """
-    if not data:
-        raise ResumeRejected("пустой файл")
-    if len(data) > MAX_BYTES:
-        raise ResumeRejected(
-            f"файл больше {MAX_BYTES // (1024 * 1024)} МБ ({len(data)} байт)"
-        )
-    extension = _extension_of(original_name)
-    stored_name = f"{secrets.token_hex(16)}{extension}"
 
-    directory = paths.resume_dir()
-    handle, temporary = tempfile.mkstemp(dir=directory, prefix=".upload-")
-    try:
-        with os.fdopen(handle, "wb") as stream:
-            stream.write(data)
+    def __init__(self, extension: str) -> None:
+        self._extension = extension
+        self._size = 0
+        self._directory = paths.resume_dir()
+        handle, self._temporary = tempfile.mkstemp(
+            dir=self._directory, prefix=".upload-"
+        )
+        self._stream = os.fdopen(handle, "wb")
+
+    def write(self, chunk: bytes) -> None:
+        self._size += len(chunk)
+        if self._size > MAX_BYTES:
+            raise ResumeRejected(
+                f"файл больше {MAX_BYTES // (1024 * 1024)} МБ"
+            )
+        self._stream.write(chunk)
+
+    def commit(self) -> tuple[str, int]:
+        """Переносит принятое под случайным именем. `(имя на диске, размер)`.
+
+        Имя — случайный токен плюс расширение, а не идентификатор из БД:
+        иначе имя пришлось бы знать до вставки строки, а угадать чужой
+        файл по последовательному номеру было бы можно.
+        """
+        if self._size == 0:
+            raise ResumeRejected("пустой файл")
+        self._stream.close()
         # `mkstemp` и так создаёт файл с 0600 независимо от umask, так что
         # это подстраховка, а не несущая конструкция: тест на права
         # проходит и без неё. Строка остаётся на случай, если способ
         # создания файла когда-нибудь сменят на менее строгий.
-        os.chmod(temporary, FILE_MODE)
-        os.replace(temporary, directory / stored_name)
+        os.chmod(self._temporary, FILE_MODE)
+        stored_name = f"{secrets.token_hex(16)}{self._extension}"
+        os.replace(self._temporary, self._directory / stored_name)
+        return stored_name, self._size
+
+    def abort(self) -> None:
+        """Убирает за собой. Вызывается и после `commit()` — тогда убирать
+        уже нечего, и это нормально."""
+        try:
+            self._stream.close()
+        except OSError:  # pragma: no cover — поток уже закрыт commit'ом
+            pass
+        Path(self._temporary).unlink(missing_ok=True)
+
+
+@contextmanager
+def receiving(original_name: str) -> Iterator[Incoming]:
+    """Приём файла: расширение проверяется ДО первого прочитанного байта.
+
+    Иначе отказ по расширению стоил бы чтения всего тела — и злонамеренному
+    клиенту хватило бы неподходящего имени, чтобы заставить приложение
+    принять десять мегабайт впустую.
+    """
+    incoming = Incoming(_extension_of(original_name))
+    try:
+        yield incoming
     finally:
-        Path(temporary).unlink(missing_ok=True)
-    return stored_name, len(data)
+        incoming.abort()
+
+
+def store(original_name: str, data: bytes) -> tuple[str, int]:
+    """Сохраняет файл целиком из памяти. `(имя на диске, размер)`.
+
+    Тонкая обёртка над `receiving()` для вызывающих, у которых байты уже
+    на руках (перенос старых данных, тесты). Сетевой путь идёт через
+    `receiving()` напрямую и в память файл не кладёт.
+    """
+    with receiving(original_name) as incoming:
+        incoming.write(data)
+        return incoming.commit()
 
 
 def path_of(stored_name: str) -> Path:
