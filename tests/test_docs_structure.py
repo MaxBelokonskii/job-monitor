@@ -189,3 +189,51 @@ def test_the_run_still_reports_that_number_itself() -> None:
         "предупреждение о ненайденном Node.js больше не называет количество "
         "пропущенных тестов — тогда его надо вернуть в README"
     )
+
+
+# ── CLAUDE.md не должен указывать в пустоту ───────────────────────────
+
+CLAUDE_MD = REPO_ROOT / "CLAUDE.md"
+FENCED = re.compile(r"```.*?```", re.DOTALL)
+BACKTICKED = re.compile(r"`([^`\n]+)`")
+REPO_DIRS = ("api/", "job_monitor/", "tests/", "docs/", "frontend/", ".github/")
+ROOT_DOC = re.compile(r"^[\wЀ-ӿ.-]+\.(md|txt)$")
+
+
+def _claude_prose() -> str:
+    """Текст CLAUDE.md без блоков кода.
+
+    Внутри блоков стоят заготовки (`файл.py`, `tests/нужный_тест.py`) —
+    это рецепт, а не ссылки на существующие файлы.
+    """
+    return FENCED.sub("", CLAUDE_MD.read_text(encoding="utf-8"))
+
+
+def _referenced_paths() -> list[str]:
+    return [
+        token for token in BACKTICKED.findall(_claude_prose())
+        if token.startswith(REPO_DIRS) or ROOT_DOC.match(token)
+    ]
+
+
+def test_claude_md_points_only_at_things_that_exist() -> None:
+    """Документ для агента полон ссылок на файлы, и стоит он ровно
+    столько, сколько стоят эти ссылки. Переименовали модуль, переложили
+    спецификацию — и первое, что новый агент прочитает про проект, окажется
+    враньём, причём молча."""
+    missing = [path for path in _referenced_paths() if not (REPO_ROOT / path).exists()]
+    assert not missing, f"CLAUDE.md ссылается на то, чего в дереве нет: {missing}"
+
+
+def test_the_claude_md_check_is_not_vacuous() -> None:
+    """Обратная сторона: разбор обязан что-то находить. Сломанный шаблон
+    давал бы зелёный прогон на пустом множестве ссылок."""
+    paths = _referenced_paths()
+    assert len(paths) >= 8, f"из CLAUDE.md извлечено всего {len(paths)} ссылок: {paths}"
+    assert "tests/test_frontend_safety.py" in paths, (
+        "не найдена ссылка на растяжку, которую документ запрещает трогать — "
+        "разбор ссылок сломан"
+    )
+    assert not (REPO_ROOT / "job_monitor/несуществующий.py").exists(), (
+        "проверка существования сломана"
+    )
