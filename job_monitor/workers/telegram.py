@@ -16,6 +16,9 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
+
+from telethon.errors import FloodWaitError
 
 from job_monitor import statuses
 from job_monitor.criteria import SearchCriteria
@@ -208,6 +211,62 @@ async def process_post(
     return sent
 
 
+#: Дольше этого воркер ждать не станет. Telegram умеет попросить подождать
+#: сутки; проспать столько внутри обработчика значит молча заблокировать
+#: воркер до завтра — ни в интерфейсе, ни в журнале не будет видно, почему
+#: ничего не происходит. Такое исключение поднимается наверх, где
+#: `WorkerManager._supervise` пометит воркер ошибкой с текстом причины.
+FLOOD_MAX_WAIT = 15 * 60
+
+
+async def send_with_resume(
+    client: Any,
+    username: str,
+    text: str,
+    attachment: Path | None,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> None:
+    """Сообщение, затем резюме файлом. Единственное место, говорящее с Telethon.
+
+    Отдельной функцией, а не замыканием внутри `run_worker`: замыкание
+    нельзя было проверить, не поднимая живого клиента, и обе дыры ниже
+    прожили в этих трёх строках до аудита.
+
+    **Пауза на `FloodWaitError`.** Раньше её не было вовсе, хотя README
+    обещал «обработку с автопаузой»: на живых постах Telethon глотал
+    исключение и логировал, при чтении истории `scan_history` ловил его и
+    переходил к следующему каналу. Сообщение не уходило, контакт не
+    записывался, человек видел тишину. Повтор один: круг «подожди —
+    повтори» без предела не отдавал бы управления и не сообщал бы о себе.
+
+    **Сбой вложения не отменяет доставленного сообщения.** Исключение из
+    `send_file` поднималось выше `record_send`, и контакт не записывался —
+    следующий пост с тем же хэндлом писал человеку ВТОРОЙ раз. Резюме не
+    обязательная часть отклика (спецификация 4.2), и его пропажа не повод
+    терять факт отправки.
+    """
+    try:
+        await client.send_message(username, text)
+    except FloodWaitError as error:
+        if error.seconds > FLOOD_MAX_WAIT:
+            raise
+        log.warning(
+            "Telegram просит подождать %s с перед отправкой %s — пауза и повтор",
+            error.seconds, username,
+        )
+        await sleep(error.seconds)
+        await client.send_message(username, text)
+    if attachment is None:
+        return
+    try:
+        await client.send_file(username, str(attachment))
+    except Exception as error:  # noqa: BLE001 — сообщение уже доставлено
+        log.warning(
+            "резюме не ушло к %s (%s) — сообщение доставлено, контакт записан",
+            username, error,
+        )
+
+
 #: Как достать прошлые посты канала. Параметром, а не прямым вызовом
 #: Telethon: иначе сканирование истории нельзя проверить, не поднимая
 #: живого клиента, — а именно непроверяемость и оставила эту настройку
@@ -301,9 +360,7 @@ async def run_worker() -> None:
         return path
 
     async def sender(username: str, text: str, attachment: Path | None) -> None:
-        await client.send_message(username, text)
-        if attachment is not None:
-            await client.send_file(username, str(attachment))
+        await send_with_resume(client, username, text, attachment)
 
     async def handle_post(post: IncomingPost) -> None:
         """Обработка одного поста — общая для живых и для истории.
