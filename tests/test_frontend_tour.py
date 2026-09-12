@@ -717,3 +717,28 @@ def test_going_back_from_the_first_step_does_nothing() -> None:
     ))
     result = _run_node(script)
     assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
+
+
+def test_hiding_a_tour_node_actually_hides_it() -> None:
+    """`node.hidden = true` полагается на правило браузера
+    `[hidden] { display: none }`, у которого нулевая специфичность: любое
+    собственное правило с `display` его перебивает.
+
+    Найдено в браузере. `.tour-card-choices` объявляет `display: flex`, и
+    три кнопки развилки — «Только Telegram», «Только hh.ru», «Обе
+    площадки» — оставались на карточке ВСЕХ последующих шагов, хотя
+    `renderTourCard` честно выставлял `hidden`. Атрибут стоял, элемент был
+    виден; ни один тест этого не показывал, потому что смотрели они на
+    атрибут, а не на то, что из него следует.
+    """
+    css = (FRONTEND_DIR / "style.css").read_text(encoding="utf-8")
+    with_display = re.findall(r"(\.tour-[\w-]+|#tourLayer)[^{]*\{[^}]*\bdisplay:", css)
+    assert with_display, (
+        "ни одно правило тура не задаёт display — проверка стала бы пустой"
+    )
+    assert re.search(
+        r"#tourLayer\s+\[hidden\]\s*\{[^}]*display:\s*none\s*!important", css
+    ), (
+        "в слое обучения нет правила, которое делает атрибут hidden сильнее "
+        f"собственных display-правил; а они есть: {sorted(set(with_display))}"
+    )

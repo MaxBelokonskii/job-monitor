@@ -446,6 +446,12 @@ body { font-family: 'Manrope', sans-serif; background: var(--bg); color: var(--t
    для курсора (иначе накрыл бы и дырку), клики ловят маски, а рамка вокруг
    дырки — не ловит, иначе съела бы клик по краю подсвеченной кнопки. */
 #tourLayer { position: fixed; inset: 0; z-index: 2000; pointer-events: none; }
+/* Тур прячет узлы через `node.hidden = true`, а браузерное правило
+   `[hidden] { display: none }` имеет нулевую специфичность — его перебивает
+   любое собственное правило с display. Найдено в браузере: кнопки развилки
+   объявлены `display: flex` и оставались на карточке всех последующих
+   шагов, хотя атрибут hidden честно выставлялся. */
+#tourLayer [hidden] { display: none !important; }
 .tour-mask { position: fixed; background: rgba(0,0,0,.62); pointer-events: auto; }
 .tour-ring { position: fixed; pointer-events: none; border: 2px solid var(--accent);
              border-radius: var(--radius-sm); box-shadow: 0 0 0 3px rgba(255,255,255,.28); }
