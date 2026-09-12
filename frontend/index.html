@@ -6,7 +6,7 @@
 <meta name="app-token" content="__APP_TOKEN__">
 <title>Job Monitor v2.0</title>
 <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v=__ASSET_VERSION__">
 </head>
 <body>
 
@@ -126,16 +126,21 @@
           <summary class="field-summary">Каналы<span class="field-count" data-count-for="channelEditList"></span></summary>
           <div id="channelEditList"></div>
           <div class="add-row">
-            <input type="text" id="newChannel" placeholder="@username или username">
+            <input type="text" id="newChannel" placeholder="@username или username"
+                   data-enter-action="addChannel">
             <button class="btn btn-secondary" data-action="addChannel">+</button>
           </div>
         </details>
         <details class="field-group">
           <summary class="field-summary">Ключевые слова<span class="field-count" data-count-for="kwList"></span></summary>
           <div class="field-hint">По ним пост считается вакансией</div>
+          <button class="btn-import" data-action="importKeywordsFromHh">
+            ← добавить профессии с hh.ru
+          </button>
           <div id="kwList"></div>
           <div class="add-row">
-            <input type="text" id="newKw" placeholder="Ключевое слово">
+            <input type="text" id="newKw" placeholder="Ключевое слово"
+                   data-enter-action="addKw">
             <button class="btn btn-secondary" data-action="addKw">+</button>
           </div>
         </details>
@@ -143,7 +148,8 @@
           <summary class="field-summary">Стоп-слова<span class="field-count" data-count-for="exList"></span></summary>
           <div id="exList"></div>
           <div class="add-row">
-            <input type="text" id="newEx" placeholder="Слово для исключения">
+            <input type="text" id="newEx" placeholder="Слово для исключения"
+                   data-enter-action="addEx">
             <button class="btn btn-secondary" data-action="addEx">+</button>
           </div>
         </details>
@@ -164,9 +170,13 @@
         <details class="field-group">
           <summary class="field-summary">Профессии<span class="field-count" data-count-for="hhKwList"></span></summary>
           <div class="field-hint">Ищутся по названию должности, а не по описанию</div>
+          <button class="btn-import" data-action="importProfessionsFromTg">
+            ← добавить ключевые слова Telegram
+          </button>
           <div id="hhKwList"></div>
           <div class="add-row">
-            <input type="text" id="newHHKw" placeholder="Название профессии">
+            <input type="text" id="newHHKw" placeholder="Название профессии"
+                   data-enter-action="addHHKw">
             <button class="btn btn-secondary" data-action="addHHKw">+</button>
           </div>
         </details>
@@ -174,7 +184,8 @@
           <summary class="field-summary">Стоп-слова<span class="field-count" data-count-for="hhExList"></span></summary>
           <div id="hhExList"></div>
           <div class="add-row">
-            <input type="text" id="newHHEx" placeholder="senior, lead...">
+            <input type="text" id="newHHEx" placeholder="senior, lead..."
+                   data-enter-action="addHHEx">
             <button class="btn btn-secondary" data-action="addHHEx">+</button>
           </div>
         </details>
@@ -514,6 +525,6 @@
   </div>
 </div>
 
-<script src="/static/app.js"></script>
+<script src="/static/app.js?v=__ASSET_VERSION__"></script>
 </body>
 </html>

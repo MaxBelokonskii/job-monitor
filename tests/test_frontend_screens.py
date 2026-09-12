@@ -1076,3 +1076,253 @@ def test_every_preset_card_has_the_same_shape() -> None:
         ["node", "-e", script], capture_output=True, text=True, timeout=10
     )
     assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+
+# ── Ввод и правка значений в списках ──────────────────────────────────
+
+LIST_INPUTS = ("newChannel", "newKw", "newEx", "newHHKw", "newHHEx")
+
+
+@pytest.mark.parametrize("field", LIST_INPUTS)
+def test_enter_adds_the_value_to_the_list(field: str) -> None:
+    """Набирать значение и тянуться мышью к «+» — по разу на каждое из
+    восьми ключевых слов. Enter делает то же самое.
+
+    Отдельного кода это не потребовало: механизм `data-enter-action` уже
+    существовал ради поля чата, и достаточно объявить действие.
+    """
+    overview = _overview()
+    начало = overview.index(f'id="{field}"')
+    объявление = overview[начало:overview.index(">", начало)]
+    # Атрибут целиком, а не подстрокой: проверка на вхождение
+    # «data-enter-action» проходила и для `data-enter-action-x`, то есть
+    # для опечатки, которая ничего не делает. Поймано мутацией.
+    assert re.search(r'\bdata-enter-action\s*=\s*"[^"]+"', объявление), (
+        f"поле {field} не добавляет значение по Enter: {объявление}"
+    )
+
+
+@pytest.mark.parametrize("field", LIST_INPUTS)
+def test_the_enter_action_matches_the_button(field: str) -> None:
+    """Enter и «+» обязаны делать одно и то же. Разные действия на двух
+    способах одного ввода — это два места, которые разойдутся."""
+    overview = _overview()
+    начало = overview.index(f'id="{field}"')
+    хвост = overview[начало:начало + 600]
+    по_enter = re.search(r'data-enter-action="([^"]+)"', хвост).group(1)
+    по_кнопке = re.search(r'data-action="(add[^"]+)"', хвост).group(1)
+    assert по_enter == по_кнопке, (
+        f"Enter вызывает {по_enter}, а кнопка {по_кнопке}"
+    )
+
+
+@skip_without_node
+def test_a_list_value_can_be_edited_in_place() -> None:
+    """Правка прямо в строке, а не «удалить и набрать заново».
+
+    Здесь же закреплено то, чего не видно из разметки: список НЕ
+    перерисовывается на каждом нажатии. Перерисовка уносит фокус и
+    каретку — дописать слово становится нельзя, а поймать это можно
+    только руками.
+    """
+    script = "\n".join((
+        "const списки = {};",
+        """
+        let перерисовок = 0;
+        const узлы = [];
+        global.document = {
+          getElementById: (id) => списки[id],
+          createElement: (tag) => {
+            const node = { tag, attributes: {}, children: [], style: {}, className: '',
+              handlers: {}, value: '',
+              append(c) { this.children.push(c); },
+              setAttribute(k, v) { this.attributes[k] = v; if (k === 'value') this.value = v; },
+              addEventListener(name, fn) { this.handlers[name] = fn; },
+              blur() { this.handlers.blur && this.handlers.blur({ target: this }); } };
+            узлы.push(node);
+            return node;
+          },
+        };
+        списки.список = { children: [], value: '' };
+        function fill(t, c) { t.children = [].concat(c); }
+        function showToast() {}
+        """,
+        _extract_function_source("isHttpUrl"),
+        _extract_function_source("el"),
+        _extract_function_source("renderEditableList"),
+        """
+        const слова = ['qa', 'тестировщик'];
+        const рисуем = () => { перерисовок += 1; renderEditableList('список', слова, { rerender: рисуем }); };
+        рисуем();
+
+        const поле = узлы.find(n => n.tag === 'input' && n.value === 'qa');
+        if (!поле) { console.error('строка не редактируемая — значение не в поле ввода'); process.exitCode = 1; }
+
+        // Печатаем по букве: перерисовки быть не должно, иначе уйдёт фокус.
+        const было = перерисовок;
+        поле.handlers.input({ target: { value: 'frontend' } });
+        поле.handlers.input({ target: { value: 'frontend-разработчик' } });
+        if (перерисовок !== было) {
+          console.error('список перерисован во время набора — фокус потерян');
+          process.exitCode = 1;
+        }
+        if (слова[0] !== 'frontend-разработчик') {
+          console.error('правка не доехала:', слова[0]); process.exitCode = 1;
+        }
+
+        // Опустошили строку — значит удалили.
+        поле.handlers.input({ target: { value: '   ' } });
+        поле.handlers.blur({ target: { value: '   ' } });
+        if (слова.length !== 1 || слова[0] !== 'тестировщик') {
+          console.error('пустая строка осталась в списке:', JSON.stringify(слова));
+          process.exitCode = 1;
+        }
+        """,
+    ))
+    result = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=10
+    )
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+
+@skip_without_node
+def test_editing_a_value_into_a_duplicate_does_not_keep_both() -> None:
+    """Два одинаковых ключевых слова — не ошибка, но и не то, что человек
+    имел в виду: поиск от повтора не изменится, а список станет длиннее.
+    Повтор убирается, и об этом говорится вслух."""
+    script = "\n".join((
+        "const списки = { список: { children: [] } };",
+        "const узлы = []; const сообщения = [];",
+        """
+        global.document = {
+          getElementById: (id) => списки[id],
+          createElement: (tag) => {
+            const node = { tag, attributes: {}, children: [], style: {}, className: '',
+              handlers: {}, value: '',
+              append(c) { this.children.push(c); },
+              setAttribute(k, v) { this.attributes[k] = v; if (k === 'value') this.value = v; },
+              addEventListener(n, f) { this.handlers[n] = f; }, blur() {} };
+            узлы.push(node); return node;
+          },
+        };
+        function fill(t, c) { t.children = [].concat(c); }
+        function showToast(m) { сообщения.push(m); }
+        """,
+        _extract_function_source("isHttpUrl"),
+        _extract_function_source("el"),
+        _extract_function_source("renderEditableList"),
+        """
+        const слова = ['qa', 'тестировщик'];
+        const рисуем = () => renderEditableList('список', слова, { rerender: рисуем });
+        рисуем();
+        const первое = узлы.find(n => n.tag === 'input' && n.value === 'qa');
+        первое.handlers.blur({ target: { value: 'тестировщик' } });
+        if (слова.length !== 1 || слова[0] !== 'тестировщик') {
+          console.error('повтор остался в списке:', JSON.stringify(слова)); process.exitCode = 1;
+        }
+        if (!сообщения.some(m => m.includes('уже есть'))) {
+          console.error('про повтор не сказано ни слова:', сообщения); process.exitCode = 1;
+        }
+        """,
+    ))
+    result = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=10
+    )
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+
+# ── Перенос списка между платформами ──────────────────────────────────
+
+
+def test_both_platforms_offer_the_import() -> None:
+    """Перенос нужен в обе стороны: человек может начать с профессий на
+    hh.ru или с ключевых слов Telegram — заранее неизвестно, с чего."""
+    overview = _overview()
+    assert 'data-action="importKeywordsFromHh"' in _card("criteriaTg")
+    assert 'data-action="importProfessionsFromTg"' in _card("criteriaHh")
+
+
+@skip_without_node
+def test_the_import_adds_and_never_replaces() -> None:
+    """Главное свойство переноса.
+
+    Замена стёрла бы то, что человек уже набрал руками, — и молча:
+    отменить это нечем, кнопки «вернуть» нет. Поэтому перенос ДОБАВЛЯЕТ,
+    совпадения пропускает, и повторное нажатие ничего не портит.
+    """
+    script = "\n".join((
+        _extract_function_source("mergeInto"),
+        """
+        // У человека уже есть свои ключевые слова, среди них одно
+        // совпадает с профессией — регистр при этом разный.
+        const ключевые = ['вёрстка', 'react'];
+        const профессии = ['Frontend-разработчик', 'React', 'Vue-разработчик'];
+
+        const добавлено = mergeInto(ключевые, профессии, { lower: true });
+
+        if (добавлено !== 2) { console.error('добавлено', добавлено, 'вместо 2'); process.exitCode = 1; }
+        if (!ключевые.includes('вёрстка')) {
+          console.error('своё значение стёрто переносом'); process.exitCode = 1;
+        }
+        if (ключевые.filter(k => k.toLowerCase() === 'react').length !== 1) {
+          console.error('совпадение задвоилось:', JSON.stringify(ключевые)); process.exitCode = 1;
+        }
+        if (!ключевые.includes('frontend-разработчик')) {
+          console.error('перенос не привёл к нижнему регистру:', JSON.stringify(ключевые));
+          process.exitCode = 1;
+        }
+
+        // Повторное нажатие — ничего не меняет.
+        const снимок = JSON.stringify(ключевые);
+        const ещё = mergeInto(ключевые, профессии, { lower: true });
+        if (ещё !== 0 || JSON.stringify(ключевые) !== снимок) {
+          console.error('повторный перенос изменил список'); process.exitCode = 1;
+        }
+
+        // И источник не тронут: перенос копирует, а не перемещает.
+        if (профессии.length !== 3) {
+          console.error('источник изменён:', JSON.stringify(профессии)); process.exitCode = 1;
+        }
+        """,
+    ))
+    result = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=10
+    )
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"
+
+
+@skip_without_node
+def test_the_import_keeps_the_case_professions_need() -> None:
+    """Обратное направление: ключевые слова Telegram хранятся в нижнем
+    регистре, а профессия уезжает в поисковый запрос hh.ru как есть.
+    Приводить её к нижнему регистру при переносе незачем — но и ломать
+    то, что человек написал с большой буквы, тоже нельзя."""
+    script = "\n".join((
+        _extract_function_source("mergeInto"),
+        """
+        const профессии = ['Frontend-разработчик'];
+        // Совпадение распознаётся без учёта регистра...
+        mergeInto(профессии, ['frontend-разработчик'], {});
+        if (профессии.length !== 1) {
+          console.error('регистр помешал распознать совпадение:', JSON.stringify(профессии));
+          process.exitCode = 1;
+        }
+        if (профессии[0] !== 'Frontend-разработчик') {
+          console.error('исходное написание испорчено:', профессии[0]); process.exitCode = 1;
+        }
+
+        // ...но переносимое значение записывается КАК ЕСТЬ. Источник с
+        // заглавными буквами здесь обязателен: прежние данные состояли из
+        // одних строчных, и ветка «не приводить к нижнему регистру» была
+        // неотличима от «приводить». Мутация это и показала.
+        mergeInto(профессии, ['React Developer'], {});
+        if (!профессии.includes('React Developer')) {
+          console.error('написание переносимой профессии испорчено:', JSON.stringify(профессии));
+          process.exitCode = 1;
+        }
+        """,
+    ))
+    result = subprocess.run(
+        ["node", "-e", script], capture_output=True, text=True, timeout=10
+    )
+    assert result.returncode == 0, f"{result.stdout}\n{result.stderr}"

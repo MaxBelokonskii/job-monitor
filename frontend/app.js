@@ -621,57 +621,109 @@ async function toggleHH() {
 }
 
 // ── Channels ──────────────────────────────────────────────────────────
+// ── Редактируемые списки критериев ────────────────────────────────────
+//
+// Один помощник на все пять списков: каналы, ключевые и стоп-слова
+// Telegram, профессии и стоп-слова hh.ru. Пять копий одного кода — это
+// пять мест, где правка «добавили редактирование» доедет до четырёх.
+//
+// Значение правится прямо в строке, а не кнопкой «изменить»: опечатка в
+// названии канала стоила полного удаления и набора заново.
+function renderEditableList(boxId, items, options) {
+  const box = document.getElementById(boxId);
+  if (!box) return;
+  const { prefix = '', lower = false, rerender } = options;
+
+  const normalize = raw => {
+    const value = raw.trim().replace(/^@+/, '');
+    return lower ? value.toLowerCase() : value;
+  };
+
+  fill(box, items.map((value, index) => el('div', { class: 'list-item' }, [
+    el('input', {
+      class: 'list-input',
+      value: prefix + value,
+      'aria-label': 'Изменить значение',
+      // Перерисовки на каждом нажатии здесь НЕТ намеренно: она уносит
+      // фокус и каретку, и дописать слово становится нельзя. Массив
+      // правится молча, а порядок наводится на уходе из поля.
+      oninput: event => { items[index] = normalize(event.target.value); },
+      onkeydown: event => {
+        // Enter здесь означает «я закончил с этим значением», а не
+        // «отправить форму»: форма отправляется кнопкой «Сохранить
+        // критерии», и одна на все списки.
+        if (event.key === 'Enter') { event.preventDefault(); event.target.blur(); }
+      },
+      onblur: event => {
+        const value = normalize(event.target.value);
+        items[index] = value;
+        if (!value) {
+          // Стёрли всё — значит хотели удалить. Пустая строка в списке
+          // критериев не значит ничего и уехала бы в поиск как пустое
+          // слово.
+          items.splice(index, 1);
+          rerender();
+          return;
+        }
+        const дубль = items.some((other, i) => i !== index && other === value);
+        if (дубль) {
+          showToast(`«${value}» уже есть в списке`);
+          items.splice(index, 1);
+        }
+        rerender();
+      },
+    }),
+    el('button', {
+      class: 'btn-del', text: '×', title: 'Удалить',
+      onclick: () => { items.splice(index, 1); rerender(); },
+    }),
+  ])));
+}
+
+// Добавление из поля ввода. Общее на все списки по той же причине, что и
+// отрисовка: пять почти одинаковых функций расходились в мелочах — где-то
+// значение приводилось к нижнему регистру, где-то нет.
+function addToList(inputId, items, options) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  const { lower = false, rerender } = options;
+  const value = (lower ? input.value.toLowerCase() : input.value)
+    .trim().replace(/^@+/, '');
+  if (!value) return;
+  if (items.some(item => item.toLowerCase() === value.toLowerCase())) {
+    showToast(`«${value}» уже есть в списке`);
+    return;
+  }
+  items.push(value);
+  input.value = '';
+  rerender();
+  input.focus();   // чтобы можно было набивать список подряд, не целясь мышью
+}
+
 function renderChannelEdit() {
-  fill(document.getElementById('channelEditList'), tgState.channels.map((ch, i) => el('div', { class: 'list-item' }, [
-    el('span', { text: '@' + ch }),
-    el('button', { class: 'btn-del', text: '×', onclick: () => removeChannel(i) }),
-  ])));
+  renderEditableList('channelEditList', tgState.channels, {
+    prefix: '@', lower: true, rerender: renderChannelEdit,
+  });
   updateFieldCounts();
 }
+
 function addChannel() {
-  const inp = document.getElementById('newChannel');
-  const val = inp.value.trim().replace('@', '').toLowerCase();
-  if (!val) return;
-  if (tgState.channels.map(c => c.toLowerCase()).includes(val)) { showToast('Канал уже есть'); return; }
-  tgState.channels.push(val); inp.value = '';
-  renderChannelEdit();
+  addToList('newChannel', tgState.channels, { lower: true, rerender: renderChannelEdit });
 }
-function removeChannel(i) { tgState.channels.splice(i, 1); renderChannelEdit(); }
-// ── Keywords ──────────────────────────────────────────────────────────
+
 function renderKeywords() {
-  fill(document.getElementById('kwList'), tgState.keywords.map((k, i) => el('div', { class: 'list-item' }, [
-    el('span', { text: k }),
-    el('button', { class: 'btn-del', text: '×', onclick: () => removeKw(i) }),
-  ])));
-  fill(document.getElementById('exList'), tgState.exclude.map((k, i) => el('div', { class: 'list-item' }, [
-    el('span', { text: k }),
-    el('button', { class: 'btn-del', text: '×', onclick: () => removeEx(i) }),
-  ])));
+  renderEditableList('kwList', tgState.keywords, { lower: true, rerender: renderKeywords });
+  renderEditableList('exList', tgState.exclude, { lower: true, rerender: renderKeywords });
   updateFieldCounts();
 }
-function addKw() { const v = document.getElementById('newKw').value.trim().toLowerCase(); if (!v) return; if (tgState.keywords.includes(v)) { showToast('Уже есть'); return; } tgState.keywords.push(v); document.getElementById('newKw').value = ''; renderKeywords(); }
-function removeKw(i) { tgState.keywords.splice(i, 1); renderKeywords(); }
-function addEx() { const v = document.getElementById('newEx').value.trim().toLowerCase(); if (!v) return; if (tgState.exclude.includes(v)) { showToast('Уже есть'); return; } tgState.exclude.push(v); document.getElementById('newEx').value = ''; renderKeywords(); }
-function removeEx(i) { tgState.exclude.splice(i, 1); renderKeywords(); }
 
-// ── Templates ─────────────────────────────────────────────────────────
-// ── Библиотека резюме ─────────────────────────────────────────────────
-//
-// Раньше здесь жил мёртвый обработчик выбора файла: он обновлял три
-// подписи и НИКОГДА не отправлял файл на бэкенд — резюме нельзя было
-// приложить вообще (дефект L14). Теперь файл действительно загружается и
-// живёт в каталоге данных.
-//
-// Тело запроса — сами байты файла, имя — в заголовке. Форма multipart не
-// используется намеренно: она требует пакета `python-multipart` и заводит
-// лишний разборщик недоверенного ввода ради одного поля.
+function addKw() {
+  addToList('newKw', tgState.keywords, { lower: true, rerender: renderKeywords });
+}
 
-// Delegated `change` handler: every action is called as action(arg, event).
-// Какую запись заменяем. `null` — обычная загрузка нового файла.
-// Хранится здесь, а не в атрибуте: выбор файла идёт через один скрытый
-// `<input type=file>` на всю страницу, и к моменту `change` кнопки,
-// вызвавшей диалог, в событии уже нет.
-let replacingResumeId = null;
+function addEx() {
+  addToList('newEx', tgState.exclude, { lower: true, rerender: renderKeywords });
+}
 
 function replaceResume(id) {
   replacingResumeId = Number(id);
@@ -748,7 +800,6 @@ async function loadResumes() {
   ])));
 }
 
-
 async function deleteResume(id) {
   const r = await apiSend('DELETE', `/resumes/${id}`);
   // Отказ здесь осмысленный: резюме используется пресетами, и ответ их
@@ -758,9 +809,6 @@ async function deleteResume(id) {
   await loadResumes();
 }
 
-// Выпадающий список резюме на «Обзоре»: выбор принадлежит пресету и
-// сохраняется вместе с остальными критериями. Сама библиотека (загрузка и
-// удаление файлов) живёт в настройках — она общая для всех пресетов.
 function renderResumePicker(rows) {
   const box = document.getElementById('criteriaResume');
   if (!box) return;
@@ -775,18 +823,6 @@ function renderResumePicker(rows) {
   ]);
 }
 
-// Сборка патча критериев из полей формы. Чистая функция от документа и уже
-// собранных списков — поэтому её можно исполнить в тесте.
-//
-// Числа приводятся здесь: пустое числовое поле даёт пустую строку, и
-// JSON.stringify кладёт в тело null, который pydantic отвергает с 422.
-// У критерия «пусто» имеет смысл — «зарплата от» без числа значит «не
-// важно», — и это НЕ то же самое, что лимит отправок, где выбрать
-// значение за человека нельзя (см. saveGlobalSettings).
-//
-// `Number('')` — это 0, поэтому зарплате запасное значение не нужно. А
-// периоду нужно: ноль не проходит проверку `ge=1`, и сохранение упало бы
-// с 422 на поле, которого человек не трогал.
 function collectCriteria(lists) {
   const value = id => {
     const node = document.getElementById(id);
@@ -994,22 +1030,57 @@ async function verifyAuthCode() {
 
 // ── HH Settings ───────────────────────────────────────────────────────
 function renderHHKeywords() {
-  const kl = document.getElementById('hhKwList');
-  const exListEl = document.getElementById('hhExList');
-  if (kl) fill(kl, hhState.keywords.map((k, i) => el('div', { class: 'list-item' }, [
-    el('span', { text: k }),
-    el('button', { class: 'btn-del', text: '×', onclick: () => removeHHKw(i) }),
-  ])));
-  if (exListEl) fill(exListEl, hhState.exclude.map((k, i) => el('div', { class: 'list-item' }, [
-    el('span', { text: k }),
-    el('button', { class: 'btn-del', text: '×', onclick: () => removeHHEx(i) }),
-  ])));
+  renderEditableList('hhKwList', hhState.keywords, { rerender: renderHHKeywords });
+  renderEditableList('hhExList', hhState.exclude, { lower: true, rerender: renderHHKeywords });
   updateFieldCounts();
 }
-function addHHKw() { const v = document.getElementById('newHHKw').value.trim(); if (!v || hhState.keywords.includes(v)) { if (v) showToast('Уже есть'); return; } hhState.keywords.push(v); document.getElementById('newHHKw').value = ''; renderHHKeywords(); }
-function removeHHKw(i) { hhState.keywords.splice(i, 1); renderHHKeywords(); }
-function addHHEx() { const v = document.getElementById('newHHEx').value.trim().toLowerCase(); if (!v || hhState.exclude.includes(v)) { if (v) showToast('Уже есть'); return; } hhState.exclude.push(v); document.getElementById('newHHEx').value = ''; renderHHKeywords(); }
-function removeHHEx(i) { hhState.exclude.splice(i, 1); renderHHKeywords(); }
+
+function addHHKw() {
+  // Без приведения к нижнему регистру: профессия уезжает в поисковый
+  // запрос hh.ru как есть, и «Frontend-разработчик» человек пишет так, как
+  // называется должность.
+  addToList('newHHKw', hhState.keywords, { rerender: renderHHKeywords });
+}
+
+function addHHEx() {
+  addToList('newHHEx', hhState.exclude, { lower: true, rerender: renderHHKeywords });
+}
+
+// ── Перенос списка между платформами ──────────────────────────────────
+//
+// Профессии на hh.ru и ключевые слова Telegram — разные поля разных
+// платформ, но человек ищет одно и то же, и набивать восемь названий
+// дважды незачем. Перенос ДОБАВЛЯЕТ, а не заменяет: список остаётся
+// своим, к нему можно дописать что угодно, и повторный перенос ничего не
+// испортит — совпадения пропускаются.
+function mergeInto(target, source, { lower = false }) {
+  const есть = new Set(target.map(item => item.toLowerCase()));
+  let добавлено = 0;
+  for (const item of source) {
+    const value = lower ? item.toLowerCase() : item;
+    if (есть.has(value.toLowerCase())) continue;
+    есть.add(value.toLowerCase());
+    target.push(value);
+    добавлено += 1;
+  }
+  return добавлено;
+}
+
+function importKeywordsFromHh() {
+  const добавлено = mergeInto(tgState.keywords, hhState.keywords, { lower: true });
+  renderKeywords();
+  showToast(добавлено
+    ? `Добавлено ключевых слов: ${добавлено}`
+    : 'Все профессии уже есть в ключевых словах');
+}
+
+function importProfessionsFromTg() {
+  const добавлено = mergeInto(hhState.keywords, tgState.keywords, {});
+  renderHHKeywords();
+  showToast(добавлено
+    ? `Добавлено профессий: ${добавлено}`
+    : 'Все ключевые слова уже есть в профессиях');
+}
 
 
 // ── HH Login (L4: два вызова вместо блокирующего input()) ──────────────
@@ -1811,6 +1882,8 @@ const ACTIONS = {
   verifyAuthCode,
   addHHKw,
   addHHEx,
+  importKeywordsFromHh,
+  importProfessionsFromTg,
   addStep,
   metricsSource,
   sentSource,
