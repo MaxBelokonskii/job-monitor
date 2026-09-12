@@ -56,7 +56,7 @@
     <!-- Кнопки пустые: подпись целиком рисует updateWorkerButton через
          fill(). Текст в разметке был мёртвым дублем, который показывался
          долю секунды до первого опроса и мог ему противоречить. -->
-    <div class="worker-bar">
+    <div class="worker-bar" id="workerBar">
       <button class="btn-toggle btn-toggle-tg" id="btnToggleTG" data-action="toggleTG"></button>
       <button class="btn-toggle btn-toggle-hh" id="btnToggleHH" data-action="toggleHH"></button>
     </div>
@@ -107,7 +107,7 @@
 
     <div class="page-header" style="margin-top:6px">
       <div class="card-title" style="margin:0">Критерии активного пресета</div>
-      <button class="btn btn-primary" data-action="saveCriteria">Сохранить критерии</button>
+      <button class="btn btn-primary" id="btnSaveCriteria" data-action="saveCriteria">Сохранить критерии</button>
     </div>
 
     <!-- Две карточки по платформам, а не три по смыслу действия.
@@ -122,7 +122,7 @@
         <div class="card-title platform-title">
           <span class="platform-dot tg"></span>Telegram
         </div>
-        <details class="field-group">
+        <details class="field-group" id="groupChannels">
           <summary class="field-summary">Каналы<span class="field-count" data-count-for="channelEditList"></span></summary>
           <div id="channelEditList"></div>
           <div class="add-row">
@@ -131,7 +131,7 @@
             <button class="btn btn-secondary" data-action="addChannel">+</button>
           </div>
         </details>
-        <details class="field-group">
+        <details class="field-group" id="groupKeywords">
           <summary class="field-summary">Ключевые слова<span class="field-count" data-count-for="kwList"></span></summary>
           <div class="field-hint">По ним пост считается вакансией</div>
           <button class="btn-import" data-action="importKeywordsFromHh">
@@ -167,7 +167,7 @@
         <div class="card-title platform-title">
           <span class="platform-dot hh"></span>hh.ru
         </div>
-        <details class="field-group">
+        <details class="field-group" id="groupProfessions">
           <summary class="field-summary">Профессии<span class="field-count" data-count-for="hhKwList"></span></summary>
           <div class="field-hint">Ищутся по названию должности, а не по описанию</div>
           <button class="btn-import" data-action="importProfessionsFromTg">
@@ -189,7 +189,7 @@
             <button class="btn btn-secondary" data-action="addHHEx">+</button>
           </div>
         </details>
-        <details class="field-group">
+        <details class="field-group" id="groupHhFilters">
           <summary class="field-summary">Фильтры поиска</summary>
           <div class="field-label">Опыт</div>
           <select id="hhExperience" class="field-select"></select>
@@ -312,7 +312,7 @@
   <div class="page" id="page-settings">
     <div class="page-header">
       <div class="page-title">Настройки</div>
-      <button class="btn btn-primary" data-action="saveGlobalSettings">Сохранить</button>
+      <button class="btn btn-primary" id="btnSaveSettings" data-action="saveGlobalSettings">Сохранить</button>
     </div>
     <p class="page-hint">
       Здесь только то, что общее для всех пресетов. Что искать — на
@@ -326,7 +326,7 @@
          беду, ради которой две кнопки сохранения были слиты в одну. -->
     <div class="card" id="settingsCommon">
       <div class="card-title">Общее</div>
-      <div class="toggle-row">
+      <div class="toggle-row" id="safeModeRow">
         <div>Безопасный режим
           <div class="toggle-desc">
             Ищу вакансии и складываю в очередь, но ничего не отправляю —
@@ -366,7 +366,7 @@
           <label class="toggle"><input type="checkbox" id="toggleTGAutostart"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
         </div>
 
-        <details class="field-group">
+        <details class="field-group" id="tgApiKeys">
           <summary class="field-summary">Ключи API</summary>
           <div class="api-hint">
             <div class="api-hint-title">Как получить API ключи</div>
@@ -384,18 +384,20 @@
           </div>
         </details>
 
-        <div class="field-label">Вход в аккаунт</div>
-        <div id="authStatus" style="font-size:13px;color:var(--muted);margin-bottom:10px">Проверка...</div>
-        <div id="authForm" style="display:none">
-          <div class="api-input-row"><label>Номер телефона</label><input class="api-input" type="text" id="authPhone" placeholder="+77001234567"></div>
-          <button class="btn btn-secondary" data-action="sendAuthCode" style="margin-bottom:10px">Отправить код</button>
-          <div id="authCodeRow" style="display:none">
-            <div class="api-input-row"><label>Код из Telegram</label><input class="api-input" type="text" id="authCode" placeholder="12345"></div>
-            <div class="api-input-row" id="auth2faRow" style="display:none">
-              <label>Облачный пароль (2FA)</label>
-              <input class="api-input" type="password" id="auth2fa" placeholder="Ваш пароль">
+        <div id="tgAuthBlock">
+          <div class="field-label">Вход в аккаунт</div>
+          <div id="authStatus" style="font-size:13px;color:var(--muted);margin-bottom:10px">Проверка...</div>
+          <div id="authForm" style="display:none">
+            <div class="api-input-row"><label>Номер телефона</label><input class="api-input" type="text" id="authPhone" placeholder="+77001234567"></div>
+            <button class="btn btn-secondary" data-action="sendAuthCode" style="margin-bottom:10px">Отправить код</button>
+            <div id="authCodeRow" style="display:none">
+              <div class="api-input-row"><label>Код из Telegram</label><input class="api-input" type="text" id="authCode" placeholder="12345"></div>
+              <div class="api-input-row" id="auth2faRow" style="display:none">
+                <label>Облачный пароль (2FA)</label>
+                <input class="api-input" type="password" id="auth2fa" placeholder="Ваш пароль">
+              </div>
+              <button class="btn btn-primary" data-action="verifyAuthCode">Подтвердить</button>
             </div>
-            <button class="btn btn-primary" data-action="verifyAuthCode">Подтвердить</button>
           </div>
         </div>
       </div>
@@ -421,12 +423,14 @@
           <label class="toggle"><input type="checkbox" id="toggleHHAutostart"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
         </div>
 
-        <div class="field-label">Вход в аккаунт</div>
-        <div class="field-hint">Открывается настоящий Chrome — войдите в нём и вернитесь сюда</div>
-        <div id="hhLoginStatus" style="font-size:13px;color:var(--muted);margin-bottom:10px"></div>
-        <div id="hhLoginButtons" style="display:flex;gap:8px;flex-wrap:wrap"></div>
-        <button class="btn btn-secondary" id="btnHhLoginCancel" style="margin-top:8px"
-                data-action="hhLoginCancel">Закрыть окно входа</button>
+        <div id="hhAuthBlock">
+          <div class="field-label">Вход в аккаунт</div>
+          <div class="field-hint">Открывается настоящий Chrome — войдите в нём и вернитесь сюда</div>
+          <div id="hhLoginStatus" style="font-size:13px;color:var(--muted);margin-bottom:10px"></div>
+          <div id="hhLoginButtons" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+          <button class="btn btn-secondary" id="btnHhLoginCancel" style="margin-top:8px"
+                  data-action="hhLoginCancel">Закрыть окно входа</button>
+        </div>
 
         <details class="field-group" style="margin-top:14px">
           <summary class="field-summary">Сценарий автокликания</summary>

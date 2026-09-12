@@ -264,3 +264,147 @@ def test_the_tour_script_loads_before_the_app() -> None:
     assert "tour.js?v=__ASSET_VERSION__" in source, (
         "адрес tour.js без версии — браузер отдаст его из кэша после правки"
     )
+
+
+# ── Сценарий ──────────────────────────────────────────────────────────
+
+STEPS_BLOCK = re.compile(r"^const TOUR_STEPS = \[(.*?)^\];", re.DOTALL | re.MULTILINE)
+STEP_ENTRY = re.compile(
+    r"\{\s*page:\s*(null|'[a-z]+'),"
+    r"\s*target:\s*(null|'[^']+'),"
+    r"\s*platforms:\s*'([a-z]+)'"
+)
+ID_ATTR = re.compile(r'\bid="([^"]+)"')
+PAGES = {"overview", "settings"}
+PLATFORMS = {"all", "tg", "hh"}
+
+# Контейнеры, которые заполняет JS: до ответа сервера это пустые узлы
+# нулевой высоты. Подсветить такой значит подсветить полоску в ноль
+# пикселей, поэтому тур целится в статическую обёртку вокруг них.
+JS_FILLED = {
+    "hhLoginButtons", "resumeList", "presetBar", "kwList", "hhKwList",
+    "exList", "hhExList", "channelEditList", "seleniumStepsList", "recentLog",
+}
+
+
+def _steps() -> list[tuple[str | None, str | None, str]]:
+    block = STEPS_BLOCK.search(_tour_source())
+    assert block, "массив TOUR_STEPS не найден — изменилась его форма?"
+    parsed = []
+    for page, target, platforms in STEP_ENTRY.findall(block.group(1)):
+        unquote = lambda v: None if v == "null" else v.strip("'")  # noqa: E731
+        parsed.append((unquote(page), unquote(target), platforms))
+    return parsed
+
+
+def test_the_scenario_parsed_at_all() -> None:
+    """Непустота разбора. Без неё сломанное регулярное выражение давало бы
+    зелёный прогон на пустом множестве шагов — и все проверки ниже
+    превратились бы в проверки ничего."""
+    steps = _steps()
+    assert len(steps) >= 10, f"разобрано всего {len(steps)} шагов"
+    assert sum(1 for _page, target, _p in steps if target) >= 8, (
+        "почти ни у одного шага нет цели — разбор поля target сломан"
+    )
+
+
+def test_every_target_exists_in_the_markup() -> None:
+    """Главный тест файла. Тур — копия знаний о вёрстке; без этой проверки
+    переименование `id` оставляет тур подсвечивающим пустоту, и молча."""
+    ids = set(ID_ATTR.findall(_index_source()))
+    missing = [
+        target for _page, target, _p in _steps()
+        if target and target.lstrip("#") not in ids
+    ]
+    assert not missing, f"шаги ведут на элементы, которых нет в разметке: {missing}"
+
+
+def test_the_existence_check_is_not_vacuous() -> None:
+    """Обратная сторона: проверка обязана уметь падать."""
+    ids = set(ID_ATTR.findall(_index_source()))
+    assert ids, "из разметки не извлечён ни один id — сканер сломан"
+    assert "safeModeRow" in ids, "сканер не видит id, который точно есть в разметке"
+    assert "заведомо-отсутствующий-id" not in ids, "сканер находит то, чего нет"
+
+
+def test_no_target_is_a_container_the_javascript_fills() -> None:
+    """Решение из раздела 2 спецификации: целиться в статическую обёртку.
+    `#hhLoginButtons` до ответа сервера — пустой div нулевой высоты."""
+    offenders = [
+        target for _page, target, _p in _steps()
+        if target and target.lstrip("#") in JS_FILLED
+    ]
+    assert not offenders, (
+        f"цели подсветки заполняются из JS и до ответа сервера пусты: {offenders}"
+    )
+
+
+def test_every_step_names_a_known_page() -> None:
+    for page, target, platforms in _steps():
+        assert page in PAGES or page is None, f"неизвестный экран: {page}"
+        assert platforms in PLATFORMS, f"неизвестная площадка: {platforms}"
+        if page is None:
+            assert target is None, "шаг без экрана не может иметь цель на экране"
+
+
+def test_the_safe_mode_step_exists_and_is_not_the_last() -> None:
+    """Безопасный режим — развилка «складываю в очередь» против
+    «откликаюсь за вас», и она единственная действует без подтверждения.
+    После неё обязаны идти сохранение и запуск: закончить тур на настройке,
+    которую некуда применить, значит не довести до работающего поиска."""
+    steps = _steps()
+    targets = [target for _page, target, _p in steps]
+    assert "#safeModeRow" in targets, "в сценарии нет шага про безопасный режим"
+    assert targets.index("#safeModeRow") < len(steps) - 1, (
+        "безопасный режим — последний шаг тура"
+    )
+
+
+def test_both_save_buttons_are_in_the_scenario() -> None:
+    """Критерии и настройки сохраняются раздельно, кнопки на разных
+    экранах. Забыть вторую — самая дешёвая из возможных ошибок, и тур
+    обязан показать обе."""
+    targets = {target for _page, target, _p in _steps()}
+    assert "#btnSaveSettings" in targets, "тур не показывает сохранение настроек"
+    assert "#btnSaveCriteria" in targets, "тур не показывает сохранение критериев"
+
+
+def test_the_tour_reaches_the_start_buttons() -> None:
+    """D25: тур доводит до кнопок запуска — иначе он не доводит до поиска."""
+    targets = {target for _page, target, _p in _steps()}
+    assert "#workerBar" in targets, "тур не доходит до кнопок запуска воркеров"
+
+
+@skip_without_node
+def test_the_platform_filter_drops_the_other_platform() -> None:
+    """D23: выбравшему только hh.ru не предлагается регистрировать
+    приложение на my.telegram.org."""
+    source = _tour_source()
+    block = STEPS_BLOCK.search(source)
+    assert block, "массив TOUR_STEPS не найден"
+    script = "\n".join((
+        block.group(0),
+        _extract_function_source(source, "stepsFor"),
+        """
+        function check(name, cond) {
+          if (!cond) { console.error('FAIL:', name); process.exitCode = 1; }
+        }
+        const both = stepsFor(['tg', 'hh']);
+        const tg = stepsFor(['tg']);
+        const hh = stepsFor(['hh']);
+        check('обе площадки дают весь сценарий', both.length === TOUR_STEPS.length);
+        check('только tg короче полного', tg.length < both.length);
+        check('только hh короче полного', hh.length < both.length);
+        check('в tg нет шагов hh', tg.every(s => s.platforms !== 'hh'));
+        check('в hh нет шагов tg', hh.every(s => s.platforms !== 'tg'));
+        const common = TOUR_STEPS.filter(s => s.platforms === 'all').length;
+        for (const [name, list] of [['tg', tg], ['hh', hh], ['обе', both]]) {
+          const got = list.filter(s => s.platforms === 'all').length;
+          check(name + ': общие шаги на месте и не задвоены', got === common);
+        }
+        check('безопасный режим есть в любом выборе',
+              [tg, hh, both].every(l => l.some(s => s.target === '#safeModeRow')));
+        """,
+    ))
+    result = _run_node(script)
+    assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
