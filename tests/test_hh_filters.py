@@ -22,6 +22,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from selenium.common.exceptions import NoSuchElementException
 
@@ -157,32 +159,119 @@ def test_the_vacancy_id_comes_from_the_url_without_query(monkeypatch):
     assert found[0]["url"] == "https://hh.ru/vacancy/987654"
 
 
-# ── Пропуск «уже откликались» ─────────────────────────────────────────
+# ── Страница вакансии: отклик ─────────────────────────────────────────
+#
+# Двойник различает селекторы. Прежний отдавал ОДНУ И ТУ ЖЕ кнопку на
+# любой из них — «нарочно, чтобы сценарий доходил до конца быстро», — и
+# именно поэтому не мог отличить настоящий отклик (клик по кнопке, затем
+# клик по кнопке отправки в открывшемся окне) от вырожденного случая, где
+# окно не открылось и вторым кликом нажали ту же самую кнопку. Второе
+# `apply_to_vacancy` засчитывала как успешный отклик: в базу шёл статус
+# «отклик отправлен», расходовался суточный лимит, а на hh.ru отклика не
+# было. Двойник, добрее реальности, — ровно тот способ, которым этот
+# дефект прожил до живой проверки.
+
+TAG_OF = re.compile(r"^//(\*|[a-z]+)\[")
+QA_EXACT = re.compile(r"@data-qa='([^']+)'")
+QA_PART = re.compile(r"contains\(@data-qa, '([^']+)'\)")
+TEXT_PART = re.compile(r"contains\(text\(\), '([^']+)'\)")
+CLASS_PART = re.compile(r"contains\(@class, '([^']+)'\)")
+#: Предикат «атрибут просто есть»: `//textarea[@placeholder]`.
+BARE_ATTR = re.compile(r"\[@([a-z-]+)\]$")
 
 
-class FakeVacancyDriver:
-    """Страница одной вакансии: одна и та же кнопка на все селекторы.
+class Node(FakeElement):
+    """Узел страницы: тег, `data-qa`, текст — то, по чему его ищут XPath'ы."""
 
-    Кнопка одна нарочно. Она отвечает и на селекторы отклика, и на
-    селекторы отправки, поэтому со снятым пропуском сценарий доходит до
-    конца быстро и тест краснеет на утверждении, а не по таймауту
-    `WebDriverWait`.
+    def __init__(self, tag: str, qa: str | None = None, text: str = "",
+                 css_class: str = "", html: str = ""):
+        super().__init__(text=text, attributes={"innerHTML": html})
+        self.tag = tag
+        self.qa = qa
+        self.css_class = css_class
+        self.typed = ""
+
+    def clear(self):
+        self.typed = ""
+
+    def send_keys(self, chunk):
+        self.typed += chunk
+
+
+class VacancyPage:
+    """Страница, описанная тем, что на ней ЕСТЬ.
+
+    Тег проверяется наравне с атрибутами: разбор hh.ru уже ломался о то,
+    что `div` стал `section`, и двойник, закрывающий на тег глаза, этого
+    класса поломок не показывает.
     """
 
-    def __init__(self, button: FakeElement):
-        self.button = button
+    def __init__(self, *nodes: Node):
+        self.nodes = list(nodes)
         self.visited: list[str] = []
 
     def get(self, url):
         self.visited.append(url)
 
-    def find_element(self, by, selector):
-        if "textarea" in selector:
-            raise NoSuchElementException(selector)
-        return self.button
+    @classmethod
+    def _matches(cls, node: Node, selector: str) -> bool:
+        # XPath'ы бывают объединением: `//textarea[@data-qa='…'] |
+        # //textarea[@placeholder]`. Двойник обязан понимать эту форму —
+        # именно ей был записан прежний селектор письма, и без неё
+        # проверка «письмо не уезжает в чужое поле» проходила бы на любом
+        # коде.
+        if " | " in selector:
+            return any(cls._matches(node, part) for part in selector.split(" | "))
+        return cls._branch_matches(node, selector)
+
+    @staticmethod
+    def _branch_matches(node: Node, selector: str) -> bool:
+        tag = TAG_OF.match(selector)
+        if tag and tag.group(1) != "*" and tag.group(1) != node.tag:
+            return False
+        exact = QA_EXACT.search(selector)
+        if exact:
+            return node.qa == exact.group(1)
+        part = QA_PART.search(selector)
+        if part:
+            return bool(node.qa) and part.group(1) in node.qa
+        text = TEXT_PART.search(selector)
+        if text:
+            return text.group(1).lower() in node.text.lower()
+        css = CLASS_PART.search(selector)
+        if css:
+            return css.group(1) in node.css_class
+        bare = BARE_ATTR.search(selector)
+        if bare:
+            return node.get_attribute(bare.group(1)) is not None
+        return False
 
     def find_elements(self, by, selector):
-        return []
+        return [node for node in self.nodes if self._matches(node, selector)]
+
+    def find_element(self, by, selector):
+        found = self.find_elements(by, selector)
+        if not found:
+            raise NoSuchElementException(selector)
+        return found[0]
+
+
+def _apply_button(text: str = "Откликнуться") -> Node:
+    # Именно `button`, а не `a`. С тегом `a` проверка «окно отклика не
+    # открылось» проходила и на СТАРОМ коде: двойник отбраковывал
+    # `//button[contains(text(), 'Откликнуться')]` по тегу и тем самым
+    # спасал код от его собственного дефекта. Кнопка отклика на hh.ru
+    # бывала и тем, и другим — в исходном коде на каждое имя стояло по
+    # два селектора, `//a[…]` и `//button[…]`.
+    return Node("button", qa="vacancy-response-link-top", text=text)
+
+
+def _submit_button() -> Node:
+    return Node("button", qa="vacancy-response-letter-submit", text="Отправить")
+
+
+VACANCY = {"vacancy_id": "1", "title": "QA инженер", "company": "ООО",
+           "url": "https://hh.ru/vacancy/1"}
 
 
 @pytest.fixture(autouse=True)
@@ -195,8 +284,8 @@ def _no_waiting(monkeypatch):
     `WebDriverWait` остаётся НАСТОЯЩИМ, ему обнуляется лишь бюджет:
     `until()` всё равно опрашивает предикат хотя бы раз и всё равно бросает
     `TimeoutException`, когда элемента нет, — то есть путь «кнопка не
-    найдена» проверяется тот же самый, только без четырёх пятнадцати-
-    секундных ожиданий подряд.
+    найдена» проверяется тот же самый, только без пятнадцатисекундных
+    ожиданий подряд.
     """
     monkeypatch.setattr(hh.time, "sleep", lambda *_args: None)
     real_wait = hh.WebDriverWait
@@ -212,12 +301,10 @@ def _no_waiting(monkeypatch):
     "ОТКЛИКНУЛИСЬ",
 ])
 def test_a_vacancy_we_already_applied_to_is_not_clicked_again(button_text):
-    button = FakeElement(text=button_text)
-    driver = FakeVacancyDriver(button)
-    vacancy = {"vacancy_id": "1", "title": "QA", "company": "ООО",
-               "url": "https://hh.ru/vacancy/1"}
+    button = _apply_button(button_text)
+    page = VacancyPage(button, _submit_button())
 
-    applied = hh.apply_to_vacancy(driver, vacancy, SearchCriteria(), GlobalSettings())
+    applied = hh.apply_to_vacancy(page, VACANCY, SearchCriteria(), GlobalSettings())
 
     assert applied is False, "повторный отклик отмечен как отправленный"
     assert button.clicks == 0, (
@@ -229,39 +316,165 @@ def test_a_vacancy_we_already_applied_to_is_not_clicked_again(button_text):
 def test_a_fresh_vacancy_is_applied_to():
     """Обратная сторона пропуска: он не должен срабатывать всегда — иначе
     воркер не откликался бы вообще, а проверки выше остались бы зелёными."""
-    button = FakeElement(text="Откликнуться")
-    driver = FakeVacancyDriver(button)
-    vacancy = {"vacancy_id": "2", "title": "QA инженер", "company": "ООО",
-               "url": "https://hh.ru/vacancy/2"}
+    apply_btn, submit = _apply_button(), _submit_button()
+    page = VacancyPage(apply_btn, submit)
 
-    applied = hh.apply_to_vacancy(driver, vacancy, SearchCriteria(), GlobalSettings())
+    applied = hh.apply_to_vacancy(page, VACANCY, SearchCriteria(), GlobalSettings())
 
     assert applied is True
-    assert button.clicks >= 2, (
-        "ожидались два клика — по кнопке отклика и по кнопке отправки: "
-        f"{button.clicks}"
-    )
-    assert driver.visited == [vacancy["url"]]
+    assert apply_btn.clicks == 1, "кнопка отклика нажата не один раз"
+    assert submit.clicks == 1, "кнопка отправки не нажата"
+    assert page.visited == [VACANCY["url"]]
 
 
 def test_a_vacancy_without_an_apply_button_is_not_counted_as_applied():
-    class NoButtonDriver(FakeVacancyDriver):
-        def find_element(self, by, selector):
-            raise NoSuchElementException(selector)
-
-    driver = NoButtonDriver(FakeElement())
     applied = hh.apply_to_vacancy(
-        driver, {"vacancy_id": "3", "title": "QA", "company": "ООО",
-                 "url": "https://hh.ru/vacancy/3"},
-        SearchCriteria(),
-        GlobalSettings(),
+        VacancyPage(), VACANCY, SearchCriteria(), GlobalSettings()
     )
     assert applied is False
 
 
+def test_a_response_form_that_never_opened_is_not_reported_as_applied():
+    """Главный дефект этого файла, найденный аудитом.
+
+    Окно отклика не открылось — на странице осталась только исходная
+    кнопка «Откликнуться». Третий селектор отправки ищет кнопку ПО ТЕКСТУ
+    «Откликнуться», находил её же, нажимал второй раз, и функция
+    возвращала успех. В базу шёл статус «отклик отправлен» с `applied_at`,
+    расходовался суточный лимит, в журнал — событие `applied`; на hh.ru
+    отклика не было, и узнать об этом было неоткуда.
+    """
+    apply_btn = _apply_button()
+    page = VacancyPage(apply_btn)   # кнопки отправки на странице нет вовсе
+
+    applied = hh.apply_to_vacancy(page, VACANCY, SearchCriteria(), GlobalSettings())
+
+    assert applied is False, (
+        "несостоявшийся отклик засчитан как отправленный — дашборд покажет "
+        "отклик, которого на hh.ru нет"
+    )
+    assert apply_btn.clicks == 1, (
+        f"по кнопке отклика кликнули {apply_btn.clicks} раз(а) вместо одного — "
+        "второй клик и был тем, что выдавалось за отправку"
+    )
+
+
+def test_the_cover_letter_is_typed_into_the_letter_field():
+    letter = Node("textarea", qa="vacancy-response-letter-textarea")
+    # Поле не пустое: hh.ru подставляет туда черновик, да и прошлая
+    # неудачная попытка оставляет текст. Без `clear()` письмо дописалось бы
+    # к чужому — а с пустым полем эту разницу не увидеть, и мутация,
+    # убиравшая очистку, проходила зелёной.
+    letter.typed = "старый черновик"
+    page = VacancyPage(_apply_button(), letter, _submit_button())
+
+    applied = hh.apply_to_vacancy(
+        page, VACANCY, SearchCriteria(hh_cover_letter="Здравствуйте!"), GlobalSettings()
+    )
+
+    assert applied is True
+    assert letter.typed == "Здравствуйте!", (
+        "поле письма не очищено перед вводом — отклик уйдёт с чужим текстом"
+    )
+
+
+def test_the_letter_field_survives_a_renamed_data_qa():
+    """Запасной селектор ищет по части `data-qa`, а не по точному
+    совпадению: переименование `…-letter-textarea` в `…-letter-input` не
+    должно оставлять отклик без письма."""
+    letter = Node("textarea", qa="vacancy-response-popup-form-letter-input")
+    page = VacancyPage(_apply_button(), letter, _submit_button())
+
+    hh.apply_to_vacancy(
+        page, VACANCY, SearchCriteria(hh_cover_letter="Здравствуйте!"), GlobalSettings()
+    )
+
+    assert letter.typed == "Здравствуйте!"
+
+
+def test_the_letter_never_goes_into_an_unrelated_field():
+    """Запасным вариантом здесь стояло `//textarea[@placeholder]` — «любая
+    область ввода с подсказкой». `find_element` возвращает первое
+    совпадение в порядке документа, поэтому письмо уезжало в чужое поле:
+    на странице вакансии их хватает, а отклик при этом уходил пустым."""
+    # placeholder обязателен: прежний запасной селектор искал именно
+    # `//textarea[@placeholder]`, и поле без него он бы не нашёл — проверка
+    # стала бы зелёной сама собой.
+    чужое = Node("textarea", qa="vacancy-search-query", text="")
+    чужое._attributes["placeholder"] = "Профессия, должность"
+    page = VacancyPage(_apply_button(), чужое, _submit_button())
+
+    applied = hh.apply_to_vacancy(
+        page, VACANCY, SearchCriteria(hh_cover_letter="Здравствуйте!"), GlobalSettings()
+    )
+
+    assert applied is True, "отклик без письма — всё ещё отклик"
+    assert чужое.typed == "", (
+        f"сопроводительное письмо напечатано в поле «{чужое.qa}», "
+        "которое к отклику отношения не имеет"
+    )
+
+
+def test_only_the_first_500_characters_of_the_letter_are_typed():
+    letter = Node("textarea", qa="vacancy-response-letter-textarea")
+    page = VacancyPage(_apply_button(), letter, _submit_button())
+
+    hh.apply_to_vacancy(
+        page, VACANCY, SearchCriteria(hh_cover_letter="я" * 800), GlobalSettings()
+    )
+
+    assert len(letter.typed) == 500
+
+
+def test_the_resume_the_user_chose_is_the_one_selected():
+    нужное = Node("div", qa="resume-negotiations-list__resume", html="<b>resume-777</b>")
+    другое = Node("div", qa="resume-negotiations-list__resume", html="<b>resume-111</b>")
+    page = VacancyPage(_apply_button(), другое, нужное, _submit_button())
+
+    applied = hh.apply_to_vacancy(
+        page, VACANCY, SearchCriteria(hh_resume_id="resume-777"), GlobalSettings()
+    )
+
+    assert applied is True
+    assert нужное.clicks == 1, "выбрано не то резюме, которое назвал пользователь"
+    assert другое.clicks == 0
+
+
+def test_a_missing_resume_cancels_the_application_instead_of_sending_another():
+    """Промах выбора был обёрнут в голый `except Exception: pass`, и отклик
+    уходил ТЕМ резюме, что стояло у hh.ru по умолчанию, — молча.
+
+    Это не ослабленный успех, а другое действие: работодателю уходит не то
+    резюме, которое выбрал человек, и отозвать это нельзя. Вакансия
+    остаётся в очереди, откликнуться на неё руками можно в любой момент.
+    """
+    submit = _submit_button()
+    page = VacancyPage(_apply_button(), submit)   # списка резюме на странице нет
+
+    applied = hh.apply_to_vacancy(
+        page, VACANCY, SearchCriteria(hh_resume_id="resume-777"), GlobalSettings()
+    )
+
+    assert applied is False
+    assert submit.clicks == 0, "отклик отправлен с не тем резюме"
+
+
+def test_an_empty_resume_id_does_not_block_the_application():
+    """Обратная сторона: проверка резюме не должна срабатывать у тех, кто
+    его не выбирал, — иначе воркер перестанет откликаться вообще."""
+    submit = _submit_button()
+    page = VacancyPage(_apply_button(), submit)
+
+    applied = hh.apply_to_vacancy(
+        page, VACANCY, SearchCriteria(hh_resume_id=""), GlobalSettings()
+    )
+
+    assert applied is True
+    assert submit.clicks == 1
+
+
 # ── Разметка hh.ru: разбор не должен зависеть от тега ─────────────────
 
-import re as _re
 
 
 class TagStrictElement:
@@ -276,7 +489,7 @@ class TagStrictElement:
     Двойник обязан быть строг там, где строга реальность.
     """
 
-    _XPATH = _re.compile(r"\.?//(?P<tag>[\w*]+)\[@data-qa='(?P<qa>[^']+)'\]")
+    _XPATH = re.compile(r"\.?//(?P<tag>[\w*]+)\[@data-qa='(?P<qa>[^']+)'\]")
 
     def __init__(self, tag: str, data_qa: str = "", text: str = "",
                  attributes: dict | None = None, children: list | None = None):

@@ -454,6 +454,49 @@ def get_vacancies_from_page(driver: Any, criteria: SearchCriteria) -> list[dict]
     return vacancies
 
 
+#: Поле сопроводительного письма. Раньше вторым вариантом здесь стоял
+#: `//textarea[@placeholder]` — «любая область ввода с подсказкой на
+#: странице». `find_element` возвращает первое совпадение в порядке
+#: документа, поэтому при не открывшемся окне отклика письмо уезжало в
+#: первое попавшееся поле. Запасной вариант остался, но он ищет по ЧАСТИ
+#: `data-qa`: переименование `vacancy-response-letter-textarea` в
+#: `…-letter-input` он переживёт, а чужое поле поиска — не заденет.
+LETTER_SELECTORS = (
+    "//textarea[@data-qa='vacancy-response-letter-textarea']",
+    "//textarea[contains(@data-qa, 'letter')]",
+)
+
+RESUME_SELECTOR = "//*[@data-qa='resume-negotiations-list__resume']"
+
+
+def _find_letter_field(driver: Any) -> Any | None:
+    for selector in LETTER_SELECTORS:
+        try:
+            return driver.find_element(By.XPATH, selector)
+        except NoSuchElementException:
+            continue
+    return None
+
+
+def _choose_resume(driver: Any, resume_id: str) -> bool:
+    """Выбирает в списке резюме то, чей идентификатор назвал пользователь.
+
+    `True` — выбрано. `False` — списка нет, нужного резюме в нём нет или
+    Selenium отказал: во всех трёх случаях отправлять нельзя, потому что
+    уйдёт не то резюме.
+    """
+    try:
+        items = driver.find_elements(By.XPATH, RESUME_SELECTOR)
+        for item in items:
+            if resume_id in (item.get_attribute("innerHTML") or ""):
+                item.click()
+                time.sleep(1)
+                return True
+    except WebDriverException as error:
+        log.warning("[HH] Список резюме недоступен: %s", error)
+    return False
+
+
 def apply_to_vacancy(
     driver: Any, vacancy: dict, criteria: SearchCriteria, settings: GlobalSettings
 ) -> bool:
@@ -511,34 +554,31 @@ def apply_to_vacancy(
         if steps:
             run_steps(driver, steps, WebDriverWait)
 
-        if resume_id:
-            try:
-                resume_items = driver.find_elements(
-                    By.XPATH, "//*[@data-qa='resume-negotiations-list__resume']"
-                )
-                for item in resume_items:
-                    if resume_id in item.get_attribute("innerHTML"):
-                        item.click()
-                        time.sleep(1)
-                        break
-            except Exception:
-                pass
+        if resume_id and not _choose_resume(driver, resume_id):
+            # Раньше выбор резюме был обёрнут в голый `except Exception: pass`,
+            # и промах означал отклик ТЕМ резюме, что стояло у hh.ru по
+            # умолчанию, — молча. Это не ослабленный успех, а другое
+            # действие: работодателю уходит не то резюме, которое человек
+            # выбрал, и отозвать это нельзя. Не откликаемся вовсе:
+            # вакансия останется в очереди «Найдено», и откликнуться на неё
+            # руками можно в любой момент.
+            log.warning(
+                "[HH] Резюме %s не найдено в списке — отклик не отправлен: %s",
+                resume_id, vacancy["title"],
+            )
+            return False
 
         if cover_letter:
-            try:
-                letter_area = driver.find_element(
-                    By.XPATH,
-                    "//textarea[@data-qa='vacancy-response-letter-textarea'] | "
-                    "//textarea[@placeholder]"
-                )
+            letter_area = _find_letter_field(driver)
+            if letter_area is None:
+                log.warning("[HH] Поле письма не найдено для: %s", vacancy["title"])
+            else:
                 letter_area.clear()
                 for char in cover_letter[:500]:
                     letter_area.send_keys(char)
                     if random.random() < 0.05:
                         time.sleep(random.uniform(0.05, 0.15))
                 time.sleep(1)
-            except NoSuchElementException:
-                log.warning("[HH] Поле письма не найдено для: %s", vacancy["title"])
 
         submit_selectors = [
             "//button[@data-qa='vacancy-response-letter-submit']",
@@ -550,11 +590,24 @@ def apply_to_vacancy(
         for sel in submit_selectors:
             try:
                 submit_btn = wait.until(EC.element_to_be_clickable((By.XPATH, sel)))
-                submit_btn.click()
-                submitted = True
-                break
             except (TimeoutException, ElementClickInterceptedException):
                 continue
+            # Кнопка отправки обязана быть ДРУГИМ элементом, чем кнопка
+            # отклика. Третий селектор ищет по тексту «Откликнуться» — ровно
+            # тому, что написан на исходной кнопке, — и когда окно отклика не
+            # открылось (hh.ru переименовал data-qa, показал капчу, потребовал
+            # подтверждение), находил её же. Второй клик по ней возвращал
+            # «успех»: в базу шёл статус «отклик отправлен» с `applied_at`,
+            # расходовался суточный лимит, а на hh.ru отклика не было.
+            # Воспроизведено на двойнике страницы, различающем селекторы.
+            if submit_btn == apply_btn:
+                continue
+            try:
+                submit_btn.click()
+            except ElementClickInterceptedException:
+                continue
+            submitted = True
+            break
 
         if not submitted:
             log.warning("[HH] Не удалось отправить отклик: %s", vacancy["title"])
