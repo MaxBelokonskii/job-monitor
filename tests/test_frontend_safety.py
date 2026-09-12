@@ -289,3 +289,103 @@ def test_el_treats_a_null_prop_as_absent_not_as_the_string_null() -> None:
     ))
     result = _run_node(script)
     assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
+
+
+# ── Обновление доезжает до браузера ───────────────────────────────────
+
+
+def test_the_app_shell_is_always_revalidated(client) -> None:
+    """Найдено на живом приложении: после обновления кода браузер отдавал
+    СТАРЫЙ `app.js` из кэша — 78351 байт против 79005 на сервере.
+
+    `StaticFiles` присылает `ETag` и `Last-Modified`, но не присылает
+    `Cache-Control`. Без него браузер применяет эвристику и может вовсе не
+    спрашивать сервер — и человек, обновив страницу, видит прежний
+    интерфейс и решает, что правка не доехала. Для инструмента, который
+    правят и тут же перезагружают, это дороже любого трафика: на
+    `127.0.0.1` его нет.
+
+    `no-cache` — это не «не кэшировать», а «кэшировать, но каждый раз
+    спрашивать». Ответ обычно 304 по тому же `ETag`, то есть тело не
+    передаётся; меняется только то, что старый файл больше не выдаётся
+    молча.
+    """
+    for path in ("/", "/static/app.js", "/static/style.css"):
+        headers = client.get(path).headers
+        assert "cache-control" in headers, f"{path} отдаётся без Cache-Control"
+        значение = headers["cache-control"]
+        assert "no-cache" in значение, (
+            f"{path}: {значение!r} допускает выдачу из кэша без обращения "
+            "к серверу"
+        )
+        # И НЕ `no-store`: тот запрещает хранить ответ вовсе, то есть
+        # каждая перезагрузка тянула бы восемьдесят килобайт заново вместо
+        # 304 по `ETag`. Разница между «спрашивай» и «не храни» здесь
+        # существенна, и проверка обязана её видеть: мутация, подменившая
+        # одно другим, проходила зелёной.
+        assert "no-store" not in значение, (
+            f"{path}: {значение!r} запрещает кэш совсем — 304 по ETag "
+            "перестанет работать, файл будет качаться целиком"
+        )
+
+
+def test_revalidation_still_returns_304_for_unchanged_files(client) -> None:
+    """Поведение `StaticFiles`, на которое опирается выбор `no-cache`.
+
+    Проверка закрепляет не нашу правку, а чужую гарантию: неизменившийся
+    файл отдаётся как 304 по `ETag`. Именно поэтому «спрашивать каждый
+    раз» ничего не стоит. Исчезни эта гарантия при обновлении Starlette —
+    и `no-cache` начнёт означать полную перекачку на каждой перезагрузке.
+    """
+    first = client.get("/static/app.js")
+    assert "etag" in first.headers
+
+    second = client.get("/static/app.js", headers={"If-None-Match": first.headers["etag"]})
+    assert second.status_code == 304, (
+        "неизменившийся файл передаётся целиком вместо 304"
+    )
+
+
+def test_assets_are_versioned_by_their_content(client) -> None:
+    """Одного `Cache-Control` мало: он управляет тем, как браузер хранит
+    НОВЫЙ ответ, и не властен над записью, уже лежащей в кэше по прежним
+    правилам.
+
+    Проверено вживую: после добавления заголовка браузер всё равно отдал
+    старый `app.js` — запись была сохранена раньше, без указаний, и
+    осталась «свежей» по эвристике. Адрес с отпечатком содержимого
+    решает это по построению: изменился файл — изменился адрес, и старая
+    запись просто не подходит.
+    """
+    import re
+
+    page = client.get("/").text
+    for asset in ("app.js", "style.css"):
+        m = re.search(rf'/static/{re.escape(asset)}\?v=([^"\']+)', page)
+        assert m, f"{asset} подключается без отпечатка версии"
+        assert m.group(1) not in ("", "__ASSET_VERSION__"), (
+            f"{asset}: подстановка версии не выполнена — {m.group(1)!r}"
+        )
+
+
+def test_the_version_changes_when_a_file_changes(client, tmp_path, monkeypatch) -> None:
+    """Обратная сторона: отпечаток обязан меняться вместе с файлом.
+
+    Постоянная строка — например номер версии приложения, который правят
+    руками, — выглядела бы так же, но не спасала бы: именно её забыли бы
+    обновить, и человек снова получил бы старый интерфейс.
+    """
+    import re
+
+    from api import main
+
+    def версия(page: str) -> str:
+        return re.search(r'/static/app\.js\?v=([^"\']+)', page).group(1)
+
+    было = версия(client.get("/").text)
+
+    настоящий = main.asset_version
+    monkeypatch.setattr(main, "asset_version", lambda: настоящий() + "x")
+    стало = версия(client.get("/").text)
+
+    assert было != стало, "отпечаток не зависит от содержимого файлов"

@@ -55,10 +55,24 @@ SECURITY_HEADERS: dict[str, str] = {
 }
 
 
+#: «Кэшируй, но каждый раз спрашивай». Не `no-store`: `ETag` остаётся в
+#: силе, и неизменившийся файл отдаётся как 304 — тело не передаётся.
+#:
+#: Без этого заголовка `StaticFiles` присылает только `ETag` и
+#: `Last-Modified`, а браузер вправе применить эвристику и вовсе не
+#: обратиться к серверу. Найдено на живом приложении: после обновления
+#: кода страница показывала СТАРЫЙ `app.js` — 78351 байт против 79005 на
+#: диске, — и правка выглядела недоехавшей. Для инструмента, который
+#: правят и тут же перезагружают, это дороже любого трафика: на
+#: `127.0.0.1` трафика нет.
+REVALIDATE = "no-cache"
+
+
 async def security_headers_middleware(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
 ) -> Response:
     response = await call_next(request)
     for key, value in SECURITY_HEADERS.items():
         response.headers.setdefault(key, value)
+    response.headers.setdefault("Cache-Control", REVALIDATE)
     return response

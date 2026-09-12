@@ -1,7 +1,9 @@
 import asyncio
+import hashlib
 import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
@@ -189,13 +191,49 @@ app.include_router(found_router)
 if os.path.exists(FRONTEND_DIR):
     app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
+ASSET_VERSION_PLACEHOLDER = "__ASSET_VERSION__"
+VERSIONED_ASSETS = ("app.js", "style.css")
+
+
+def asset_version() -> str:
+    """Отпечаток содержимого статики — его подставляют в адрес скрипта и
+    стилей.
+
+    Нужен потому, что `Cache-Control` управляет тем, как браузер сохранит
+    НОВЫЙ ответ, и не властен над записью, уже лежащей в кэше по прежним
+    правилам. Проверено вживую: заголовок добавлен, а страница всё равно
+    исполняла старый `app.js` — 78351 байт против 79005 на диске, — потому
+    что запись сохранялась раньше и осталась «свежей» по эвристике.
+    Человек в этот момент видит прежний интерфейс и решает, что правка не
+    доехала.
+
+    Адрес с отпечатком решает это по построению: изменился файл —
+    изменился адрес, и старая запись кэша просто не подходит. Считается по
+    содержимому, а не по номеру версии приложения: номер правят руками, и
+    забыть его — ровно тот исход, от которого мы уходим.
+
+    Неудача чтения не должна ронять страницу: без версии кэш ведёт себя
+    как раньше, что не хуже, чем отсутствие интерфейса вовсе.
+    """
+    digest = hashlib.blake2b(digest_size=8)
+    for name in VERSIONED_ASSETS:
+        try:
+            digest.update(Path(FRONTEND_DIR, name).read_bytes())
+        except OSError:
+            return "dev"
+    return digest.hexdigest()
+
+
 @app.get("/", response_class=HTMLResponse)
 async def serve_ui() -> str:
     html_path = os.path.join(FRONTEND_DIR, "index.html")
     if not os.path.exists(html_path):
         return "<h1>index.html not found in frontend/</h1>"
     with open(html_path, "r", encoding="utf-8") as f:
-        return f.read().replace(TOKEN_PLACEHOLDER, APP_TOKEN)
+        page = f.read()
+    return (page
+            .replace(TOKEN_PLACEHOLDER, APP_TOKEN)
+            .replace(ASSET_VERSION_PLACEHOLDER, asset_version()))
 
 if __name__ == "__main__":
     import uvicorn
