@@ -118,6 +118,13 @@ HOLES = {
     "левый верхний угол": {"x": 0, "y": 0, "width": 280, "height": 90},
     "правый нижний угол": {"x": 1000, "y": 710, "width": 280, "height": 90},
     "выходит за экран": {"x": 1200, "y": 760, "width": 400, "height": 200},
+    # Высокая цель — единственное, что заставляет карточку уйти вбок:
+    # снизу и сверху места нет. Без этого случая ветку бокового
+    # размещения можно было удалить целиком, и прогон оставался зелёным.
+    "высокая": {"x": 300, "y": 60, "width": 600, "height": 680},
+    # Высокая и сдвинутая вправо: справа карточка уже не помещается, и
+    # единственное оставшееся место — слева от цели.
+    "высокая справа": {"x": 400, "y": 60, "width": 850, "height": 680},
 }
 
 
@@ -198,6 +205,13 @@ def test_the_card_stays_on_screen_and_off_the_hole() -> None:
     читать инструкцию и выполнять её одновременно. Гарантия даётся для
     целей не выше 40% экрана — все цели сценария такие; для вырожденного
     случая «цель во весь экран» проверяется только попадание в экран.
+
+    Чего тест намеренно НЕ закрепляет: какое именно из четырёх мест
+    выбрано. Под целью, над ней, справа и слева одинаково удовлетворяют
+    всем трём свойствам — в экране, не поверх цели, вплотную к ней, — и
+    порядок предпочтений в `cardPosition` остаётся вкусовым. Мутация,
+    меняющая его местами, здесь проходит зелёной, и это правильно:
+    закреплять надо свойство, а не первую попавшуюся реализацию.
     """
     script = "\n".join((
         _geometry_source(),
@@ -223,6 +237,18 @@ def test_the_card_stays_on_screen_and_off_the_hole() -> None:
           if (raw) {
             const hole = clampRect(raw, viewport);
             check(name + ': карточка не накрывает цель', !overlaps(box, hole));
+            // Вплотную к цели, а не «где-то в экране». Без этого условия
+            // ветки бокового размещения можно удалить: запасной угол тоже
+            // не накрывает цель, и проверка непересечения его пропускает —
+            // оставляя подсказку в противоположном конце экрана от того,
+            // что она объясняет.
+            const gapX = Math.max(0, hole.x - (box.x + box.width), box.x - (hole.x + hole.width));
+            const gapY = Math.max(0, hole.y - (box.y + box.height), box.y - (hole.y + hole.height));
+            // Ровно TOUR_GAP, а не «не больше»: нулевой зазор посадил бы
+            // карточку на рамку подсветки, которая сама занимает 2px рамки
+            // и 3px свечения. Проверка «не больше 12» это пропускала.
+            check(name + ': карточка вплотную к цели (gapX=' + gapX + ' gapY=' + gapY + ')',
+                  Math.max(gapX, gapY) === 12 && Math.min(gapX, gapY) === 0);
           }
         }
         const huge = { x: 0, y: 0, width: viewport.width, height: viewport.height };
@@ -254,15 +280,19 @@ def test_the_tour_script_loads_before_the_app() -> None:
     """ACTIONS в app.js — объектный литерал сокращённой записи, и имена
     функций тура должны быть объявлены к моменту его вычисления."""
     source = _index_source()
-    tour_at = source.find("tour.js")
-    app_at = source.find("app.js")
-    assert tour_at != -1, "tour.js не подключён в index.html"
-    assert app_at != -1, "app.js не подключён в index.html"
-    assert tour_at < app_at, (
-        "tour.js подключён после app.js — ACTIONS не увидит его функций"
+    # По тегам, а не по именам файлов где угодно в документе: комментарии
+    # к разметке тура называют и tour.js, и app.js, и поиск подстроки
+    # начал бы мерить порядок слов в прозе вместо порядка загрузки.
+    scripts = re.findall(r'<script\b[^>]*\bsrc="([^"]+)"', source)
+    assert scripts, "в index.html нет ни одного подключённого скрипта"
+    names = [src.split("/")[-1].split("?")[0] for src in scripts]
+    assert "tour.js" in names, f"tour.js не подключён, подключены: {names}"
+    assert "app.js" in names, f"app.js не подключён, подключены: {names}"
+    assert names.index("tour.js") < names.index("app.js"), (
+        f"tour.js подключён после app.js — ACTIONS не увидит его функций: {names}"
     )
-    assert "tour.js?v=__ASSET_VERSION__" in source, (
-        "адрес tour.js без версии — браузер отдаст его из кэша после правки"
+    assert "/static/tour.js?v=__ASSET_VERSION__" in scripts, (
+        f"адрес tour.js без версии — браузер отдаст его из кэша после правки: {scripts}"
     )
 
 
@@ -404,6 +434,285 @@ def test_the_platform_filter_drops_the_other_platform() -> None:
         }
         check('безопасный режим есть в любом выборе',
               [tg, hh, both].every(l => l.some(s => s.target === '#safeModeRow')));
+        """,
+    ))
+    result = _run_node(script)
+    assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
+
+
+# ── Слой затемнения ───────────────────────────────────────────────────
+
+TOUR_LAYER_IDS = (
+    "tourLayer", "tourMaskTop", "tourMaskBottom", "tourMaskLeft", "tourMaskRight",
+    "tourRing", "tourCard", "tourStepCounter", "tourCardTitle", "tourCardText",
+    "tourCardChoices", "tourBtnSkip", "tourBtnBack", "tourBtnNext",
+)
+
+
+def test_the_layer_markup_is_complete() -> None:
+    ids = set(ID_ATTR.findall(_index_source()))
+    missing = [name for name in TOUR_LAYER_IDS if name not in ids]
+    assert not missing, f"в разметке нет узлов слоя обучения: {missing}"
+
+
+def test_the_dimming_blocks_clicks_and_the_hole_does_not() -> None:
+    """D24 целиком держится на трёх правилах `pointer-events`.
+
+    Слой накрывает весь экран, поэтому сам обязан быть прозрачным для
+    курсора; клики ловят маски; рамка вокруг дырки — не ловит, иначе она
+    съела бы клик по краю подсвеченной кнопки.
+    """
+    css = (FRONTEND_DIR / "style.css").read_text(encoding="utf-8")
+
+    def rule(selector: str) -> str:
+        match = re.search(rf"{re.escape(selector)}\s*\{{([^}}]*)\}}", css)
+        assert match, f"в style.css нет правила для {selector}"
+        return match.group(1)
+
+    assert "pointer-events: none" in rule("#tourLayer"), (
+        "слой обучения ловит клики сам — дырка не будет нажиматься"
+    )
+    assert "pointer-events: auto" in rule(".tour-mask"), (
+        "затемнение пропускает клики — можно уйти на другую страницу из-под тура"
+    )
+    assert "pointer-events: none" in rule(".tour-ring"), (
+        "рамка вокруг дырки ловит клики по краю подсвеченного элемента"
+    )
+    assert "pointer-events: auto" in rule(".tour-card"), (
+        "кнопки карточки не нажимаются"
+    )
+
+
+def test_the_tour_never_builds_markup_from_strings() -> None:
+    """Тот же инвариант, что держит app.js: содержимое приходит из
+    Telegram и hh.ru, и путь «строка → разметка» не должен существовать
+    вовсе, даже там, где сегодня подставляются только свои тексты."""
+    source = _tour_source()
+    for forbidden in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write"):
+        assert forbidden not in source, f"tour.js собирает разметку через {forbidden}"
+    assert not re.search(r"""\son[a-z]+\s*=\s*["']""", source), (
+        "tour.js проставляет атрибут-обработчик — это вернёт 'unsafe-inline' в CSP"
+    )
+
+
+def test_the_tour_does_not_duplicate_page_switching() -> None:
+    """Вторая копия логики вкладок разойдётся с первой при первой правке."""
+    source = _tour_source()
+    assert "switchPage" in source, "тур не переключает страницы"
+    assert ".nav-item" not in source, "tour.js сам лезет в навигацию"
+    assert "classList.add('active')" not in source, (
+        "tour.js сам ставит active — это копия switchPage"
+    )
+
+
+def test_the_tour_opens_the_accordions_it_points_at() -> None:
+    """Пять из одиннадцати целей — свёрнутые <details>. У скрытого
+    содержимого getBoundingClientRect даёт нули, и подсветка встала бы в
+    угол экрана нулевого размера."""
+    source = _tour_source()
+    assert "details" in source.lower(), "тур не раскрывает аккордеоны"
+    assert re.search(r"\.open\s*=\s*true", source), (
+        "ни один <details> не раскрывается принудительно"
+    )
+
+
+def test_the_position_is_recomputed_on_scroll_and_resize() -> None:
+    """Раскрытие аккордеона и прокрутка сдвигают цель. Без пересчёта
+    подсветка остаётся там, где элемент был."""
+    source = _tour_source()
+    assert "'scroll'" in source, "позиция не пересчитывается при прокрутке"
+    assert "'resize'" in source, "позиция не пересчитывается при смене размера окна"
+    assert "positionTour" in source
+
+
+# ── Управление ────────────────────────────────────────────────────────
+
+TOUR_ACTIONS = ("startTour", "tourChoose", "tourNext", "tourBack", "tourSkip")
+
+
+def test_every_tour_action_is_registered() -> None:
+    """Незарегистрированное действие — мёртвая кнопка: runAction берёт
+    ACTIONS[name], получает undefined и молча возвращается. Ни ошибки в
+    консоли, ни следа."""
+    actions = re.search(r"const ACTIONS = \{(.*?)\n\};", _app_source(), re.DOTALL)
+    assert actions, "ACTIONS не найдена в app.js"
+    registered = set(re.findall(r"^\s*([A-Za-z_$][\w$]*),", actions.group(1), re.MULTILINE))
+    missing = [name for name in TOUR_ACTIONS if name not in registered]
+    assert not missing, f"действия тура не зарегистрированы в ACTIONS: {missing}"
+
+
+def test_the_tour_can_be_reopened_from_the_header() -> None:
+    """Тур показывается один раз сам; дальше он нужен по требованию."""
+    source = _index_source()
+    assert 'data-action="startTour"' in source, (
+        "тур нельзя открыть повторно — кнопки вызова нет в разметке"
+    )
+
+
+def test_the_tour_is_started_from_init_not_from_its_own_listener() -> None:
+    """init() грузит пресеты, критерии и настройки. Тур, запущенный
+    раньше, переключил бы вкладку и стал мерить элементы на странице,
+    которую в этот момент ещё перерисовывают. Своего DOMContentLoaded у
+    тура нет ещё и потому, что tour.js подключён раньше app.js — его
+    обработчик сработал бы до init() гарантированно."""
+    init = _extract_function_source(_app_source(), "init")
+    assert "maybeAutoStartTour" in init, "init() не запускает обучение"
+    assert "DOMContentLoaded" not in _tour_source(), (
+        "tour.js вешает свой DOMContentLoaded — он сработает до init()"
+    )
+
+
+def test_the_seen_flag_is_written_on_every_exit() -> None:
+    """Флаг ставится и на «Пропустить», и на Escape, и на последнем шаге:
+    иначе тур возвращался бы при каждой перезагрузке к человеку, который
+    его уже закрыл. Поэтому запись живёт в endTour, через который проходят
+    все три выхода."""
+    source = _tour_source()
+    end = _extract_function_source(source, "endTour")
+    assert "localStorage.setItem" in end, "endTour не запоминает, что тур показан"
+    assert source.count("localStorage.setItem") == 1, (
+        "флаг пишется не только в endTour — появился второй выход мимо него"
+    )
+    assert "try" in end, (
+        "обращение к localStorage не защищено: в приватном режиме оно бросает, "
+        "и тур упал бы на кнопке «Пропустить»"
+    )
+
+
+def test_enter_is_left_to_the_lists() -> None:
+    """Enter уже занят: data-enter-action добавляет значение в список, и
+    подсвеченное поле ввода обязано продолжать работать через дырку."""
+    source = _tour_source()
+    assert "'Enter'" not in source, (
+        "тур перехватывает Enter — ввод в подсвеченном поле перестанет добавлять значения"
+    )
+    assert "'Escape'" in source, "тур не закрывается по Escape"
+
+
+def test_the_arrows_are_ignored_inside_fields() -> None:
+    """В поле ввода стрелки двигают курсор, а не листают тур."""
+    source = _tour_source()
+    assert "ArrowRight" in source and "ArrowLeft" in source, "стрелки не листают тур"
+    assert re.search(r"INPUT|TEXTAREA|tagName", source), (
+        "стрелки перехватываются и внутри полей ввода"
+    )
+
+
+@skip_without_node
+def test_a_missing_target_is_skipped_in_the_direction_of_travel() -> None:
+    """D27 в обе стороны. Если пропуск всегда вёл бы вперёд, «Назад» через
+    отсутствующий шаг возвращал бы туда, откуда только что ушли, и выйти
+    назад стало бы невозможно.
+
+    Проверяется на подделке DOM: третий шаг «не найден», и обход идёт
+    сначала вперёд, потом назад.
+    """
+    source = _tour_source()
+    script = "\n".join((
+        "const missing = '#нет-такого';",
+        """
+        globalThis.window = { addEventListener() {}, innerWidth: 1280, innerHeight: 800 };
+        globalThis.document = {
+          querySelector: sel => (sel === missing ? null : {
+            id: sel,
+            scrollIntoView() {},
+            getBoundingClientRect: () => ({ left: 10, top: 10, width: 100, height: 40 }),
+          }),
+          getElementById: () => ({
+            style: {}, hidden: false, textContent: '', offsetWidth: 340, offsetHeight: 260,
+          }),
+        };
+        globalThis.switchPage = async () => {};
+        globalThis.el = () => ({});
+        globalThis.fill = () => {};
+        globalThis.localStorage = { setItem() {}, getItem: () => null };
+        globalThis.renderTourCard = () => {};
+        """,
+        "const TOUR_PADDING = 6; const TOUR_GAP = 12;",
+        _extract_function_source(source, "clampRect"),
+        _extract_function_source(source, "maskRects"),
+        _extract_function_source(source, "cardPosition"),
+        _extract_function_source(source, "padRect"),
+        _extract_function_source(source, "placeRect"),
+        _extract_function_source(source, "openAncestorDetails"),
+        _extract_function_source(source, "positionTour"),
+        _extract_function_source(source, "showStep"),
+        _extract_function_source(source, "tourMove"),
+        _extract_function_source(source, "endTour"),
+        """
+        const TOUR_MASK_IDS = { top: 'a', bottom: 'b', left: 'c', right: 'd' };
+        const TOUR_SEEN_KEY = 'тест';
+        const tourState = {
+          steps: [
+            { page: null, target: null, platforms: 'all', title: 'a', text: [] },
+            { page: null, target: '#есть', platforms: 'all', title: 'b', text: [] },
+            { page: null, target: missing, platforms: 'all', title: 'c', text: [] },
+            { page: null, target: '#тоже-есть', platforms: 'all', title: 'd', text: [] },
+          ],
+          index: 0, platforms: ['tg'], active: true, node: null,
+        };
+        function check(name, cond) {
+          if (!cond) { console.error('FAIL:', name, 'index=' + tourState.index); process.exitCode = 1; }
+        }
+        (async () => {
+          await showStep(1, 1);
+          check('исходный шаг показан', tourState.index === 1);
+          await tourMove(1);
+          check('вперёд отсутствующий шаг пропущен', tourState.index === 3);
+          await tourMove(-1);
+          check('назад отсутствующий шаг пропущен назад, а не вперёд', tourState.index === 1);
+        })();
+        """,
+    ))
+    result = _run_node(script)
+    assert result.returncode == 0, f"stdout: {result.stdout}\nstderr: {result.stderr}"
+
+
+@skip_without_node
+def test_going_back_from_the_first_step_does_nothing() -> None:
+    """Без отсечки отрицательного индекса `tourMove(-1)` на нулевом шаге
+    уходит в `steps[-1]`, получает `undefined` и закрывает тур — вместе с
+    записью «показан». Стрелка влево на первом же экране выкидывала бы из
+    обучения навсегда."""
+    source = _tour_source()
+    script = "\n".join((
+        """
+        globalThis.window = { addEventListener() {}, innerWidth: 1280, innerHeight: 800 };
+        globalThis.document = {
+          querySelector: () => null,
+          getElementById: () => ({
+            style: {}, hidden: false, textContent: '', offsetWidth: 340, offsetHeight: 260,
+          }),
+        };
+        globalThis.switchPage = async () => {};
+        globalThis.el = () => ({});
+        globalThis.fill = () => {};
+        let written = 0;
+        globalThis.localStorage = { setItem() { written += 1; }, getItem: () => null };
+        globalThis.renderTourCard = () => {};
+        globalThis.positionTour = () => {};
+        const TOUR_SEEN_KEY = 'тест';
+        """,
+        _extract_function_source(source, "showStep"),
+        _extract_function_source(source, "tourMove"),
+        _extract_function_source(source, "endTour"),
+        """
+        const tourState = {
+          steps: [
+            { page: null, target: null, platforms: 'all', title: 'a', text: [] },
+            { page: null, target: null, platforms: 'all', title: 'b', text: [] },
+          ],
+          index: 0, platforms: ['tg'], active: true, node: null,
+        };
+        function check(name, cond) {
+          if (!cond) { console.error('FAIL:', name, 'index=' + tourState.index, 'written=' + written); process.exitCode = 1; }
+        }
+        (async () => {
+          await tourMove(-1);
+          check('тур не закрылся', tourState.active === true);
+          check('остались на нулевом шаге', tourState.index === 0);
+          check('флаг «показан» не записан', written === 0);
+        })();
         """,
     ))
     result = _run_node(script)

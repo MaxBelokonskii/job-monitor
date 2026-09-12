@@ -17,7 +17,10 @@
       <h1>Job Monitor</h1>
       <span>v2.0</span>
     </div>
-    <button class="btn-about" data-action="showAbout" title="О приложении">ⓘ</button>
+    <div style="display:flex;gap:6px">
+      <button class="btn-about" data-action="startTour" title="Обучение">?</button>
+      <button class="btn-about" data-action="showAbout" title="О приложении">ⓘ</button>
+    </div>
   </div>
   <nav class="nav">
     <div class="nav-item active" data-page="overview"><div class="nav-dot"></div>Обзор</div>
@@ -525,6 +528,36 @@
         используется с разрешения автора. Безопасность, архитектура и
         функциональность существенно переработаны.
       </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── Пошаговое обучение ──────────────────────────────────────────── -->
+<!-- Четыре маски вокруг дырки, а не одна тень: box-shadow затемняет, но
+     дырки в попадании курсора не делает, и подсвеченную кнопку было бы
+     нельзя нажать. Кнопки развилки лежат здесь, а не строятся кодом:
+     сканы data-action смотрят в index.html и app.js, и построенная в
+     tour.js кнопка не попала бы ни в один из них. -->
+<div id="tourLayer" hidden>
+  <div class="tour-mask" id="tourMaskTop"></div>
+  <div class="tour-mask" id="tourMaskBottom"></div>
+  <div class="tour-mask" id="tourMaskLeft"></div>
+  <div class="tour-mask" id="tourMaskRight"></div>
+  <div class="tour-ring" id="tourRing"></div>
+  <div class="tour-card" id="tourCard" role="dialog" aria-modal="true"
+       aria-labelledby="tourCardTitle">
+    <div class="tour-step" id="tourStepCounter"></div>
+    <div class="tour-card-title" id="tourCardTitle"></div>
+    <div class="tour-card-text" id="tourCardText"></div>
+    <div class="tour-card-choices" id="tourCardChoices" hidden>
+      <button class="btn btn-secondary" data-action="tourChoose" data-arg="tg">Только Telegram</button>
+      <button class="btn btn-secondary" data-action="tourChoose" data-arg="hh">Только hh.ru</button>
+      <button class="btn btn-primary" data-action="tourChoose" data-arg="both">Обе площадки</button>
+    </div>
+    <div class="tour-card-buttons">
+      <button class="tour-skip" id="tourBtnSkip" data-action="tourSkip">Пропустить</button>
+      <button class="btn btn-secondary" id="tourBtnBack" data-action="tourBack">Назад</button>
+      <button class="btn btn-primary" id="tourBtnNext" data-action="tourNext">Далее</button>
     </div>
   </div>
 </div>

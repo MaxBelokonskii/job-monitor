@@ -1766,6 +1766,11 @@ async function init() {
   updateHHButton();
   updateMetrics();
   pollStatus();
+
+  // Последней строкой, а не из своего DOMContentLoaded: тур переключает
+  // вкладку и меряет элементы, а до этой точки пресеты, критерии и
+  // настройки ещё грузятся.
+  maybeAutoStartTour();
 }
 
 async function loadActiveCriteria() {
@@ -1903,6 +1908,11 @@ const ACTIONS = {
   foundApply,
   foundDismiss,
   foundReopen,
+  startTour,
+  tourChoose,
+  tourNext,
+  tourBack,
+  tourSkip,
 };
 
 function runAction(name, target, event) {

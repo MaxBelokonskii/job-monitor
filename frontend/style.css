@@ -440,3 +440,26 @@ body { font-family: 'Manrope', sans-serif; background: var(--bg); color: var(--t
   color: var(--muted); }
 .btn-import:hover { border-color: var(--accent); color: var(--accent);
   border-style: solid; }
+
+/* ── Пошаговое обучение ─────────────────────────────────────────────── */
+/* Три правила pointer-events держат всё поведение слоя: сам он прозрачен
+   для курсора (иначе накрыл бы и дырку), клики ловят маски, а рамка вокруг
+   дырки — не ловит, иначе съела бы клик по краю подсвеченной кнопки. */
+#tourLayer { position: fixed; inset: 0; z-index: 2000; pointer-events: none; }
+.tour-mask { position: fixed; background: rgba(0,0,0,.62); pointer-events: auto; }
+.tour-ring { position: fixed; pointer-events: none; border: 2px solid var(--accent);
+             border-radius: var(--radius-sm); box-shadow: 0 0 0 3px rgba(255,255,255,.28); }
+.tour-card { position: fixed; pointer-events: auto; width: 340px;
+             max-width: calc(100vw - 32px); background: var(--card-bg);
+             border-radius: var(--radius); padding: 18px 20px;
+             box-shadow: 0 12px 44px rgba(0,0,0,.3); }
+.tour-step { font-size: 11px; font-weight: 600; letter-spacing: .05em;
+             text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+.tour-card-title { font-size: 15px; font-weight: 700; color: var(--text); margin-bottom: 8px; }
+.tour-card-text p { font-size: 12.5px; line-height: 1.55; color: var(--muted); margin: 0 0 8px; }
+.tour-card-text p:last-child { margin-bottom: 0; }
+.tour-card-choices { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+.tour-card-buttons { display: flex; gap: 8px; align-items: center; margin-top: 14px; }
+.tour-skip { margin-right: auto; background: none; border: none; cursor: pointer;
+             font-size: 12px; color: var(--muted); padding: 6px 0; font-family: inherit; }
+.tour-skip:hover { color: var(--text); }
