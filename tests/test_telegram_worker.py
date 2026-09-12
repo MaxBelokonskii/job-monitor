@@ -362,3 +362,145 @@ async def test_the_worker_reads_the_setting_it_offers(conn):
     assert "parse_history" in source, "воркер не смотрит на «читать историю»"
     assert "history_limit" in source, "воркер не смотрит на «сколько сообщений»"
     assert "scan_history" in source, "история не сканируется при запуске"
+
+
+# ── Отправка через Telethon: пауза на FloodWait и сбой вложения ────────
+#
+# Эти три строки — единственное место воркера, которое говорит с Telethon
+# напрямую, и до сих пор они не проверялись ничем: `process_post` получает
+# `sender` параметром, а сам `sender` жил замыканием внутри `run_worker`,
+# куда без живого клиента не добраться. Аудит нашёл в этих трёх строках
+# две дыры, обе — про потерю, а не про падение.
+
+from telethon.errors import FloodWaitError  # noqa: E402
+
+from job_monitor.workers.telegram import (  # noqa: E402
+    FLOOD_MAX_WAIT, send_with_resume,
+)
+
+
+class FakeClient:
+    def __init__(self, message_errors=None, file_errors=None):
+        self.messages: list[tuple[str, str]] = []
+        self.files: list[tuple[str, str]] = []
+        self._message_errors = list(message_errors or [])
+        self._file_errors = list(file_errors or [])
+
+    async def send_message(self, username, text):
+        if self._message_errors:
+            raise self._message_errors.pop(0)
+        self.messages.append((username, text))
+
+    async def send_file(self, username, path):
+        if self._file_errors:
+            raise self._file_errors.pop(0)
+        self.files.append((username, path))
+
+
+def _flood(seconds: int) -> FloodWaitError:
+    """Настоящий FloodWaitError, а не двойник: ловится он по типу, и
+    подделка проверяла бы не тот `except`."""
+    return FloodWaitError(request=None, capture=seconds)
+
+
+async def test_a_flood_wait_is_waited_out_and_the_message_still_goes():
+    """Telegram отвечает «подожди N секунд» на слишком частую отправку.
+
+    Раньше это исключение не обрабатывалось нигде — я искал по всему
+    репозиторию, ноль совпадений, — хотя README обещал «обработку
+    FloodWaitError с автопаузой». Что происходило на самом деле: на живых
+    постах Telethon глотал исключение и логировал, при чтении истории
+    `scan_history` ловил его и переходил к следующему каналу. Сообщение не
+    уходило, контакт не записывался, и человек видел тишину.
+    """
+    client = FakeClient(message_errors=[_flood(5)])
+    slept: list[float] = []
+
+    await send_with_resume(client, "@hr", "привет", None, sleep=_record(slept))
+
+    assert client.messages == [("@hr", "привет")], "сообщение так и не ушло"
+    assert slept == [5], f"пауза не выдержана или не та: {slept}"
+
+
+def _record(into: list):
+    async def sleep(seconds):
+        into.append(seconds)
+    return sleep
+
+
+async def test_an_endless_flood_wait_is_raised_instead_of_slept_through():
+    """Telegram умеет попросить подождать сутки. Спать столько внутри
+    воркера — значит молча заблокировать его до завтра: ни в интерфейсе,
+    ни в журнале не будет видно, почему ничего не происходит. Такое
+    исключение поднимается наверх, где менеджер пометит воркер ошибкой с
+    текстом причины."""
+    client = FakeClient(message_errors=[_flood(FLOOD_MAX_WAIT + 1)])
+    slept: list[float] = []
+
+    with pytest.raises(FloodWaitError):
+        await send_with_resume(client, "@hr", "привет", None, sleep=_record(slept))
+
+    assert slept == [], "воркер всё-таки уснул на срок, который назвал Telegram"
+
+
+async def test_a_second_flood_wait_is_not_slept_through_again():
+    """Повтор один. Иначе воркер мог бы ходить по кругу «подожди —
+    повтори» неограниченно, не отдавая управления и не сообщая об этом."""
+    client = FakeClient(message_errors=[_flood(5), _flood(5)])
+    slept: list[float] = []
+
+    with pytest.raises(FloodWaitError):
+        await send_with_resume(client, "@hr", "привет", None, sleep=_record(slept))
+
+    assert slept == [5], f"повторов больше одного: {slept}"
+
+
+async def test_a_failed_attachment_does_not_cancel_a_delivered_message(tmp_path):
+    """Сообщение доставлено, файл не ушёл — это не повод терять контакт.
+
+    Раньше исключение из `send_file` поднималось выше `record_send`, и
+    контакт не записывался: следующий пост с тем же хэндлом писал человеку
+    ВТОРОЙ раз. Резюме — не обязательная часть отклика (спецификация 4.2),
+    и его пропажа не отменяет отправленного сообщения.
+    """
+    resume = tmp_path / "cv.pdf"
+    resume.write_bytes(b"%PDF-1.4")
+    client = FakeClient(file_errors=[OSError("диск отвалился")])
+
+    await send_with_resume(client, "@hr", "привет", resume)
+
+    assert client.messages == [("@hr", "привет")]
+    assert client.files == [], "файл всё-таки ушёл — проверка не о том"
+
+
+async def test_the_attachment_goes_when_there_is_one(tmp_path):
+    """Обратная сторона: терпимость к сбою не должна означать, что файл не
+    отправляется вовсе."""
+    resume = tmp_path / "cv.pdf"
+    resume.write_bytes(b"%PDF-1.4")
+    client = FakeClient()
+
+    await send_with_resume(client, "@hr", "привет", resume)
+
+    assert client.files == [("@hr", str(resume))]
+
+
+def test_the_worker_sends_through_the_tested_function_not_its_own_copy() -> None:
+    """`sender` внутри `run_worker` обязан делегировать `send_with_resume`.
+
+    Иначе проверки выше проверяют функцию, которой воркер не пользуется:
+    ровно так эти три строки и прожили без единого теста — логика была
+    вписана прямо в замыкание, куда без живого Telethon не добраться.
+    """
+    import inspect
+
+    from job_monitor.workers import telegram
+
+    source = inspect.getsource(telegram.run_worker)
+    closure = source[source.index("async def sender"):]
+    closure = closure[:closure.index("\n    async def ")]
+    assert "send_with_resume" in closure, "воркер шлёт мимо проверенной функции"
+    assert "client.send_message" not in closure, (
+        "в замыкании снова своя отправка — это вторая копия правил про "
+        "FloodWait и про сбой вложения"
+    )
