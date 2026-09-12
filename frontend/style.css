@@ -406,3 +406,17 @@ body { font-family: 'Manrope', sans-serif; background: var(--bg); color: var(--t
   line-height: 1; padding: 0; }
 .preset-drop:hover { background: var(--red-light); color: var(--red); }
 .preset-drop.hidden { visibility: hidden; cursor: default; }
+
+/* ── Карточки платформ ────────────────────────────────────────────── */
+/* Цветная полоса сверху и точка в заголовке: принадлежность карточки
+   видна до чтения заголовка, а внутри подписи платформу повторять уже не
+   нужно — «Вход в аккаунт» в карточке Telegram однозначен. */
+.platform-card { border-top: 3px solid var(--border); }
+.platform-card#criteriaTg, .platform-card#settingsTg { border-top-color: var(--tg); }
+.platform-card#criteriaHh, .platform-card#settingsHh { border-top-color: var(--hh); }
+
+.platform-title { display: flex; align-items: center; gap: 7px;
+  font-size: 13px; text-transform: none; letter-spacing: 0; color: var(--text); }
+.platform-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.platform-dot.tg { background: var(--tg); }
+.platform-dot.hh { background: var(--hh); }

@@ -110,11 +110,20 @@
       <button class="btn btn-primary" data-action="saveCriteria">Сохранить критерии</button>
     </div>
 
-    <div class="three-col">
-      <div class="card" id="criteriaWhere">
-        <div class="card-title">Где искать</div>
+    <!-- Две карточки по платформам, а не три по смыслу действия.
+         Причина в самих данных: среди критериев НЕТ ни одного поля,
+         общего для Telegram и hh.ru — каналы, ключевые слова и текст
+         отклика принадлежат одному, профессии, фильтры и сопроводительное
+         другому. Группировка «где / что / чем» перемешивала платформы
+         внутри каждой карточки, и рядом оказывались два разных списка
+         стоп-слов, отличавшиеся одним словом в заголовке. -->
+    <div class="two-col">
+      <div class="card platform-card" id="criteriaTg">
+        <div class="card-title platform-title">
+          <span class="platform-dot tg"></span>Telegram
+        </div>
         <details class="field-group">
-          <summary class="field-summary">Каналы Telegram<span class="field-count" data-count-for="channelEditList"></span></summary>
+          <summary class="field-summary">Каналы<span class="field-count" data-count-for="channelEditList"></span></summary>
           <div id="channelEditList"></div>
           <div class="add-row">
             <input type="text" id="newChannel" placeholder="@username или username">
@@ -122,23 +131,8 @@
           </div>
         </details>
         <details class="field-group">
-          <summary class="field-summary">Профессии на hh.ru<span class="field-count" data-count-for="hhKwList"></span></summary>
-          <div id="hhKwList"></div>
-          <div class="add-row">
-            <input type="text" id="newHHKw" placeholder="Название профессии">
-            <button class="btn btn-secondary" data-action="addHHKw">+</button>
-          </div>
-        </details>
-        <div class="field-hint">
-          Регион поиска — константа приложения, а не настройка: поиск
-          ведётся только по нему.
-        </div>
-      </div>
-
-      <div class="card" id="criteriaWhat">
-        <div class="card-title">Что искать</div>
-        <details class="field-group">
-          <summary class="field-summary">Ключевые слова Telegram<span class="field-count" data-count-for="kwList"></span></summary>
+          <summary class="field-summary">Ключевые слова<span class="field-count" data-count-for="kwList"></span></summary>
+          <div class="field-hint">По ним пост считается вакансией</div>
           <div id="kwList"></div>
           <div class="add-row">
             <input type="text" id="newKw" placeholder="Ключевое слово">
@@ -146,7 +140,7 @@
           </div>
         </details>
         <details class="field-group">
-          <summary class="field-summary">Стоп-слова Telegram<span class="field-count" data-count-for="exList"></span></summary>
+          <summary class="field-summary">Стоп-слова<span class="field-count" data-count-for="exList"></span></summary>
           <div id="exList"></div>
           <div class="add-row">
             <input type="text" id="newEx" placeholder="Слово для исключения">
@@ -154,47 +148,66 @@
           </div>
         </details>
         <details class="field-group">
-          <summary class="field-summary">Стоп-слова hh.ru<span class="field-count" data-count-for="hhExList"></span></summary>
+          <summary class="field-summary">Текст отклика<span class="field-count" data-count-for="templateText"></span></summary>
+          <div class="field-hint" id="templateHint"></div>
+          <textarea class="template-area" id="templateText" rows="7"></textarea>
+        </details>
+        <div class="field-label">Резюме из библиотеки</div>
+        <div class="field-hint">Прикладывается файлом к сообщению</div>
+        <select id="criteriaResume" class="field-select"></select>
+      </div>
+
+      <div class="card platform-card" id="criteriaHh">
+        <div class="card-title platform-title">
+          <span class="platform-dot hh"></span>hh.ru
+        </div>
+        <details class="field-group">
+          <summary class="field-summary">Профессии<span class="field-count" data-count-for="hhKwList"></span></summary>
+          <div class="field-hint">Ищутся по названию должности, а не по описанию</div>
+          <div id="hhKwList"></div>
+          <div class="add-row">
+            <input type="text" id="newHHKw" placeholder="Название профессии">
+            <button class="btn btn-secondary" data-action="addHHKw">+</button>
+          </div>
+        </details>
+        <details class="field-group">
+          <summary class="field-summary">Стоп-слова<span class="field-count" data-count-for="hhExList"></span></summary>
           <div id="hhExList"></div>
           <div class="add-row">
             <input type="text" id="newHHEx" placeholder="senior, lead...">
             <button class="btn btn-secondary" data-action="addHHEx">+</button>
           </div>
         </details>
-        <div class="field-label">Опыт</div>
-        <select id="hhExperience" class="field-select"></select>
-        <div class="field-label">Зарплата от <span class="field-hint-inline">0 — не фильтровать</span></div>
-        <input type="number" id="hhSalaryFrom" value="0" min="0" step="10000" class="num-input">
-        <div class="field-label">Период поиска</div>
-        <select id="hhSearchPeriod" class="field-select">
-          <option value="1">Сегодня</option>
-          <option value="3">3 дня</option>
-          <option value="7">Неделя</option>
-          <option value="30">Месяц</option>
-        </select>
-        <div class="field-label">График работы</div>
-        <div id="hhScheduleBox" class="choice-box"></div>
-        <div class="field-label">Тип занятости <span class="field-hint-inline">можно несколько</span></div>
-        <div id="hhEmploymentBox" class="choice-box"></div>
-      </div>
-
-      <div class="card" id="criteriaHow">
-        <div class="card-title">Чем отвечать</div>
         <details class="field-group">
-          <summary class="field-summary">Текст отклика в Telegram<span class="field-count" data-count-for="templateText"></span></summary>
-          <div class="field-hint" id="templateHint"></div>
-          <textarea class="template-area" id="templateText" rows="7"></textarea>
+          <summary class="field-summary">Фильтры поиска</summary>
+          <div class="field-label">Опыт</div>
+          <select id="hhExperience" class="field-select"></select>
+          <div class="field-label">Зарплата от <span class="field-hint-inline">0 — не фильтровать</span></div>
+          <input type="number" id="hhSalaryFrom" value="0" min="0" step="10000" class="num-input">
+          <div class="field-label">Период поиска</div>
+          <select id="hhSearchPeriod" class="field-select">
+            <option value="1">Сегодня</option>
+            <option value="3">3 дня</option>
+            <option value="7">Неделя</option>
+            <option value="30">Месяц</option>
+          </select>
+          <div class="field-label">График работы</div>
+          <div id="hhScheduleBox" class="choice-box"></div>
+          <div class="field-label">Тип занятости <span class="field-hint-inline">можно несколько</span></div>
+          <div id="hhEmploymentBox" class="choice-box"></div>
+          <div class="field-hint">
+            Регион — константа приложения, а не настройка: поиск ведётся
+            только по нему.
+          </div>
         </details>
         <details class="field-group">
-          <summary class="field-summary">Сопроводительное письмо на hh.ru<span class="field-count" data-count-for="hhCoverLetter"></span></summary>
+          <summary class="field-summary">Сопроводительное письмо<span class="field-count" data-count-for="hhCoverLetter"></span></summary>
           <div class="field-hint">Первые 500 символов уходят как сопроводительное</div>
           <textarea class="template-area" id="hhCoverLetter" rows="7"
                     placeholder="Здравствуйте! Откликаюсь на вашу вакансию..."></textarea>
         </details>
-        <div class="field-label">Резюме из библиотеки</div>
-        <div class="field-hint">Прикладывается к отклику в Telegram</div>
-        <select id="criteriaResume" class="field-select"></select>
         <div class="field-label">ID резюме на hh.ru</div>
+        <div class="field-hint">Если резюме несколько — какое отправлять</div>
         <input class="api-input" type="text" id="hhResumeId"
                placeholder="Найти в URL: hh.ru/resume/XXXXXXXX">
       </div>
@@ -295,8 +308,13 @@
       «Обзоре», рядом с пресетом, к которому относится.
     </p>
 
-    <div class="card" id="settingsMode">
-      <div class="card-title">Режим и лимиты</div>
+    <!-- Общее — только то, что действительно одно на обе платформы.
+         Безопасный режим именно таков по решению D17: один переключатель
+         на оба воркера. Положить его под Telegram значило бы соврать, а
+         продублировать — завести два контрола на одну настройку, ровно ту
+         беду, ради которой две кнопки сохранения были слиты в одну. -->
+    <div class="card" id="settingsCommon">
+      <div class="card-title">Общее</div>
       <div class="toggle-row">
         <div>Безопасный режим
           <div class="toggle-desc">
@@ -307,86 +325,126 @@
         </div>
         <label class="toggle"><input type="checkbox" id="toggleSafe" checked><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
       </div>
-      <div class="toggle-row">
-        <div>Читать историю каналов
-          <div class="toggle-desc">При запуске просматривать прошлые сообщения, а не только новые</div>
-        </div>
-        <label class="toggle"><input type="checkbox" id="toggleHistory"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
-      </div>
-      <div class="toggle-row">
-        <div>Откликов в день, Telegram
-          <div class="toggle-desc">Защита от блокировки аккаунта: банят аккаунт, а не пресет</div>
-        </div>
-        <input type="number" id="maxPerDay" value="25" min="1" max="100" class="num-input">
-      </div>
-      <div class="toggle-row">
-        <div>Откликов в день, hh.ru</div>
-        <input type="number" id="hhMaxPerDayInput" value="20" min="1" max="50" class="num-input">
-      </div>
-      <div class="toggle-row">
-        <div>Сообщений из истории канала</div>
-        <input type="number" id="historyLimit" value="50" min="10" max="500" class="num-input">
-      </div>
-      <div class="toggle-row">
-        <div>Интервал проверки hh.ru, мин</div>
-        <input type="number" id="hhCheckInterval" value="30" min="10" max="240" class="num-input">
-      </div>
-      <div class="toggle-row">
-        <div>Автозапуск Telegram<div class="toggle-desc">Запускать воркер при старте приложения</div></div>
-        <label class="toggle"><input type="checkbox" id="toggleTGAutostart"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
-      </div>
-      <div class="toggle-row">
-        <div>Автозапуск hh.ru</div>
-        <label class="toggle"><input type="checkbox" id="toggleHHAutostart"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
-      </div>
     </div>
 
-    <div class="card" id="settingsAccess">
-      <div class="card-title">Доступы</div>
-      <div class="field-label">Ключи Telegram API</div>
-      <div class="api-hint">
-        <div class="api-hint-title">Как получить API ключи</div>
-        <ol>
-          <li>Перейдите на <a href="https://my.telegram.org/apps" target="_blank">my.telegram.org/apps</a></li>
-          <li>Войдите в аккаунт Telegram</li>
-          <li>Нажмите Create application</li>
-          <li>Скопируйте App api_id и App api_hash</li>
-        </ol>
-      </div>
-      <div class="api-input-row"><label>API ID</label><input class="api-input" type="text" id="apiId" placeholder="12345678"></div>
-      <div class="api-input-row"><label>API Hash</label><input class="api-input" type="password" id="apiHash" placeholder="abcdef1234567890"></div>
-      <div style="display:flex;gap:8px;margin-top:4px">
-        <button class="btn btn-primary" data-action="saveApiKeys">Сохранить ключи</button>
-      </div>
-
-      <div class="field-label">Вход в Telegram</div>
-      <div id="authStatus" style="font-size:13px;color:var(--muted);margin-bottom:10px">Проверка...</div>
-      <div id="authForm" style="display:none">
-        <div class="api-input-row"><label>Номер телефона</label><input class="api-input" type="text" id="authPhone" placeholder="+77001234567"></div>
-        <button class="btn btn-secondary" data-action="sendAuthCode" style="margin-bottom:10px">Отправить код</button>
-        <div id="authCodeRow" style="display:none">
-          <div class="api-input-row"><label>Код из Telegram</label><input class="api-input" type="text" id="authCode" placeholder="12345"></div>
-          <div class="api-input-row" id="auth2faRow" style="display:none">
-            <label>Облачный пароль (2FA)</label>
-            <input class="api-input" type="password" id="auth2fa" placeholder="Ваш пароль">
+    <div class="two-col">
+      <div class="card platform-card" id="settingsTg">
+        <div class="card-title platform-title">
+          <span class="platform-dot tg"></span>Telegram
+        </div>
+        <div class="toggle-row">
+          <div>Откликов в день
+            <div class="toggle-desc">Защита от блокировки аккаунта: банят аккаунт, а не пресет</div>
           </div>
-          <button class="btn btn-primary" data-action="verifyAuthCode">Подтвердить</button>
+          <input type="number" id="maxPerDay" value="25" min="1" max="100" class="num-input">
+        </div>
+        <div class="toggle-row">
+          <div>Читать историю каналов
+            <div class="toggle-desc">При запуске просматривать прошлые сообщения, а не только новые</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="toggleHistory"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
+        </div>
+        <div class="toggle-row">
+          <div>Сообщений из истории канала
+            <div class="toggle-desc">Сколько прошлых постов смотреть в каждом канале</div>
+          </div>
+          <input type="number" id="historyLimit" value="50" min="10" max="500" class="num-input">
+        </div>
+        <div class="toggle-row">
+          <div>Автозапуск<div class="toggle-desc">Запускать воркер при старте приложения</div></div>
+          <label class="toggle"><input type="checkbox" id="toggleTGAutostart"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
+        </div>
+
+        <details class="field-group">
+          <summary class="field-summary">Ключи API</summary>
+          <div class="api-hint">
+            <div class="api-hint-title">Как получить API ключи</div>
+            <ol>
+              <li>Перейдите на <a href="https://my.telegram.org/apps" target="_blank">my.telegram.org/apps</a></li>
+              <li>Войдите в аккаунт Telegram</li>
+              <li>Нажмите Create application</li>
+              <li>Скопируйте App api_id и App api_hash</li>
+            </ol>
+          </div>
+          <div class="api-input-row"><label>API ID</label><input class="api-input" type="text" id="apiId" placeholder="12345678"></div>
+          <div class="api-input-row"><label>API Hash</label><input class="api-input" type="password" id="apiHash" placeholder="abcdef1234567890"></div>
+          <div style="display:flex;gap:8px;margin-top:4px">
+            <button class="btn btn-primary" data-action="saveApiKeys">Сохранить ключи</button>
+          </div>
+        </details>
+
+        <div class="field-label">Вход в аккаунт</div>
+        <div id="authStatus" style="font-size:13px;color:var(--muted);margin-bottom:10px">Проверка...</div>
+        <div id="authForm" style="display:none">
+          <div class="api-input-row"><label>Номер телефона</label><input class="api-input" type="text" id="authPhone" placeholder="+77001234567"></div>
+          <button class="btn btn-secondary" data-action="sendAuthCode" style="margin-bottom:10px">Отправить код</button>
+          <div id="authCodeRow" style="display:none">
+            <div class="api-input-row"><label>Код из Telegram</label><input class="api-input" type="text" id="authCode" placeholder="12345"></div>
+            <div class="api-input-row" id="auth2faRow" style="display:none">
+              <label>Облачный пароль (2FA)</label>
+              <input class="api-input" type="password" id="auth2fa" placeholder="Ваш пароль">
+            </div>
+            <button class="btn btn-primary" data-action="verifyAuthCode">Подтвердить</button>
+          </div>
         </div>
       </div>
 
-      <div class="field-label">Вход в hh.ru</div>
-      <div id="hhLoginStatus" style="font-size:13px;color:var(--muted);margin-bottom:10px"></div>
-      <div id="hhLoginButtons" style="display:flex;gap:8px;flex-wrap:wrap"></div>
-      <button class="btn btn-secondary" id="btnHhLoginCancel" style="margin-top:8px"
-              data-action="hhLoginCancel">Закрыть окно входа</button>
+      <div class="card platform-card" id="settingsHh">
+        <div class="card-title platform-title">
+          <span class="platform-dot hh"></span>hh.ru
+        </div>
+        <div class="toggle-row">
+          <div>Откликов в день
+            <div class="toggle-desc">Защита от блокировки аккаунта</div>
+          </div>
+          <input type="number" id="hhMaxPerDayInput" value="20" min="1" max="50" class="num-input">
+        </div>
+        <div class="toggle-row">
+          <div>Интервал проверки, мин
+            <div class="toggle-desc">Как часто обходить поиск по всем профессиям</div>
+          </div>
+          <input type="number" id="hhCheckInterval" value="30" min="10" max="240" class="num-input">
+        </div>
+        <div class="toggle-row">
+          <div>Автозапуск<div class="toggle-desc">Запускать воркер при старте приложения</div></div>
+          <label class="toggle"><input type="checkbox" id="toggleHHAutostart"><div class="toggle-track"></div><div class="toggle-thumb"></div></label>
+        </div>
+
+        <div class="field-label">Вход в аккаунт</div>
+        <div class="field-hint">Открывается настоящий Chrome — войдите в нём и вернитесь сюда</div>
+        <div id="hhLoginStatus" style="font-size:13px;color:var(--muted);margin-bottom:10px"></div>
+        <div id="hhLoginButtons" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+        <button class="btn btn-secondary" id="btnHhLoginCancel" style="margin-top:8px"
+                data-action="hhLoginCancel">Закрыть окно входа</button>
+
+        <details class="field-group" style="margin-top:14px">
+          <summary class="field-summary">Сценарий автокликания</summary>
+          <div class="field-hint">Шаги выполняются после нажатия кнопки отклика на каждой вакансии</div>
+          <div id="seleniumStepsList"></div>
+          <div style="display:grid;grid-template-columns:auto 1fr 1fr auto;gap:8px;margin-top:12px;align-items:center">
+            <select id="newStepType" style="padding:6px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;background:var(--bg);color:var(--text)">
+              <option value="">Тип шага</option>
+              <option value="click">Клик</option>
+              <option value="input">Ввод текста</option>
+              <option value="wait">Ожидание (сек)</option>
+              <option value="wait_element">Ждать элемент</option>
+              <option value="select">Выбрать значение</option>
+              <option value="scroll">Прокрутить</option>
+            </select>
+            <input type="text" id="newStepSelector" placeholder="CSS/XPath селектор" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;font-family:'JetBrains Mono',monospace;background:var(--bg);color:var(--text);outline:none">
+            <input type="text" id="newStepValue" placeholder="Значение / текст / сек" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;font-family:'JetBrains Mono',monospace;background:var(--bg);color:var(--text);outline:none">
+            <button class="btn btn-primary" style="font-size:12px;background:var(--hh)" data-action="addStep">+ Добавить</button>
+          </div>
+        </details>
+      </div>
     </div>
 
     <div class="card" id="settingsResumes">
       <div class="card-title">Библиотека резюме</div>
       <div style="font-size:12px;color:var(--muted);margin-bottom:8px">
-        Файлы лежат в каталоге данных, а не в каталоге проекта: в резюме
-        есть ФИО, телефон и почта. Какое из них приложить — выбирается в
-        критериях пресета.
+        Общая для обеих платформ. Файлы лежат в каталоге данных, а не в
+        каталоге проекта: в резюме есть ФИО, телефон и почта. Какое из них
+        приложить — выбирается в критериях пресета.
       </div>
       <div class="file-zone" id="fileZone" data-action="pickFile" data-enter-action="pickFile"
            role="button" tabindex="0" aria-label="Загрузить файл резюме">
@@ -398,27 +456,8 @@
       <div id="resumeList" style="margin-top:10px"></div>
     </div>
 
-    <div class="card" id="settingsAdvanced">
-      <div class="card-title">Продвинутое</div>
-      <div class="field-label">Сценарий автокликания (Selenium)</div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:12px">Шаги выполняются после нажатия кнопки отклика на каждой вакансии</div>
-      <div id="seleniumStepsList"></div>
-      <div style="display:grid;grid-template-columns:auto 1fr 1fr auto;gap:8px;margin-top:12px;align-items:center">
-        <select id="newStepType" style="padding:6px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;background:var(--bg);color:var(--text)">
-          <option value="">Тип шага</option>
-          <option value="click">Клик</option>
-          <option value="input">Ввод текста</option>
-          <option value="wait">Ожидание (сек)</option>
-          <option value="wait_element">Ждать элемент</option>
-          <option value="select">Выбрать значение</option>
-          <option value="scroll">Прокрутить</option>
-        </select>
-        <input type="text" id="newStepSelector" placeholder="CSS/XPath селектор" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;font-family:'JetBrains Mono',monospace;background:var(--bg);color:var(--text);outline:none">
-        <input type="text" id="newStepValue" placeholder="Значение / текст / сек" style="padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12px;font-family:'JetBrains Mono',monospace;background:var(--bg);color:var(--text);outline:none">
-        <button class="btn btn-primary" style="font-size:12px;background:var(--hh)" data-action="addStep">+ Добавить</button>
-      </div>
-
-      <div class="field-label">Журнал работы</div>
+    <div class="card" id="settingsLog">
+      <div class="card-title">Журнал работы</div>
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
         <div class="log-tabs">
           <button class="log-tab active-tg" id="logTabTG" data-action="showLog" data-arg="tg">Telegram</button>

@@ -12,6 +12,7 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
 from conftest import requires_node
 
 FRONTEND_DIR = Path(__file__).resolve().parents[1] / "frontend"
@@ -496,10 +497,67 @@ def test_no_criteria_field_is_left_in_the_settings() -> None:
         )
 
 
-def test_the_criteria_are_grouped_into_three_cards() -> None:
+#: Какие поля критериев чьи. Общих нет ни одного — именно поэтому
+#: группировка по платформам здесь и уместна: «где искать / что искать /
+#: чем отвечать» перемешивала Telegram и hh.ru внутри каждой карточки, и
+#: рядом оказывались два списка стоп-слов, отличавшиеся одним словом в
+#: заголовке.
+TG_FIELDS = ("channelEditList", "newChannel", "kwList", "newKw",
+             "exList", "newEx", "templateText", "criteriaResume")
+HH_FIELDS = ("hhKwList", "newHHKw", "hhExList", "newHHEx", "hhExperience",
+             "hhSalaryFrom", "hhSearchPeriod", "hhScheduleBox",
+             "hhEmploymentBox", "hhCoverLetter", "hhResumeId")
+
+
+def _card(card_id: str) -> str:
+    """Разметка одной карточки — по балансу `div` от её открывающего тега.
+
+    Отсчёт идёт от НАЧАЛА строки с идентификатором, а не от самого
+    идентификатора: иначе открывающий `<div` остаётся за срезом, баланс
+    сходится сразу же, и помощник возвращает одну обрезанную строку —
+    проверка тогда «не находит» ни одного поля и выглядит как поломка
+    разметки.
+    """
+    lines = _overview().splitlines()
+    start = next(i for i, line in enumerate(lines) if f'id="{card_id}"' in line)
+    depth = 0
+    for end in range(start, len(lines)):
+        depth += lines[end].count("<div") - lines[end].count("</div>")
+        if depth == 0:
+            return "\n".join(lines[start:end + 1])
+    raise AssertionError(f"карточка {card_id} не закрыта")
+
+
+def test_the_criteria_are_grouped_by_platform() -> None:
     overview = _overview()
-    for group in ("criteriaWhere", "criteriaWhat", "criteriaHow"):
-        assert f'id="{group}"' in overview
+    for group in ("criteriaTg", "criteriaHh"):
+        assert f'id="{group}"' in overview, f"нет карточки {group}"
+
+
+@pytest.mark.parametrize(
+    "card_id, свои, чужие",
+    [("criteriaTg", TG_FIELDS, HH_FIELDS), ("criteriaHh", HH_FIELDS, TG_FIELDS)],
+)
+def test_a_platform_card_holds_only_its_own_fields(card_id, свои, чужие) -> None:
+    """Смысл группировки именно в этом: карточка платформы не содержит
+    чужих полей. Иначе разделение — только в заголовках."""
+    разметка = _card(card_id)
+    отсутствуют = [f for f in свои if f'id="{f}"' not in разметка]
+    assert not отсутствуют, f"{card_id} не содержит своих полей: {отсутствуют}"
+    посторонние = [f for f in чужие if f'id="{f}"' in разметка]
+    assert not посторонние, f"в {card_id} попали поля другой платформы: {посторонние}"
+
+
+def test_every_criteria_field_belongs_to_exactly_one_platform() -> None:
+    """Страховка от вырождения: списки выше должны покрывать все поля
+    критериев и не пересекаться. Иначе проверка молча перестанет что-либо
+    доказывать — поле, забытое в обоих списках, не заметит никто."""
+    assert set(TG_FIELDS) & set(HH_FIELDS) == set()
+    покрыты = set(TG_FIELDS) | set(HH_FIELDS)
+    непокрытые = [f for f in CRITERIA_FIELDS if f not in покрыты]
+    assert not непокрытые, (
+        f"поля критериев не отнесены ни к одной платформе: {непокрытые}"
+    )
 
 
 def test_there_is_one_save_button_for_the_criteria() -> None:
@@ -626,11 +684,59 @@ def test_the_server_filter_the_screen_asks_for_actually_exists() -> None:
 # ── Экран «Настройки» ─────────────────────────────────────────────────
 
 
-def test_the_settings_are_four_groups() -> None:
+#: Настройки каждой платформы. В отличие от критериев, здесь есть и
+#: по-настоящему общее — оно в отдельной карточке, а не приписано одной из
+#: платформ и не продублировано в обеих.
+TG_SETTINGS = ("maxPerDay", "historyLimit", "toggleHistory", "toggleTGAutostart",
+               "apiId", "apiHash", "authPhone", "authCode")
+HH_SETTINGS = ("hhMaxPerDayInput", "hhCheckInterval", "toggleHHAutostart",
+               "hhLoginStatus", "hhLoginButtons", "seleniumStepsList", "newStepType")
+
+
+def _settings_card(card_id: str) -> str:
+    lines = _settings().splitlines()
+    start = next(i for i, line in enumerate(lines) if f'id="{card_id}"' in line)
+    depth = 0
+    for end in range(start, len(lines)):
+        depth += lines[end].count("<div") - lines[end].count("</div>")
+        if depth == 0:
+            return "\n".join(lines[start:end + 1])
+    raise AssertionError(f"карточка {card_id} не закрыта")
+
+
+def test_the_settings_are_grouped_by_platform() -> None:
     settings = _settings()
-    for group in ("settingsMode", "settingsAccess",
-                  "settingsResumes", "settingsAdvanced"):
+    for group in ("settingsCommon", "settingsTg", "settingsHh",
+                  "settingsResumes", "settingsLog"):
         assert f'id="{group}"' in settings, f"группа {group} не найдена"
+
+
+@pytest.mark.parametrize(
+    "card_id, свои, чужие",
+    [("settingsTg", TG_SETTINGS, HH_SETTINGS), ("settingsHh", HH_SETTINGS, TG_SETTINGS)],
+)
+def test_a_platform_settings_card_holds_only_its_own(card_id, свои, чужие) -> None:
+    разметка = _settings_card(card_id)
+    отсутствуют = [f for f in свои if f'id="{f}"' not in разметка]
+    assert not отсутствуют, f"{card_id} не содержит своих настроек: {отсутствуют}"
+    посторонние = [f for f in чужие if f'id="{f}"' in разметка]
+    assert not посторонние, f"в {card_id} попали настройки другой платформы: {посторонние}"
+
+
+def test_the_safe_mode_switch_is_not_duplicated_per_platform() -> None:
+    """Решение D17: безопасный режим — ОДИН переключатель на оба воркера.
+
+    Разнести его по платформам значило бы завести два контрола на одну
+    настройку — ровно та беда, ради которой две кнопки сохранения были
+    слиты в одну: человек меняет один, второй показывает прежнее, и какой
+    из них правда, неизвестно. Приписать одной платформе — соврать:
+    режим действует на обе.
+    """
+    settings = _settings()
+    assert settings.count('id="toggleSafe"') == 1, "переключатель размножился"
+    assert 'id="toggleSafe"' in _settings_card("settingsCommon"), (
+        "безопасный режим приписан одной платформе, хотя действует на обе"
+    )
 
 
 def test_the_settings_have_one_save_button() -> None:
@@ -641,12 +747,33 @@ def test_the_settings_have_one_save_button() -> None:
         assert gone not in _app(), f"обработчик {gone} остался"
 
 
-def test_the_telegram_login_card_is_named_after_what_it_does() -> None:
-    """«Авторизация чатов (session_web)» названа по файлу сессии, которого
-    в приложении больше нет: имя обещало то, чего не существует."""
+#: Внутренние артефакты, именами которых нельзя подписывать элементы
+#: интерфейса. `session_web` — файл сессии, которого в приложении давно
+#: нет, и карточка входа была названа его именем: подпись обещала то, чего
+#: не существует. Остальные существуют, но человеку не адресованы.
+INTERNAL_ARTEFACTS = ("session_web", "telegram.session", "hh_cookies.json",
+                      "job_monitor.db", "stored_name")
+
+
+def test_no_control_is_named_after_an_internal_file() -> None:
+    """Обобщение прежней проверки. Раньше она держалась на буквальной
+    строке «Вход в Telegram» и упала, как только карточка стала называться
+    «Telegram», а подпись внутри — «Вход в аккаунт»: повторять платформу в
+    подписи после группировки незачем. Свойство при этом осталось
+    прежним — подпись не называет внутренний файл, — и теперь оно
+    проверяется прямо, а не через одну конкретную формулировку.
+    """
     index = _index()
-    assert "session_web" not in index
-    assert "Вход в Telegram" in index
+    найдены = [name for name in INTERNAL_ARTEFACTS if name in index]
+    assert not найдены, f"интерфейс называет внутренние файлы: {найдены}"
+
+
+def test_each_platform_card_offers_a_login() -> None:
+    """Вход — половина того, ради чего в настройки заходят вообще. После
+    перегруппировки он должен быть у каждой платформы свой, а не потерян
+    при переносе."""
+    assert 'id="authStatus"' in _settings_card("settingsTg")
+    assert 'id="hhLoginStatus"' in _settings_card("settingsHh")
 
 
 def test_no_tg_hh_dividers_are_left() -> None:
