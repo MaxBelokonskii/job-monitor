@@ -153,6 +153,7 @@ JobMonitor/
 ├── frontend/
 │   ├── index.html              # Разметка интерфейса
 │   ├── style.css               # Стили (фирменные цвета TG/HH)
+│   ├── tour.js                 # Пошаговое обучение по интерфейсу
 │   └── app.js                  # Вся логика фронтенда
 ├── tests/                      # pytest
 ├── docs/

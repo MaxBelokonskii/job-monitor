@@ -301,16 +301,24 @@ const PAGE_LOADERS = {
   },
 };
 
+// Переключение страниц — функция, а не тело обработчика: её вызывает и клик
+// по навигации, и пошаговое обучение (frontend/tour.js), которому надо
+// привести пользователя на нужный экран. Пока логика жила внутри замыкания,
+// у тура не было выбора, кроме как завести вторую копию.
+async function switchPage(page) {
+  const item = document.querySelector(`.nav-item[data-page="${page}"]`);
+  const target = document.getElementById('page-' + page);
+  if (!item || !target) return;
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  target.classList.add('active');
+  item.classList.add('active');
+  const load = PAGE_LOADERS[page];
+  if (load) await load();
+}
+
 document.querySelectorAll('.nav-item[data-page]').forEach(item => {
-  item.addEventListener('click', async () => {
-    const page = item.dataset.page;
-    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-    document.getElementById('page-' + page).classList.add('active');
-    item.classList.add('active');
-    const load = PAGE_LOADERS[page];
-    if (load) await load();
-  });
+  item.addEventListener('click', () => switchPage(item.dataset.page));
 });
 
 // ── Полоса состояния ──────────────────────────────────────────────────
@@ -1758,6 +1766,11 @@ async function init() {
   updateHHButton();
   updateMetrics();
   pollStatus();
+
+  // Последней строкой, а не из своего DOMContentLoaded: тур переключает
+  // вкладку и меряет элементы, а до этой точки пресеты, критерии и
+  // настройки ещё грузятся.
+  maybeAutoStartTour();
 }
 
 async function loadActiveCriteria() {
@@ -1895,6 +1908,11 @@ const ACTIONS = {
   foundApply,
   foundDismiss,
   foundReopen,
+  startTour,
+  tourChoose,
+  tourNext,
+  tourBack,
+  tourSkip,
 };
 
 function runAction(name, target, event) {

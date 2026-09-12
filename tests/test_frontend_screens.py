@@ -976,9 +976,12 @@ def test_long_lists_are_collapsible() -> None:
     `script-src 'self'` без `'unsafe-inline'`.
     """
     overview = _overview()
-    assert overview.count('<details class="field-group">') >= 5, (
-        "длинные списки критериев не сворачиваются"
-    )
+    # По классу, а не по точному тексту тега: аккордеоны получили `id`,
+    # когда на них стало целиться пошаговое обучение, и счёт по литералу
+    # `<details class="field-group">` упал бы на первом же добавленном
+    # атрибуте — не заметив, что самих аккордеонов меньше не стало.
+    accordions = re.findall(r'<details\b[^>]*class="field-group"', overview)
+    assert len(accordions) >= 5, "длинные списки критериев не сворачиваются"
     for поле in ("channelEditList", "hhKwList", "kwList", "exList", "hhExList"):
         assert f'data-count-for="{поле}"' in overview, (
             f"у раздела {поле} нет счётчика — свёрнутым он прячет и сам факт, "
@@ -990,8 +993,9 @@ def test_the_accordions_are_closed_by_default() -> None:
     """Смысл правки — чтобы экран не выглядел громоздким при открытии.
     Раздел, открытый по умолчанию, эту задачу не решает."""
     overview = _overview()
-    assert "<details class=\"field-group\" open>" not in overview
-    assert "<details open" not in overview
+    assert not re.search(r'<details\b[^>]*\bopen\b', overview), (
+        "какой-то раздел критериев раскрыт по умолчанию"
+    )
 
 
 def test_a_collapsed_section_still_holds_its_values() -> None:

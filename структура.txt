@@ -14,6 +14,7 @@ JobMonitor/
 ├── frontend/
 │   ├── index.html              только разметка
 │   ├── style.css               все стили
+│   ├── tour.js                 пошаговое обучение: сценарий и затемнение
 │   └── app.js                  вся логика
 ├── job_monitor/                пакет приложения
 │   ├── __init__.py

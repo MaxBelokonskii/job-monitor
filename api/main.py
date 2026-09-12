@@ -192,7 +192,7 @@ if os.path.exists(FRONTEND_DIR):
     app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
 ASSET_VERSION_PLACEHOLDER = "__ASSET_VERSION__"
-VERSIONED_ASSETS = ("app.js", "style.css")
+VERSIONED_ASSETS = ("app.js", "tour.js", "style.css")
 
 
 def asset_version() -> str:
